@@ -6,7 +6,7 @@ const KEYS = {
   actions: 'wf_actions',
   instances: 'wf_instances',
   users: 'wf_users',
-  seeded: 'wf_seeded_v7',
+  seeded: 'wf_seeded_v8',
 };
 
 function load(key) {
@@ -118,6 +118,119 @@ function seedIfNeeded() {
         { ...tasks[3], _instanceId: 'wf2-t1' },
         { ...tasks[4], _instanceId: 'wf2-t2' },
         { ...tasks[5], _instanceId: 'wf2-t3' },
+      ],
+    },
+
+    // ── Complex workflow 1: Switch condition between tasks ─────────────────
+    // Bug Triage Pipeline — after initial triage, a switch routes to different
+    // tracks based on bug severity: critical → hotfix track, major → sprint
+    // track, minor → backlog track.
+    {
+      id: 'wf3',
+      name: 'Bug Triage Pipeline',
+      description: 'Incoming bugs are triaged, then routed via switch to a hotfix, sprint, or backlog track based on severity.',
+      owner: 'u2',
+      triggerType: 'action',
+      triggerConfig: 'bug.reported',
+      createdAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+      tasks: [
+        {
+          id: 'wf3-t1', _instanceId: 'wf3-t1', name: 'Triage & Classify',
+          description: 'Engineer reads the bug report and assigns severity',
+          executionMode: 'sequential', condition: 'none', conditionExpr: '',
+          actions: [
+            { id: 'wf3-a1', name: 'Read Bug Report', executorType: 'human', assignedTo: 'u3' },
+            { id: 'wf3-a2', name: 'Assign Severity (critical / major / minor)', executorType: 'human', assignedTo: 'u3' },
+          ],
+        },
+        {
+          id: 'wf3-t2', _instanceId: 'wf3-t2', name: 'Route by Severity',
+          description: 'Switch on severity: critical → hotfix, major → sprint, minor → backlog',
+          executionMode: 'sequential', condition: 'switch', conditionExpr: 'severity',
+          actions: [
+            { id: 'wf3-a3', name: 'Determine Track (hotfix / sprint / backlog)', executorType: 'human', assignedTo: 'u2' },
+          ],
+        },
+        {
+          id: 'wf3-t3', _instanceId: 'wf3-t3', name: 'Hotfix Track — Immediate Fix',
+          description: 'Critical severity: engineer produces and deploys a hotfix',
+          executionMode: 'parallel', condition: 'none', conditionExpr: '',
+          actions: [
+            { id: 'wf3-a4', name: 'Develop Hotfix', executorType: 'human', assignedTo: 'u1' },
+            { id: 'wf3-a5', name: 'Write Hotfix Test', executorType: 'human', assignedTo: 'u1' },
+          ],
+        },
+        {
+          id: 'wf3-t4', _instanceId: 'wf3-t4', name: 'Sprint Track — Schedule & Plan',
+          description: 'Major severity: PM schedules the fix into the next sprint',
+          executionMode: 'sequential', condition: 'none', conditionExpr: '',
+          actions: [
+            { id: 'wf3-a6', name: 'Add to Sprint Backlog', executorType: 'human', assignedTo: 'u2' },
+            { id: 'wf3-a7', name: 'Assign Developer & Set ETA', executorType: 'human', assignedTo: 'u2' },
+          ],
+        },
+        {
+          id: 'wf3-t5', _instanceId: 'wf3-t5', name: 'Review & Close',
+          description: 'Verify the fix and close the bug ticket',
+          executionMode: 'sequential', condition: 'none', conditionExpr: '',
+          actions: [
+            { id: 'wf3-a8', name: 'Verify Fix in Staging', executorType: 'human', assignedTo: 'u4' },
+            { id: 'wf3-a9', name: 'Close Bug Ticket', executorType: 'human', assignedTo: 'u4' },
+          ],
+        },
+      ],
+    },
+
+    // ── Complex workflow 2: Loop condition ─────────────────────────────────
+    // Ticket Resolution Batch — agents work tickets one-by-one; after each
+    // resolution the loop condition checks whether 8 of 8 tickets are resolved.
+    // The loop repeats the "Resolve Ticket" task until the counter reaches 8.
+    {
+      id: 'wf4',
+      name: 'Ticket Resolution Batch',
+      description: 'Resolve a batch of 8 support tickets one by one. The resolution task loops until all 8 are done.',
+      owner: 'u3',
+      triggerType: 'schedule',
+      triggerConfig: '0 9 * * MON',
+      createdAt: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+      tasks: [
+        {
+          id: 'wf4-t1', _instanceId: 'wf4-t1', name: 'Load Ticket Batch',
+          description: 'Supervisor loads and prioritises the 8 tickets for the shift',
+          executionMode: 'sequential', condition: 'none', conditionExpr: '',
+          actions: [
+            { id: 'wf4-a1', name: 'Pull Open Tickets from Queue', executorType: 'human', assignedTo: 'u2' },
+            { id: 'wf4-a2', name: 'Prioritise & Assign to Agents', executorType: 'human', assignedTo: 'u2' },
+          ],
+        },
+        {
+          id: 'wf4-t2', _instanceId: 'wf4-t2', name: 'Resolve Ticket',
+          description: 'Agent resolves the current ticket then loop checks resolved count',
+          executionMode: 'sequential', condition: 'loop', conditionExpr: 'resolvedCount < 8 → repeat',
+          actions: [
+            { id: 'wf4-a3', name: 'Investigate & Diagnose Issue', executorType: 'human', assignedTo: 'u3' },
+            { id: 'wf4-a4', name: 'Apply Fix or Workaround', executorType: 'human', assignedTo: 'u3' },
+            { id: 'wf4-a5', name: 'Reply to Customer & Confirm Resolution', executorType: 'human', assignedTo: 'u3' },
+          ],
+        },
+        {
+          id: 'wf4-t3', _instanceId: 'wf4-t3', name: 'Batch Sign-off',
+          description: 'Supervisor reviews all 8 resolutions and signs off the batch',
+          executionMode: 'parallel', condition: 'none', conditionExpr: '',
+          actions: [
+            { id: 'wf4-a6', name: 'Review Resolution Quality (all 8)', executorType: 'human', assignedTo: 'u2' },
+            { id: 'wf4-a7', name: 'Update CSAT Report', executorType: 'human', assignedTo: 'u4' },
+          ],
+        },
+        {
+          id: 'wf4-t4', _instanceId: 'wf4-t4', name: 'Close Batch',
+          description: 'Mark the batch complete and archive tickets',
+          executionMode: 'sequential', condition: 'none', conditionExpr: '',
+          actions: [
+            { id: 'wf4-a8', name: 'Archive Resolved Tickets', executorType: 'human', assignedTo: 'u4' },
+            { id: 'wf4-a9', name: 'Send Batch Summary to Team', executorType: 'human', assignedTo: 'u2' },
+          ],
+        },
       ],
     },
   ];
