@@ -38,7 +38,7 @@ function Sidebar() {
       </nav>
 
       <div className="p-3 border-t border-slate-100 space-y-1">
-        <a href={`${import.meta.env.BASE_URL}worker.html`} target="_blank" rel="noreferrer"
+        <a href={import.meta.env.BASE_URL === '/' ? '/worker' : `${import.meta.env.BASE_URL}worker.html`} target="_blank" rel="noreferrer"
           className="flex items-center gap-2 px-3 py-2 text-xs text-violet-600 hover:bg-violet-50 rounded-lg font-medium transition-colors">
           <Inbox size={13} />
           <span>Open Worker UI ↗</span>
