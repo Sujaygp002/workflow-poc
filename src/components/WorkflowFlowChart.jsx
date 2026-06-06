@@ -121,8 +121,36 @@ function Diamond({ node }) {
 // `branches` is an array of { label, child }. Each column shows the case label
 // on the connector and the task box below, with an arrowhead touching it.
 function ConditionalBranch({ node, branches }) {
+  // Only branches that actually point to a task are drawn.
+  const real = branches.filter(b => b.child);
+
+  // No resolved target → just the diamond (caller adds the trailing arrow).
+  if (real.length === 0) {
+    return <Diamond node={node} />;
+  }
+
+  // Exactly one target → straight-down arrow, no fork, no empty side.
+  if (real.length === 1) {
+    const b = real[0];
+    return (
+      <div className="flex flex-col items-center">
+        <Diamond node={node} />
+        <svg width="20" height="34" viewBox="0 0 20 34" className="text-slate-300 -mt-1">
+          <path d="M10 0 L10 28" stroke="currentColor" strokeWidth="1.5" fill="none" />
+          <path d="M6 24 L10 31 L14 24 Z" fill="currentColor" />
+        </svg>
+        {b.label && (
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-100 -mt-1 mb-1">
+            {b.label}
+          </span>
+        )}
+        <StepBox node={b.child} />
+      </div>
+    );
+  }
+
   const COL = 230;            // column width (box 220 + breathing room)
-  const cols = Math.max(branches.length, 1);
+  const cols = real.length;
   const width = cols * COL;
   const center = width / 2;
   const colCenter = i => i * COL + COL / 2;
@@ -134,10 +162,8 @@ function ConditionalBranch({ node, branches }) {
       {/* fork connector: diamond → bar → drop into each box */}
       <svg width={width} height="40" viewBox={`0 0 ${width} 40`} className="text-slate-300 -mt-1">
         <path d={`M${center} 0 L${center} 10`} stroke="currentColor" strokeWidth="1.5" fill="none" />
-        {cols > 1 && (
-          <path d={`M${colCenter(0)} 10 L${colCenter(cols - 1)} 10`} stroke="currentColor" strokeWidth="1.5" fill="none" />
-        )}
-        {branches.map((_, i) => {
+        <path d={`M${colCenter(0)} 10 L${colCenter(cols - 1)} 10`} stroke="currentColor" strokeWidth="1.5" fill="none" />
+        {real.map((_, i) => {
           const x = colCenter(i);
           return (
             <g key={i}>
@@ -150,7 +176,7 @@ function ConditionalBranch({ node, branches }) {
 
       {/* case labels row */}
       <div className="flex -mt-1" style={{ width }}>
-        {branches.map((b, i) => (
+        {real.map((b, i) => (
           <div key={i} className="flex justify-center" style={{ width: COL }}>
             {b.label && (
               <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-100">
@@ -163,9 +189,9 @@ function ConditionalBranch({ node, branches }) {
 
       {/* target boxes */}
       <div className="flex mt-1" style={{ width }}>
-        {branches.map((b, i) => (
+        {real.map((b, i) => (
           <div key={i} className="flex justify-center" style={{ width: COL }}>
-            {b.child ? <StepBox node={b.child} /> : <span className="text-xs text-slate-300 italic">—</span>}
+            <StepBox node={b.child} />
           </div>
         ))}
       </div>

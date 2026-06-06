@@ -13,7 +13,7 @@ const KEYS = {
   workflows: 'wf_workflows',
   instances: 'wf_instances',
   users: 'wf_users',
-  seeded: 'wf_seeded_v13',
+  seeded: 'wf_seeded_v14',
 };
 
 function load(key) {
@@ -151,13 +151,26 @@ function seedIfNeeded() {
           description: 'Route based on whether insurance is on file.',
           PreReq: ['wf2-s1'],
           condition: 'if/else', conditionExpr: 'hasInsurance === true',
-          branches: ['if true → Verify Coverage (Dave)', 'else → Self-pay Setup (Alice)'],
-          Tasksteps: ['Check Insurance on File'],
+          trueTarget: 'wf2-s3', falseTarget: 'wf2-s4',
+          branches: ['true → Verify Coverage', 'false → Self-pay Setup'],
+          Tasksteps: [],
         },
         {
-          id: 'wf2-s3', type: 'task', name: 'Create Patient Record',
-          description: 'Create the chart and notify the care team.',
+          id: 'wf2-s3', type: 'task', name: 'Verify Coverage',
+          description: 'Has insurance: Dave verifies the coverage details.',
           PreReq: ['wf2-s2'],
+          Tasksteps: ['Check Plan Eligibility', 'Record Coverage'],
+        },
+        {
+          id: 'wf2-s4', type: 'task', name: 'Self-pay Setup',
+          description: 'No insurance: Alice sets up a self-pay account.',
+          PreReq: ['wf2-s2'],
+          Tasksteps: ['Create Self-pay Account', 'Share Payment Options'],
+        },
+        {
+          id: 'wf2-s5', type: 'task', name: 'Create Patient Record',
+          description: 'Create the chart and notify the care team.',
+          PreReq: ['wf2-s3', 'wf2-s4'],
           Tasksteps: ['Create Chart', 'Notify Care Team'],
         },
       ],
