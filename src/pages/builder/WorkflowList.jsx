@@ -2,12 +2,11 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Play, Trash2, GitBranch, Clock, Edit2 } from 'lucide-react';
 import Badge from '../../components/Badge';
-import { getWorkflows, deleteWorkflow, launchWorkflow, getUsers } from '../../store';
+import { getWorkflows, deleteWorkflow, launchWorkflow } from '../../store';
 
 export default function WorkflowList() {
   const navigate = useNavigate();
   const [workflows, setWorkflows] = useState(getWorkflows);
-  const users = getUsers();
   const [launched, setLaunched] = useState(null);
 
   function handleDelete(id) {
@@ -52,22 +51,20 @@ export default function WorkflowList() {
       ) : (
         <div className="grid gap-3">
           {workflows.map(wf => {
-            const owner = users.find(u => u.id === wf.owner);
             const taskCount = wf.tasks?.length || 0;
-            const actionCount = wf.tasks?.reduce((s, t) => s + (t.actions?.length || 0), 0) || 0;
+            const stepCount = wf.tasks?.reduce((s, t) => s + (t.Tasksteps?.length || t.actions?.length || 0), 0) || 0;
             return (
               <div key={wf.id} className="bg-white rounded-xl border border-slate-100 p-4 shadow-sm hover:shadow-md transition-shadow">
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-semibold text-slate-800">{wf.name}</span>
-                      <Badge label={wf.triggerType} type={wf.triggerType} />
+                      <Badge label={wf.trigger || wf.triggerType} type={wf.trigger || wf.triggerType} />
                     </div>
                     {wf.description && <p className="text-sm text-slate-500 mt-1 line-clamp-1">{wf.description}</p>}
                     <div className="flex items-center gap-4 mt-2 text-xs text-slate-400">
-                      {owner && <span>Owner: {owner.name}</span>}
                       <span>{taskCount} task{taskCount !== 1 ? 's' : ''}</span>
-                      <span>{actionCount} action{actionCount !== 1 ? 's' : ''}</span>
+                      <span>{stepCount} step{stepCount !== 1 ? 's' : ''}</span>
                       {wf.createdAt && (
                         <span className="flex items-center gap-1">
                           <Clock size={10} />

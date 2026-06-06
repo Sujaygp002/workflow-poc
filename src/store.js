@@ -6,7 +6,7 @@ const KEYS = {
   actions: 'wf_actions',
   instances: 'wf_instances',
   users: 'wf_users',
-  seeded: 'wf_seeded_v10',
+  seeded: 'wf_seeded_v11',
 };
 
 function load(key) {
@@ -28,7 +28,6 @@ function uid() {
 // ── Seed Data ──────────────────────────────────────────
 function seedIfNeeded() {
   if (localStorage.getItem(KEYS.seeded)) return;
-  // clear all stale data from any previous seed
   save(KEYS.instances, []);
   save(KEYS.workflows, []);
   save(KEYS.tasks, []);
@@ -42,271 +41,293 @@ function seedIfNeeded() {
     { id: 'u4', name: 'Dave' },
   ];
 
-  const actions = [
-    { id: 'a1', name: 'Read & Annotate Contract', description: 'Reviewer reads and annotates the contract document', executorType: 'human', assignedTo: 'u1' },
-    { id: 'a2', name: 'Check Compliance Clauses', description: 'Verify all compliance clauses are met', executorType: 'human', assignedTo: 'u3' },
-    { id: 'a3', name: 'Approve Contract', description: 'Manager approves the reviewed contract', executorType: 'human', assignedTo: 'u2' },
-    { id: 'a4', name: 'Counter-sign Document', description: 'Senior manager counter-signs the contract', executorType: 'human', assignedTo: 'u4' },
-    { id: 'a5', name: 'File in Document System', description: 'File the signed contract in the document system', executorType: 'human', assignedTo: 'u3' },
-    { id: 'a6', name: 'Notify Sales Rep', description: 'Notify the sales rep that the contract is signed', executorType: 'human', assignedTo: 'u1' },
-    { id: 'a7', name: 'Read & Categorise Ticket', description: 'Support agent reads and categorises the ticket', executorType: 'human', assignedTo: 'u3' },
-    { id: 'a8', name: 'Assign Severity Level', description: 'Assign a severity level to the ticket', executorType: 'human', assignedTo: 'u3' },
-    { id: 'a9', name: 'Reproduce Issue', description: 'Engineer reproduces the reported issue', executorType: 'human', assignedTo: 'u1' },
-    { id: 'a10', name: 'Write Root Cause Analysis', description: 'Document the root cause of the issue', executorType: 'human', assignedTo: 'u1' },
-    { id: 'a11', name: 'Apply Fix / Workaround', description: 'Apply the fix or workaround', executorType: 'human', assignedTo: 'u2' },
-    { id: 'a12', name: 'Notify Customer', description: 'Notify the customer of the resolution', executorType: 'human', assignedTo: 'u3' },
-    { id: 'a13', name: 'Close Ticket', description: 'Mark the ticket as closed', executorType: 'human', assignedTo: 'u4' },
-  ];
-
-  const tasks = [
-    {
-      id: 't1', name: 'Initial Review', description: 'Reviewer reads and annotates the contract',
-      executionMode: 'sequential', condition: 'none', conditionExpr: '',
-      actions: [{ ...actions[0] }, { ...actions[1] }],
-    },
-    {
-      id: 't2', name: 'Manager Sign-off', description: 'Manager and senior manager both sign off in parallel',
-      executionMode: 'parallel', condition: 'none', conditionExpr: '',
-      actions: [{ ...actions[2] }, { ...actions[3] }],
-    },
-    {
-      id: 't3', name: 'File & Notify', description: 'File the contract and notify the sales rep',
-      executionMode: 'sequential', condition: 'none', conditionExpr: '',
-      actions: [{ ...actions[4] }, { ...actions[5] }],
-    },
-    {
-      id: 't4', name: 'Triage', description: 'Support agent reads and categorises the ticket',
-      executionMode: 'sequential', condition: 'none', conditionExpr: '',
-      actions: [{ ...actions[6] }, { ...actions[7] }],
-    },
-    {
-      id: 't5', name: 'Investigation', description: 'Engineer investigates root cause in parallel',
-      executionMode: 'parallel', condition: 'if/else', conditionExpr: 'severity === "critical"',
-      actions: [{ ...actions[8] }, { ...actions[9] }],
-    },
-    {
-      id: 't6', name: 'Resolution & Close', description: 'Fix applied, customer notified, ticket closed',
-      executionMode: 'sequential', condition: 'none', conditionExpr: '',
-      actions: [{ ...actions[10] }, { ...actions[11] }, { ...actions[12] }],
-    },
-  ];
+  // Workflow schema:
+  // {
+  //   id, name, description,
+  //   trigger: 'click|schedule|action|task|workflow',
+  //   triggerConfig: '...',
+  //   createdAt,
+  //   tasks: [
+  //     {
+  //       id, name, description,
+  //       PreReq: 'none' | ['taskId', ...],
+  //       condition: 'none|if/else|switch|loop',
+  //       conditionExpr: '...',
+  //       branches: ['label → dest', ...],
+  //       Tasksteps: ['action name', ...]   // display labels
+  //       actions: [{ id, name, executorType }]  // runtime
+  //     }
+  //   ]
+  // }
 
   const workflows = [
     {
       id: 'wf1',
       name: 'Contract Review',
-      description: 'Legal team reviews and countersigns contracts submitted by sales. Fully human-driven.',
-      owner: 'u1',
-      triggerType: 'click',
+      description: 'Legal team reviews and countersigns contracts submitted by sales.',
+      trigger: 'click',
       triggerConfig: '',
       createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
       tasks: [
-        { ...tasks[0], _instanceId: 'wf1-t1' },
-        { ...tasks[1], _instanceId: 'wf1-t2' },
-        { ...tasks[2], _instanceId: 'wf1-t3' },
-      ],
-    },
-    {
-      id: 'wf2',
-      name: 'Support Ticket Escalation',
-      description: 'Escalate and resolve a high-priority customer support ticket end-to-end by humans.',
-      owner: 'u2',
-      triggerType: 'action',
-      triggerConfig: 'ticket.priority_high',
-      createdAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
-      tasks: [
-        { ...tasks[3], _instanceId: 'wf2-t1' },
-        { ...tasks[4], _instanceId: 'wf2-t2' },
-        { ...tasks[5], _instanceId: 'wf2-t3' },
+        {
+          id: 'wf1-t1', name: 'Initial Review',
+          description: 'Reviewer reads and annotates the contract',
+          PreReq: 'none', condition: 'none', conditionExpr: '', branches: [],
+          Tasksteps: ['Read & Annotate Contract', 'Check Compliance Clauses'],
+          actions: [
+            { id: 'wf1-a1', name: 'Read & Annotate Contract', executorType: 'human' },
+            { id: 'wf1-a2', name: 'Check Compliance Clauses', executorType: 'human' },
+          ],
+        },
+        {
+          id: 'wf1-t2', name: 'Manager Sign-off',
+          description: 'Manager and senior manager both sign off',
+          PreReq: ['wf1-t1'], condition: 'none', conditionExpr: '', branches: [],
+          Tasksteps: ['Approve Contract', 'Counter-sign Document'],
+          actions: [
+            { id: 'wf1-a3', name: 'Approve Contract', executorType: 'human' },
+            { id: 'wf1-a4', name: 'Counter-sign Document', executorType: 'human' },
+          ],
+        },
+        {
+          id: 'wf1-t3', name: 'File & Notify',
+          description: 'File the contract and notify the sales rep',
+          PreReq: ['wf1-t2'], condition: 'none', conditionExpr: '', branches: [],
+          Tasksteps: ['File in Document System', 'Notify Sales Rep'],
+          actions: [
+            { id: 'wf1-a5', name: 'File in Document System', executorType: 'human' },
+            { id: 'wf1-a6', name: 'Notify Sales Rep', executorType: 'human' },
+          ],
+        },
       ],
     },
 
-    // ── Complex workflow 1: Switch condition between tasks ─────────────────
-    // Bug Triage Pipeline — after initial triage, a switch routes to different
-    // tracks based on bug severity: critical → hotfix track, major → sprint
-    // track, minor → backlog track.
+    {
+      id: 'wf2',
+      name: 'Support Ticket Escalation',
+      description: 'Escalate and resolve a high-priority customer support ticket end-to-end.',
+      trigger: 'action',
+      triggerConfig: 'ticket.priority_high',
+      createdAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
+      tasks: [
+        {
+          id: 'wf2-t1', name: 'Triage',
+          description: 'Support agent reads and categorises the ticket',
+          PreReq: 'none', condition: 'none', conditionExpr: '', branches: [],
+          Tasksteps: ['Read & Categorise Ticket', 'Assign Severity Level'],
+          actions: [
+            { id: 'wf2-a1', name: 'Read & Categorise Ticket', executorType: 'human' },
+            { id: 'wf2-a2', name: 'Assign Severity Level', executorType: 'human' },
+          ],
+        },
+        {
+          id: 'wf2-t2', name: 'Investigation',
+          description: 'Engineer investigates root cause',
+          PreReq: ['wf2-t1'], condition: 'if/else', conditionExpr: 'severity === "critical"',
+          branches: ['true → escalate to senior eng', 'else → standard investigation'],
+          Tasksteps: ['Reproduce Issue', 'Write Root Cause Analysis'],
+          actions: [
+            { id: 'wf2-a3', name: 'Reproduce Issue', executorType: 'human' },
+            { id: 'wf2-a4', name: 'Write Root Cause Analysis', executorType: 'human' },
+          ],
+        },
+        {
+          id: 'wf2-t3', name: 'Resolution & Close',
+          description: 'Fix applied, customer notified, ticket closed',
+          PreReq: ['wf2-t2'], condition: 'none', conditionExpr: '', branches: [],
+          Tasksteps: ['Apply Fix / Workaround', 'Notify Customer', 'Close Ticket'],
+          actions: [
+            { id: 'wf2-a5', name: 'Apply Fix / Workaround', executorType: 'human' },
+            { id: 'wf2-a6', name: 'Notify Customer', executorType: 'human' },
+            { id: 'wf2-a7', name: 'Close Ticket', executorType: 'human' },
+          ],
+        },
+      ],
+    },
+
     {
       id: 'wf3',
       name: 'Bug Triage Pipeline',
       description: 'Incoming bugs are triaged, then routed via switch to a hotfix, sprint, or backlog track based on severity.',
-      owner: 'u2',
-      triggerType: 'action',
+      trigger: 'action',
       triggerConfig: 'bug.reported',
       createdAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
       tasks: [
         {
-          id: 'wf3-t1', _instanceId: 'wf3-t1', name: 'Triage & Classify',
+          id: 'wf3-t1', name: 'Triage & Classify',
           description: 'Engineer reads the bug report and assigns severity',
-          executionMode: 'sequential', condition: 'none', conditionExpr: '',
+          PreReq: 'none', condition: 'none', conditionExpr: '', branches: [],
+          Tasksteps: ['Read Bug Report', 'Assign Severity (critical / major / minor)'],
           actions: [
-            { id: 'wf3-a1', name: 'Read Bug Report', executorType: 'human', assignedTo: 'u3' },
-            { id: 'wf3-a2', name: 'Assign Severity (critical / major / minor)', executorType: 'human', assignedTo: 'u3' },
+            { id: 'wf3-a1', name: 'Read Bug Report', executorType: 'human' },
+            { id: 'wf3-a2', name: 'Assign Severity (critical / major / minor)', executorType: 'human' },
           ],
         },
         {
-          id: 'wf3-t2', _instanceId: 'wf3-t2', name: 'Route by Severity',
+          id: 'wf3-t2', name: 'Route by Severity',
           description: 'Switch on severity: critical → hotfix, major → sprint, minor → backlog',
-          executionMode: 'sequential', condition: 'switch', conditionExpr: 'severity',
+          PreReq: ['wf3-t1'], condition: 'switch', conditionExpr: 'severity',
           branches: ['critical → Hotfix Track', 'major → Sprint Track', 'minor → Backlog'],
+          Tasksteps: ['Determine Track (hotfix / sprint / backlog)'],
           actions: [
-            { id: 'wf3-a3', name: 'Determine Track (hotfix / sprint / backlog)', executorType: 'human', assignedTo: 'u2' },
+            { id: 'wf3-a3', name: 'Determine Track (hotfix / sprint / backlog)', executorType: 'human' },
           ],
         },
         {
-          id: 'wf3-t3', _instanceId: 'wf3-t3', name: 'Hotfix Track — Immediate Fix',
+          id: 'wf3-t3', name: 'Hotfix Track — Immediate Fix',
           description: 'Critical severity: engineer produces and deploys a hotfix',
-          executionMode: 'parallel', condition: 'none', conditionExpr: '',
+          PreReq: ['wf3-t2'], condition: 'none', conditionExpr: '', branches: [],
+          Tasksteps: ['Develop Hotfix', 'Write Hotfix Test'],
           actions: [
-            { id: 'wf3-a4', name: 'Develop Hotfix', executorType: 'human', assignedTo: 'u1' },
-            { id: 'wf3-a5', name: 'Write Hotfix Test', executorType: 'human', assignedTo: 'u1' },
+            { id: 'wf3-a4', name: 'Develop Hotfix', executorType: 'human' },
+            { id: 'wf3-a5', name: 'Write Hotfix Test', executorType: 'human' },
           ],
         },
         {
-          id: 'wf3-t4', _instanceId: 'wf3-t4', name: 'Sprint Track — Schedule & Plan',
+          id: 'wf3-t4', name: 'Sprint Track — Schedule & Plan',
           description: 'Major severity: PM schedules the fix into the next sprint',
-          executionMode: 'sequential', condition: 'none', conditionExpr: '',
+          PreReq: ['wf3-t2'], condition: 'none', conditionExpr: '', branches: [],
+          Tasksteps: ['Add to Sprint Backlog', 'Assign Developer & Set ETA'],
           actions: [
-            { id: 'wf3-a6', name: 'Add to Sprint Backlog', executorType: 'human', assignedTo: 'u2' },
-            { id: 'wf3-a7', name: 'Assign Developer & Set ETA', executorType: 'human', assignedTo: 'u2' },
+            { id: 'wf3-a6', name: 'Add to Sprint Backlog', executorType: 'human' },
+            { id: 'wf3-a7', name: 'Assign Developer & Set ETA', executorType: 'human' },
           ],
         },
         {
-          id: 'wf3-t5', _instanceId: 'wf3-t5', name: 'Review & Close',
+          id: 'wf3-t5', name: 'Review & Close',
           description: 'Verify the fix and close the bug ticket',
-          executionMode: 'sequential', condition: 'none', conditionExpr: '',
+          PreReq: ['wf3-t3', 'wf3-t4'], condition: 'none', conditionExpr: '', branches: [],
+          Tasksteps: ['Verify Fix in Staging', 'Close Bug Ticket'],
           actions: [
-            { id: 'wf3-a8', name: 'Verify Fix in Staging', executorType: 'human', assignedTo: 'u4' },
-            { id: 'wf3-a9', name: 'Close Bug Ticket', executorType: 'human', assignedTo: 'u4' },
+            { id: 'wf3-a8', name: 'Verify Fix in Staging', executorType: 'human' },
+            { id: 'wf3-a9', name: 'Close Bug Ticket', executorType: 'human' },
           ],
         },
       ],
     },
 
-    // ── Complex workflow 2: Loop condition ─────────────────────────────────
-    // Ticket Resolution Batch — agents work tickets one-by-one; after each
-    // resolution the loop condition checks whether 8 of 8 tickets are resolved.
-    // The loop repeats the "Resolve Ticket" task until the counter reaches 8.
     {
       id: 'wf4',
       name: 'Ticket Resolution Batch',
       description: 'Resolve a batch of 8 support tickets one by one. The resolution task loops until all 8 are done.',
-      owner: 'u3',
-      triggerType: 'schedule',
+      trigger: 'schedule',
       triggerConfig: '0 9 * * MON',
       createdAt: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
       tasks: [
         {
-          id: 'wf4-t1', _instanceId: 'wf4-t1', name: 'Load Ticket Batch',
+          id: 'wf4-t1', name: 'Load Ticket Batch',
           description: 'Supervisor loads and prioritises the 8 tickets for the shift',
-          executionMode: 'sequential', condition: 'none', conditionExpr: '',
+          PreReq: 'none', condition: 'none', conditionExpr: '', branches: [],
+          Tasksteps: ['Pull Open Tickets from Queue', 'Prioritise & Assign to Agents'],
           actions: [
-            { id: 'wf4-a1', name: 'Pull Open Tickets from Queue', executorType: 'human', assignedTo: 'u2' },
-            { id: 'wf4-a2', name: 'Prioritise & Assign to Agents', executorType: 'human', assignedTo: 'u2' },
+            { id: 'wf4-a1', name: 'Pull Open Tickets from Queue', executorType: 'human' },
+            { id: 'wf4-a2', name: 'Prioritise & Assign to Agents', executorType: 'human' },
           ],
         },
         {
-          id: 'wf4-t2', _instanceId: 'wf4-t2', name: 'Resolve Ticket',
-          description: 'Agent resolves the current ticket then loop checks resolved count',
-          executionMode: 'sequential', condition: 'loop', conditionExpr: 'resolvedCount < 8 → repeat',
+          id: 'wf4-t2', name: 'Resolve Ticket',
+          description: 'Agent resolves the current ticket; loop repeats until resolvedCount reaches 8',
+          PreReq: ['wf4-t1'], condition: 'loop', conditionExpr: 'resolvedCount < 8 → repeat',
           branches: ['resolvedCount < 8 → repeat this task', 'resolvedCount === 8 → continue ↓'],
+          Tasksteps: ['Investigate & Diagnose Issue', 'Apply Fix or Workaround', 'Reply to Customer & Confirm Resolution'],
           actions: [
-            { id: 'wf4-a3', name: 'Investigate & Diagnose Issue', executorType: 'human', assignedTo: 'u3' },
-            { id: 'wf4-a4', name: 'Apply Fix or Workaround', executorType: 'human', assignedTo: 'u3' },
-            { id: 'wf4-a5', name: 'Reply to Customer & Confirm Resolution', executorType: 'human', assignedTo: 'u3' },
+            { id: 'wf4-a3', name: 'Investigate & Diagnose Issue', executorType: 'human' },
+            { id: 'wf4-a4', name: 'Apply Fix or Workaround', executorType: 'human' },
+            { id: 'wf4-a5', name: 'Reply to Customer & Confirm Resolution', executorType: 'human' },
           ],
         },
         {
-          id: 'wf4-t3', _instanceId: 'wf4-t3', name: 'Batch Sign-off',
+          id: 'wf4-t3', name: 'Batch Sign-off',
           description: 'Supervisor reviews all 8 resolutions and signs off the batch',
-          executionMode: 'parallel', condition: 'none', conditionExpr: '',
+          PreReq: ['wf4-t2'], condition: 'none', conditionExpr: '', branches: [],
+          Tasksteps: ['Review Resolution Quality (all 8)', 'Update CSAT Report'],
           actions: [
-            { id: 'wf4-a6', name: 'Review Resolution Quality (all 8)', executorType: 'human', assignedTo: 'u2' },
-            { id: 'wf4-a7', name: 'Update CSAT Report', executorType: 'human', assignedTo: 'u4' },
+            { id: 'wf4-a6', name: 'Review Resolution Quality (all 8)', executorType: 'human' },
+            { id: 'wf4-a7', name: 'Update CSAT Report', executorType: 'human' },
           ],
         },
         {
-          id: 'wf4-t4', _instanceId: 'wf4-t4', name: 'Close Batch',
+          id: 'wf4-t4', name: 'Close Batch',
           description: 'Mark the batch complete and archive tickets',
-          executionMode: 'sequential', condition: 'none', conditionExpr: '',
+          PreReq: ['wf4-t3'], condition: 'none', conditionExpr: '', branches: [],
+          Tasksteps: ['Archive Resolved Tickets', 'Send Batch Summary to Team'],
           actions: [
-            { id: 'wf4-a8', name: 'Archive Resolved Tickets', executorType: 'human', assignedTo: 'u4' },
-            { id: 'wf4-a9', name: 'Send Batch Summary to Team', executorType: 'human', assignedTo: 'u2' },
+            { id: 'wf4-a8', name: 'Archive Resolved Tickets', executorType: 'human' },
+            { id: 'wf4-a9', name: 'Send Batch Summary to Team', executorType: 'human' },
           ],
         },
       ],
     },
 
-    // ── DEMO workflow: shows IF/ELSE, SWITCH and LOOP in one story ──────────
-    // Expense Approval — a single, easy-to-narrate flow that exercises all
-    // three conditional types so the branching logic can be demonstrated end
-    // to end. Each gate carries human-readable branch labels.
     {
       id: 'wf5',
       name: 'Expense Approval (Conditionals Demo)',
-      description: 'A single flow that demonstrates every condition type: an if/else amount gate, a switch on expense category, and a loop that repeats until every receipt is verified.',
-      owner: 'u1',
-      triggerType: 'action',
+      description: 'Demonstrates every condition type: if/else on amount, switch on category, loop until all receipts verified.',
+      trigger: 'action',
       triggerConfig: 'expense.submitted',
       createdAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
       tasks: [
         {
-          id: 'wf5-t1', _instanceId: 'wf5-t1', name: 'Submit & Validate Expense',
+          id: 'wf5-t1', name: 'Submit & Validate Expense',
           description: 'Employee submits the expense report and finance validates required fields',
-          executionMode: 'sequential', condition: 'none', conditionExpr: '', branches: [],
+          PreReq: 'none', condition: 'none', conditionExpr: '', branches: [],
+          Tasksteps: ['Submit Expense Report', 'Validate Required Fields'],
           actions: [
-            { id: 'wf5-a1', name: 'Submit Expense Report', executorType: 'human', assignedTo: 'u1' },
-            { id: 'wf5-a2', name: 'Validate Required Fields', executorType: 'human', assignedTo: 'u3' },
+            { id: 'wf5-a1', name: 'Submit Expense Report', executorType: 'human' },
+            { id: 'wf5-a2', name: 'Validate Required Fields', executorType: 'human' },
           ],
         },
         {
-          // IF / ELSE — routes on the claimed amount
-          id: 'wf5-t2', _instanceId: 'wf5-t2', name: 'Amount Check',
-          description: 'If amount > $1,000 it needs manager approval, else it is auto-approved by finance',
-          executionMode: 'sequential', condition: 'if/else', conditionExpr: 'amount > 1000',
+          id: 'wf5-t2', name: 'Amount Check',
+          description: 'If amount > $1,000 → Manager Approval (Bob), else → Finance Auto-approve (Dave)',
+          PreReq: ['wf5-t1'], condition: 'if/else', conditionExpr: 'amount > 1000',
           branches: ['if true → Manager Approval (Bob)', 'else → Finance Auto-approve (Dave)'],
+          Tasksteps: ['Evaluate Claimed Amount'],
           actions: [
-            { id: 'wf5-a3', name: 'Evaluate Claimed Amount', executorType: 'human', assignedTo: 'u3' },
+            { id: 'wf5-a3', name: 'Evaluate Claimed Amount', executorType: 'human' },
           ],
         },
         {
-          id: 'wf5-t3', _instanceId: 'wf5-t3', name: 'Manager Approval',
-          description: 'High-value path: the employee\'s manager reviews and approves',
-          executionMode: 'sequential', condition: 'none', conditionExpr: '', branches: [],
+          id: 'wf5-t3', name: 'Manager Approval',
+          description: 'High-value path: the manager reviews and approves',
+          PreReq: ['wf5-t2'], condition: 'none', conditionExpr: '', branches: [],
+          Tasksteps: ['Review Expense Detail', 'Approve or Reject'],
           actions: [
-            { id: 'wf5-a4', name: 'Review Expense Detail', executorType: 'human', assignedTo: 'u2' },
-            { id: 'wf5-a5', name: 'Approve or Reject', executorType: 'human', assignedTo: 'u2' },
+            { id: 'wf5-a4', name: 'Review Expense Detail', executorType: 'human' },
+            { id: 'wf5-a5', name: 'Approve or Reject', executorType: 'human' },
           ],
         },
         {
-          // SWITCH — routes on the expense category
-          id: 'wf5-t4', _instanceId: 'wf5-t4', name: 'Route by Category',
-          description: 'Switch on category: travel → Travel desk, equipment → IT asset desk, meals → Finance',
-          executionMode: 'sequential', condition: 'switch', conditionExpr: 'category',
+          id: 'wf5-t4', name: 'Route by Category',
+          description: 'Switch on category: "travel" → next task to Dave, otherwise → Alice',
+          PreReq: ['wf5-t3'], condition: 'switch', conditionExpr: 'category',
           branches: ['category === "travel" → next task to Dave', 'otherwise → next task to Alice'],
+          Tasksteps: ['Classify Expense Category', 'Forward to Matching Desk'],
           actions: [
-            { id: 'wf5-a6', name: 'Classify Expense Category', executorType: 'human', assignedTo: 'u3' },
-            { id: 'wf5-a7', name: 'Forward to Matching Desk', executorType: 'human', assignedTo: 'u3' },
+            { id: 'wf5-a6', name: 'Classify Expense Category', executorType: 'human' },
+            { id: 'wf5-a7', name: 'Forward to Matching Desk', executorType: 'human' },
           ],
         },
         {
-          // LOOP — repeats until every receipt is verified
-          id: 'wf5-t5', _instanceId: 'wf5-t5', name: 'Verify Receipts',
-          description: 'Loop: verify each receipt one by one, repeating until all receipts are checked',
-          executionMode: 'sequential', condition: 'loop', conditionExpr: 'verified < receipts',
+          id: 'wf5-t5', name: 'Verify Receipts',
+          description: 'Loop: verify each receipt one by one, repeating until all are checked',
+          PreReq: ['wf5-t4'], condition: 'loop', conditionExpr: 'verified < receipts',
           branches: ['verified < receipts → repeat this task', 'verified === receipts → continue ↓'],
+          Tasksteps: ['Open Next Receipt', 'Match Receipt to Line Item', 'Mark Receipt Verified'],
           actions: [
-            { id: 'wf5-a8', name: 'Open Next Receipt', executorType: 'human', assignedTo: 'u4' },
-            { id: 'wf5-a9', name: 'Match Receipt to Line Item', executorType: 'human', assignedTo: 'u4' },
-            { id: 'wf5-a10', name: 'Mark Receipt Verified', executorType: 'human', assignedTo: 'u4' },
+            { id: 'wf5-a8', name: 'Open Next Receipt', executorType: 'human' },
+            { id: 'wf5-a9', name: 'Match Receipt to Line Item', executorType: 'human' },
+            { id: 'wf5-a10', name: 'Mark Receipt Verified', executorType: 'human' },
           ],
         },
         {
-          id: 'wf5-t6', _instanceId: 'wf5-t6', name: 'Reimburse & Close',
+          id: 'wf5-t6', name: 'Reimburse & Close',
           description: 'Finance issues reimbursement and closes the expense report',
-          executionMode: 'parallel', condition: 'none', conditionExpr: '', branches: [],
+          PreReq: ['wf5-t5'], condition: 'none', conditionExpr: '', branches: [],
+          Tasksteps: ['Issue Reimbursement', 'Notify Employee'],
           actions: [
-            { id: 'wf5-a11', name: 'Issue Reimbursement', executorType: 'human', assignedTo: 'u3' },
-            { id: 'wf5-a12', name: 'Notify Employee', executorType: 'human', assignedTo: 'u1' },
+            { id: 'wf5-a11', name: 'Issue Reimbursement', executorType: 'human' },
+            { id: 'wf5-a12', name: 'Notify Employee', executorType: 'human' },
           ],
         },
       ],
@@ -314,8 +335,8 @@ function seedIfNeeded() {
   ];
 
   save(KEYS.users, users);
-  save(KEYS.actions, actions);
-  save(KEYS.tasks, tasks);
+  save(KEYS.actions, []);
+  save(KEYS.tasks, []);
   save(KEYS.workflows, workflows);
   save(KEYS.instances, []);
   localStorage.setItem(KEYS.seeded, '1');
@@ -327,7 +348,7 @@ export function getUsers() {
   return load(KEYS.users);
 }
 
-// ── Actions ────────────────────────────────────────────
+// ── Actions (registry — kept for builder compatibility) ─
 export function getActions() {
   seedIfNeeded();
   return load(KEYS.actions);
@@ -349,7 +370,7 @@ export function deleteAction(id) {
   save(KEYS.actions, load(KEYS.actions).filter(a => a.id !== id));
 }
 
-// ── Tasks ──────────────────────────────────────────────
+// ── Tasks (registry) ───────────────────────────────────
 export function getTasks() {
   seedIfNeeded();
   return load(KEYS.tasks);
@@ -398,30 +419,11 @@ export function getInstances() { return load(KEYS.instances); }
 
 // ── Execution helpers ──────────────────────────────────
 
-// For a task instance, activate the correct actions based on executionMode:
-//   sequential → only the first non-completed, non-blocked action becomes 'active'
-//   parallel   → all non-completed actions become 'active'
 function activateTask(ti) {
-  const mode = ti.executionMode || 'sequential';
-  if (mode === 'parallel') {
-    ti.actionInstances.forEach(a => {
-      if (a.status === 'blocked') a.status = 'active';
-    });
-  } else {
-    // sequential: activate only the first blocked/pending action
-    let activated = false;
-    for (const a of ti.actionInstances) {
-      if (a.status === 'completed' || a.status === 'active') {
-        if (a.status === 'active') activated = true; // already one active, stop
-        continue;
-      }
-      if (!activated && (a.status === 'blocked' || a.status === 'pending')) {
-        a.status = 'active';
-        activated = true;
-      }
-      break;
-    }
-  }
+  // all actions start active (no sequential blocking — execution mode removed)
+  ti.actionInstances.forEach(a => {
+    if (a.status === 'blocked') a.status = 'active';
+  });
 }
 
 export function launchWorkflow(workflowId) {
@@ -437,31 +439,18 @@ export function launchWorkflow(workflowId) {
     launchedAt: now.toISOString(),
     status: 'running',
     taskInstances: (wf.tasks || []).map((t, tIdx) => {
-      const execMode = t.executionMode || 'sequential';
-      const actionInstances = (t.actions || []).map((a, aIdx) => {
-        const isAuto = a.executorType === 'ai' || a.executorType === 'system' || a.executorType === 'ai+system';
-        // In sequential mode: first action is active, rest blocked. In parallel: all active.
-        // Auto actions are immediately completed regardless.
-        let status = 'blocked';
-        if (isAuto) status = 'completed';
-        else if (execMode === 'parallel') status = 'active';
-        else if (aIdx === 0) status = 'active';
+      const actionInstances = (t.actions || []).map((a, aIdx) => ({
+        id: uid(),
+        actionId: a.id,
+        actionName: a.name,
+        executorType: a.executorType || 'human',
+        // first task's first action is active; rest active too (no sequential mode)
+        status: tIdx === 0 ? 'active' : 'blocked',
+        completedAt: null,
+        notes: '',
+        order: aIdx,
+      }));
 
-        return {
-          id: uid(),
-          actionId: a.id,
-          actionName: a.name,
-          assignedTo: a.assignedTo,
-          executorType: a.executorType || 'human',
-          status,
-          completedAt: isAuto ? new Date(now.getTime() + 500).toISOString() : null,
-          notes: isAuto ? `Auto-executed by ${a.executorType}` : '',
-          autoRun: isAuto,
-          order: aIdx,
-        };
-      });
-
-      // After auto-runs, re-activate sequential chain in case first action(s) were auto
       const ti = {
         id: uid(),
         taskId: t.id,
@@ -469,11 +458,13 @@ export function launchWorkflow(workflowId) {
         condition: t.condition || 'none',
         conditionExpr: t.conditionExpr || '',
         branches: t.branches || [],
-        executionMode: execMode,
-        status: 'pending',
+        PreReq: t.PreReq || 'none',
+        Tasksteps: t.Tasksteps || [],
+        status: tIdx === 0 ? 'active' : 'pending',
         actionInstances,
       };
-      activateTask(ti);
+
+      if (tIdx === 0) activateTask(ti);
 
       const allDone = ti.actionInstances.every(a => a.status === 'completed');
       if (allDone) ti.status = 'completed';
@@ -506,14 +497,14 @@ export function completeActionInstance(instanceId, taskInstanceId, actionInstanc
   ai.completedAt = new Date().toISOString();
   ai.notes = notes;
 
-  // In sequential mode: unlock the next action
-  if ((ti.executionMode || 'sequential') === 'sequential') {
-    const next = ti.actionInstances.find(a => a.status === 'blocked');
-    if (next) next.status = 'active';
-  }
-
   if (ti.actionInstances.every(a => a.status === 'completed')) {
     ti.status = 'completed';
+    // unlock the next pending task
+    const nextTask = inst.taskInstances.find(t => t.status === 'pending');
+    if (nextTask) {
+      nextTask.status = 'active';
+      activateTask(nextTask);
+    }
   }
 
   if (inst.taskInstances.every(t => t.status === 'completed')) {
@@ -531,7 +522,6 @@ export function getMyWorkItems(userId) {
   for (const inst of instances) {
     for (const ti of inst.taskInstances) {
       for (const ai of ti.actionInstances) {
-        // only show actions that are 'active' — not blocked, not completed
         if (ai.assignedTo === userId && ai.status === 'active') {
           items.push({
             instanceId: inst.id,
@@ -542,7 +532,6 @@ export function getMyWorkItems(userId) {
             actionInstanceId: ai.id,
             actionName: ai.actionName,
             executorType: ai.executorType,
-            executionMode: ti.executionMode,
             status: ai.status,
           });
         }

@@ -24,29 +24,29 @@ function UserPicker({ value, onChange, users, placeholder = '— unassigned —'
   );
 }
 
-function UserAvatar({ userId, users, size = 'sm' }) {
+function UserAvatar({ userId, users }) {
   const idx = users.findIndex(u => u.id === userId);
   const user = users[idx];
   if (!user) return null;
   const cls = AVATAR_COLORS[idx % AVATAR_COLORS.length];
-  const dim = size === 'sm' ? 'w-6 h-6 text-xs' : 'w-8 h-8 text-sm';
   return (
-    <div className={`${dim} ${cls} rounded-full flex items-center justify-center font-bold shrink-0`}>
+    <div className={`w-6 h-6 ${cls} rounded-full flex items-center justify-center font-bold text-xs shrink-0`}>
       {user.name[0]}
     </div>
   );
+}
+
+function condColor(c) {
+  if (c === 'if/else') return 'bg-amber-100 text-amber-700';
+  if (c === 'switch')  return 'bg-blue-100 text-blue-700';
+  if (c === 'loop')    return 'bg-purple-100 text-purple-700';
+  return '';
 }
 
 function WorkflowRow({ wf, users, onSave }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(() => JSON.parse(JSON.stringify(wf)));
   const [saved, setSaved] = useState(false);
-
-  const owner = users.find(u => u.id === draft.owner);
-
-  function setWorkflowOwner(userId) {
-    setDraft(d => ({ ...d, owner: userId }));
-  }
 
   function setActionAssignee(taskIdx, actionId, userId) {
     setDraft(d => {
@@ -73,32 +73,24 @@ function WorkflowRow({ wf, users, onSave }) {
 
   return (
     <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-      {/* Workflow header row */}
+      {/* Workflow header */}
       <div className="flex items-center gap-3 px-5 py-4">
         <div className="w-9 h-9 rounded-xl bg-violet-100 flex items-center justify-center shrink-0">
           <GitBranch size={16} className="text-violet-600" />
         </div>
         <div className="flex-1 min-w-0">
           <div className="font-semibold text-slate-800 text-sm">{draft.name}</div>
-          <div className="text-xs text-slate-400 mt-0.5">{draft.tasks?.length || 0} tasks · {draft.tasks?.reduce((s, t) => s + (t.actions?.length || 0), 0) || 0} actions</div>
+          <div className="text-xs text-slate-400 mt-0.5">
+            {draft.tasks?.length || 0} tasks ·{' '}
+            {draft.tasks?.reduce((s, t) => s + (t.Tasksteps?.length || t.actions?.length || 0), 0) || 0} steps
+          </div>
         </div>
-
-        {/* Workflow owner picker */}
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="text-xs text-slate-500 font-medium">Owner</span>
-          {owner && <UserAvatar userId={draft.owner} users={users} />}
-          <UserPicker value={draft.owner} onChange={setWorkflowOwner} users={users} placeholder="— no owner —" />
-        </div>
-
-        <button
-          onClick={() => setOpen(o => !o)}
-          className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 shrink-0"
-        >
+        <button onClick={() => setOpen(o => !o)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 shrink-0">
           {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
         </button>
       </div>
 
-      {/* Expanded: per-task / per-action assignment */}
+      {/* Expanded: per-task / per-step assignment */}
       {open && (
         <div className="border-t border-slate-100 bg-slate-50/40 px-5 py-4 space-y-4">
           {(draft.tasks || []).map((task, tIdx) => (
@@ -109,12 +101,17 @@ function WorkflowRow({ wf, users, onSave }) {
                   {tIdx + 1}
                 </div>
                 <span className="font-medium text-slate-700 text-sm">{task.name}</span>
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${(task.executionMode || 'sequential') === 'parallel' ? 'bg-teal-100 text-teal-700' : 'bg-slate-100 text-slate-600'}`}>
-                  {task.executionMode || 'sequential'}
-                </span>
+                {task.condition && task.condition !== 'none' && (
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${condColor(task.condition)}`}>
+                    ◆ {task.condition}
+                  </span>
+                )}
+                {Array.isArray(task.PreReq) && task.PreReq.length > 0 && (
+                  <span className="text-xs text-slate-400">needs {task.PreReq.length} prereq</span>
+                )}
               </div>
 
-              {/* Action rows */}
+              {/* Step rows */}
               <div className="ml-7 space-y-2">
                 {(task.actions || []).map(action => {
                   const assignee = users.find(u => u.id === action.assignedTo);
@@ -122,7 +119,6 @@ function WorkflowRow({ wf, users, onSave }) {
                     <div key={action.id} className="flex items-center gap-3 bg-white border border-slate-100 rounded-xl px-4 py-2.5">
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium text-slate-700 truncate">{action.name}</div>
-                        <div className="text-xs text-slate-400 mt-0.5">{action.executorType}</div>
                       </div>
                       {assignee && <UserAvatar userId={action.assignedTo} users={users} />}
                       <UserPicker
@@ -170,7 +166,7 @@ export default function Dispatcher() {
         </div>
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Dispatcher</h1>
-          <p className="text-sm text-slate-500">Assign owners to workflows and assignees to every action</p>
+          <p className="text-sm text-slate-500">Assign people to every step in each workflow</p>
         </div>
       </div>
 
