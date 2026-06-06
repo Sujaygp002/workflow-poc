@@ -21,12 +21,17 @@ function ActionCard({ item, onComplete }) {
           <CheckCircle2 size={16} className="text-violet-500" />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="font-semibold text-slate-800 leading-tight">{item.taskName}</div>
-          <div className="text-xs text-slate-500 mt-0.5">
-            <span className="font-medium text-slate-600">{item.workflowName}</span>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-slate-800 leading-tight">{item.taskName}</span>
+            <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700">in progress</span>
           </div>
-          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-            <span className="flex items-center gap-1 text-xs text-slate-400">
+          {item.description && (
+            <div className="text-xs text-slate-500 mt-1 leading-snug">{item.description}</div>
+          )}
+          <div className="flex items-center gap-2 mt-1.5 flex-wrap text-xs text-slate-400">
+            <span className="font-medium text-slate-500">{item.workflowName}</span>
+            <span className="text-slate-300">·</span>
+            <span className="flex items-center gap-1">
               <Clock size={10} />
               {new Date(item.launchedAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
             </span>

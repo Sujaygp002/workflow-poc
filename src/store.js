@@ -13,7 +13,7 @@ const KEYS = {
   workflows: 'wf_workflows',
   instances: 'wf_instances',
   users: 'wf_users',
-  seeded: 'wf_seeded_v16',
+  seeded: 'wf_seeded_v17',
 };
 
 function load(key) {
@@ -432,6 +432,7 @@ export function launchWorkflow(workflowId) {
       id: uid(),
       stepId: s.id,
       taskName: s.name,
+      description: s.description || '',
       type: s.type || 'task',
       condition: s.condition || 'none',
       conditionExpr: s.conditionExpr || '',
@@ -532,6 +533,8 @@ export function getMyWorkItems(userId) {
             launchedAt: inst.launchedAt,
             taskInstanceId: ti.id,
             taskName: ti.taskName,
+            description: ti.description || '',
+            type: ti.type || 'task',
             actionInstanceId: ai.id,
             actionName: ai.actionName,
             status: ai.status,

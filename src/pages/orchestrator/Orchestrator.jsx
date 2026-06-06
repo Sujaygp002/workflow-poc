@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Activity, ChevronDown, ChevronUp, CheckCircle2, Clock, Circle, AlertCircle, RefreshCw, Lock, ArrowDown, GitBranch } from 'lucide-react';
 import Badge from '../../components/Badge';
 import WorkflowFlowChart, { nodesFromInstance } from '../../components/WorkflowFlowChart';
-import { getInstances, getUsers, instanceStage } from '../../store';
+import { getInstances, getUsers, instanceStage, completeActionInstance } from '../../store';
 
 // Instance lifecycle header: unassigned → assigned → done
 function StageHeader({ stage }) {
@@ -200,16 +200,52 @@ function InstanceCard({ instance, users }) {
 }
 
 // ── Who is doing what ─────────────────────────────────
-function PeoplePanel({ instances, users }) {
+// One task card with description + status + one-click Complete.
+function TaskCard({ item, onComplete }) {
+  const statusLabel = item.status === 'completed' ? 'done' : item.status === 'active' ? 'in progress' : 'waiting';
+  const statusCls = item.status === 'completed' ? 'bg-green-100 text-green-700'
+    : item.status === 'active' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500';
+  return (
+    <div className="bg-white rounded-xl border border-slate-100 p-3 shadow-sm">
+      <div className="flex items-start gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${typeBadgeCls[item.type || 'task']}`}>{typeIcon[item.type || 'task']}</span>
+            <span className="font-semibold text-slate-800 text-sm">{item.taskName}</span>
+            <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${statusCls}`}>{statusLabel}</span>
+          </div>
+          <div className="text-xs text-slate-500 mt-1">{item.description || 'No description.'}</div>
+          <div className="text-[11px] text-slate-400 mt-1">{item.workflowName}</div>
+        </div>
+        <button
+          onClick={() => onComplete(item)}
+          className="shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-50 text-green-700 border border-green-200 hover:bg-green-100 transition-colors">
+          <CheckCircle2 size={13} /> Complete
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PeoplePanel({ instances, users, onComplete }) {
   const workByUser = {};
   for (const inst of instances) {
     if (inst.status !== 'running') continue;
     for (const ti of inst.taskInstances) {
-      for (const ai of ti.actionInstances) {
-        if (!ai.assignedTo || ai.status !== 'active') continue;
-        if (!workByUser[ai.assignedTo]) workByUser[ai.assignedTo] = [];
-        workByUser[ai.assignedTo].push({ workflowName: inst.workflowName, taskName: ti.taskName, actionName: ai.actionName });
-      }
+      if (ti.status !== 'active') continue;
+      const ai = (ti.actionInstances || [])[0];
+      const assignedTo = ti.assignedTo || ai?.assignedTo;
+      if (!assignedTo) continue;
+      (workByUser[assignedTo] = workByUser[assignedTo] || []).push({
+        instanceId: inst.id,
+        taskInstanceId: ti.id,
+        actionInstanceId: ai?.id,
+        workflowName: inst.workflowName,
+        taskName: ti.taskName,
+        description: ti.description,
+        type: ti.type,
+        status: ti.status,
+      });
     }
   }
   const entries = Object.entries(workByUser);
@@ -222,21 +258,17 @@ function PeoplePanel({ instances, users }) {
         const user = users.find(u => u.id === userId);
         if (!user) return null;
         return (
-          <div key={userId} className="bg-white rounded-xl border border-slate-100 p-4 shadow-sm">
+          <div key={userId} className="bg-slate-50/60 rounded-2xl border border-slate-100 p-4">
             <div className="flex items-center gap-2 mb-3">
               <div className="w-8 h-8 rounded-full bg-violet-200 flex items-center justify-center text-violet-700 font-bold text-sm">{user.name[0]}</div>
               <div>
                 <div className="font-semibold text-slate-800 text-sm">{user.name}</div>
-                <div className="text-xs text-slate-400">{items.length} active sub-step{items.length !== 1 ? 's' : ''}</div>
+                <div className="text-xs text-slate-400">{items.length} active task{items.length !== 1 ? 's' : ''}</div>
               </div>
             </div>
-            <div className="space-y-1.5">
+            <div className="grid md:grid-cols-2 gap-2">
               {items.map((item, i) => (
-                <div key={i} className="flex items-center gap-2 text-xs text-slate-600 bg-slate-50 rounded-lg px-3 py-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
-                  <span className="font-medium flex-1">{item.actionName}</span>
-                  <span className="text-slate-400">{item.workflowName} › {item.taskName}</span>
-                </div>
+                <TaskCard key={i} item={item} onComplete={onComplete} />
               ))}
             </div>
           </div>
@@ -354,6 +386,12 @@ export default function Orchestrator() {
     setUsers(getUsers());
   }
 
+  function handleComplete(item) {
+    if (!item.actionInstanceId) return;
+    completeActionInstance(item.instanceId, item.taskInstanceId, item.actionInstanceId, '');
+    refresh();
+  }
+
   useEffect(() => { refresh(); }, []);
 
   const running = instances.filter(i => i.status === 'running');
@@ -437,7 +475,7 @@ export default function Orchestrator() {
         </>
       )}
 
-      {tab === 'people' && <PeoplePanel instances={instances} users={users} />}
+      {tab === 'people' && <PeoplePanel instances={instances} users={users} onComplete={handleComplete} />}
     </div>
   );
 }
