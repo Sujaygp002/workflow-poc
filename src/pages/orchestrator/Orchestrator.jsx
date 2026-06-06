@@ -25,7 +25,7 @@ function progressBar(done, total) {
 
 // ── Flowchart view ─────────────────────────────────────
 
-function FlowArrow({ label, condition, conditionExpr }) {
+function FlowArrow({ condition, conditionExpr, branches }) {
   const condColors = {
     'if/else': 'bg-amber-50 border-amber-300 text-amber-700',
     'switch':  'bg-blue-50 border-blue-300 text-blue-700',
@@ -37,10 +37,21 @@ function FlowArrow({ label, condition, conditionExpr }) {
       {condition && condition !== 'none' ? (
         <>
           {/* diamond gate */}
-          <div className={`border rounded px-2 py-0.5 text-xs font-medium flex items-center gap-1 ${condColors[condition] || 'bg-slate-50 border-slate-300 text-slate-600'}`}>
-            ◆ <span className="capitalize">{condition}</span>
-            {conditionExpr && <span className="font-mono opacity-70 ml-1">{conditionExpr}</span>}
+          <div className={`border-2 rounded-lg px-3 py-1 text-xs font-semibold flex items-center gap-1.5 ${condColors[condition] || 'bg-slate-50 border-slate-300 text-slate-600'}`}>
+            <span className="text-base leading-none">◆</span>
+            <span className="capitalize">{condition}</span>
+            {conditionExpr && <span className="font-mono opacity-70">{conditionExpr}</span>}
           </div>
+          {/* branch route labels */}
+          {branches && branches.length > 0 && (
+            <div className="flex flex-wrap justify-center gap-1.5 mt-1.5 max-w-[280px]">
+              {branches.map((b, i) => (
+                <span key={i} className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${condColors[condition] || 'bg-slate-50 border-slate-300 text-slate-600'} opacity-90`}>
+                  {b}
+                </span>
+              ))}
+            </div>
+          )}
           <div className="w-px h-5 bg-slate-300" />
         </>
       ) : null}
@@ -140,6 +151,7 @@ function FlowChart({ instance, users }) {
           <FlowArrow
             condition={tIdx > 0 ? ti.condition : null}
             conditionExpr={ti.conditionExpr}
+            branches={ti.branches}
           />
           <FlowTaskNode ti={ti} tIdx={tIdx} users={users} />
         </div>
@@ -155,7 +167,7 @@ function FlowChart({ instance, users }) {
 
 // ── List view (existing detail view) ──────────────────
 
-function ConditionGate({ condition, conditionExpr }) {
+function ConditionGate({ condition, conditionExpr, branches }) {
   if (!condition || condition === 'none') return null;
   const colors = {
     'if/else': 'bg-amber-50 border-amber-200 text-amber-700',
@@ -164,13 +176,23 @@ function ConditionGate({ condition, conditionExpr }) {
   };
   const cls = colors[condition] || 'bg-slate-50 border-slate-200 text-slate-600';
   return (
-    <div className="flex items-center gap-2 px-5 py-1.5">
-      <div className="w-px h-4 bg-slate-200 mx-2" />
-      <div className={`flex items-center gap-2 px-3 py-1 rounded-full border text-xs font-medium ${cls}`}>
-        <span className="capitalize">{condition}</span>
-        {conditionExpr && <span className="opacity-70 font-mono">{conditionExpr}</span>}
+    <div className="flex items-start gap-2 px-5 py-1.5">
+      <div className="w-px h-4 bg-slate-200 mx-2 mt-1" />
+      <div className="flex flex-col gap-1">
+        <div className={`flex items-center gap-2 px-3 py-1 rounded-full border text-xs font-semibold ${cls} w-fit`}>
+          <span>◆</span>
+          <span className="capitalize">{condition}</span>
+          {conditionExpr && <span className="opacity-70 font-mono">{conditionExpr}</span>}
+        </div>
+        {branches && branches.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {branches.map((b, i) => (
+              <span key={i} className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${cls}`}>{b}</span>
+            ))}
+          </div>
+        )}
       </div>
-      <ArrowDown size={10} className="text-slate-300" />
+      <ArrowDown size={10} className="text-slate-300 mt-1" />
     </div>
   );
 }
@@ -224,7 +246,7 @@ function TaskBlock({ ti, tIdx, isLast, users }) {
   return (
     <>
       {tIdx > 0 && ti.condition && ti.condition !== 'none' && (
-        <ConditionGate condition={ti.condition} conditionExpr={ti.conditionExpr} />
+        <ConditionGate condition={ti.condition} conditionExpr={ti.conditionExpr} branches={ti.branches} />
       )}
       <div className={`border rounded-xl overflow-hidden ${ti.status === 'completed' ? 'border-green-100 bg-green-50/20' : 'border-slate-200 bg-white'}`}>
         <div className="flex items-center gap-2 px-4 py-2.5 border-b border-slate-100">
@@ -262,7 +284,7 @@ function TaskBlock({ ti, tIdx, isLast, users }) {
 }
 
 function InstanceCard({ instance, users }) {
-  const [view, setView] = useState('detail'); // 'detail' | 'flow'
+  const [view, setView] = useState('detail'); // 'detail' | 'flow' | 'collapsed'
 
   const totalActions = instance.taskInstances.reduce((s, t) => s + t.actionInstances.length, 0);
   const doneActions = instance.taskInstances.reduce((s, t) => s + t.actionInstances.filter(a => a.status === 'completed').length, 0);
@@ -287,13 +309,13 @@ function InstanceCard({ instance, users }) {
           <div className="mt-2">{progressBar(doneActions, totalActions)}</div>
         </div>
 
-        {/* view toggle */}
+        {/* view toggle — clicking the active button collapses the panel */}
         <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5 shrink-0">
-          <button onClick={() => setView('detail')}
+          <button onClick={() => setView(v => v === 'detail' ? 'collapsed' : 'detail')}
             className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1 ${view === 'detail' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>
-            <ChevronDown size={11} /> Detail
+            {view === 'detail' ? <ChevronUp size={11} /> : <ChevronDown size={11} />} Detail
           </button>
-          <button onClick={() => setView(v => v === 'flow' ? 'detail' : 'flow')}
+          <button onClick={() => setView(v => v === 'flow' ? 'collapsed' : 'flow')}
             className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1 ${view === 'flow' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>
             <GitBranch size={11} /> Flow
           </button>

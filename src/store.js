@@ -6,7 +6,7 @@ const KEYS = {
   actions: 'wf_actions',
   instances: 'wf_instances',
   users: 'wf_users',
-  seeded: 'wf_seeded_v8',
+  seeded: 'wf_seeded_v9',
 };
 
 function load(key) {
@@ -147,6 +147,7 @@ function seedIfNeeded() {
           id: 'wf3-t2', _instanceId: 'wf3-t2', name: 'Route by Severity',
           description: 'Switch on severity: critical → hotfix, major → sprint, minor → backlog',
           executionMode: 'sequential', condition: 'switch', conditionExpr: 'severity',
+          branches: ['critical → Hotfix Track', 'major → Sprint Track', 'minor → Backlog'],
           actions: [
             { id: 'wf3-a3', name: 'Determine Track (hotfix / sprint / backlog)', executorType: 'human', assignedTo: 'u2' },
           ],
@@ -207,6 +208,7 @@ function seedIfNeeded() {
           id: 'wf4-t2', _instanceId: 'wf4-t2', name: 'Resolve Ticket',
           description: 'Agent resolves the current ticket then loop checks resolved count',
           executionMode: 'sequential', condition: 'loop', conditionExpr: 'resolvedCount < 8 → repeat',
+          branches: ['resolvedCount < 8 → repeat this task', 'resolvedCount === 8 → continue ↓'],
           actions: [
             { id: 'wf4-a3', name: 'Investigate & Diagnose Issue', executorType: 'human', assignedTo: 'u3' },
             { id: 'wf4-a4', name: 'Apply Fix or Workaround', executorType: 'human', assignedTo: 'u3' },
@@ -229,6 +231,82 @@ function seedIfNeeded() {
           actions: [
             { id: 'wf4-a8', name: 'Archive Resolved Tickets', executorType: 'human', assignedTo: 'u4' },
             { id: 'wf4-a9', name: 'Send Batch Summary to Team', executorType: 'human', assignedTo: 'u2' },
+          ],
+        },
+      ],
+    },
+
+    // ── DEMO workflow: shows IF/ELSE, SWITCH and LOOP in one story ──────────
+    // Expense Approval — a single, easy-to-narrate flow that exercises all
+    // three conditional types so the branching logic can be demonstrated end
+    // to end. Each gate carries human-readable branch labels.
+    {
+      id: 'wf5',
+      name: 'Expense Approval (Conditionals Demo)',
+      description: 'A single flow that demonstrates every condition type: an if/else amount gate, a switch on expense category, and a loop that repeats until every receipt is verified.',
+      owner: 'u1',
+      triggerType: 'action',
+      triggerConfig: 'expense.submitted',
+      createdAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      tasks: [
+        {
+          id: 'wf5-t1', _instanceId: 'wf5-t1', name: 'Submit & Validate Expense',
+          description: 'Employee submits the expense report and finance validates required fields',
+          executionMode: 'sequential', condition: 'none', conditionExpr: '', branches: [],
+          actions: [
+            { id: 'wf5-a1', name: 'Submit Expense Report', executorType: 'human', assignedTo: 'u1' },
+            { id: 'wf5-a2', name: 'Validate Required Fields', executorType: 'human', assignedTo: 'u3' },
+          ],
+        },
+        {
+          // IF / ELSE — routes on the claimed amount
+          id: 'wf5-t2', _instanceId: 'wf5-t2', name: 'Amount Check',
+          description: 'If amount > $1,000 it needs manager approval, else it is auto-approved by finance',
+          executionMode: 'sequential', condition: 'if/else', conditionExpr: 'amount > 1000',
+          branches: ['if true → Manager Approval', 'else → Finance Auto-approve'],
+          actions: [
+            { id: 'wf5-a3', name: 'Evaluate Claimed Amount', executorType: 'human', assignedTo: 'u3' },
+          ],
+        },
+        {
+          id: 'wf5-t3', _instanceId: 'wf5-t3', name: 'Manager Approval',
+          description: 'High-value path: the employee\'s manager reviews and approves',
+          executionMode: 'sequential', condition: 'none', conditionExpr: '', branches: [],
+          actions: [
+            { id: 'wf5-a4', name: 'Review Expense Detail', executorType: 'human', assignedTo: 'u2' },
+            { id: 'wf5-a5', name: 'Approve or Reject', executorType: 'human', assignedTo: 'u2' },
+          ],
+        },
+        {
+          // SWITCH — routes on the expense category
+          id: 'wf5-t4', _instanceId: 'wf5-t4', name: 'Route by Category',
+          description: 'Switch on category: travel → Travel desk, equipment → IT asset desk, meals → Finance',
+          executionMode: 'sequential', condition: 'switch', conditionExpr: 'category',
+          branches: ['travel → Travel Desk', 'equipment → IT Asset Desk', 'meals → Finance Review'],
+          actions: [
+            { id: 'wf5-a6', name: 'Classify Expense Category', executorType: 'human', assignedTo: 'u3' },
+            { id: 'wf5-a7', name: 'Forward to Matching Desk', executorType: 'human', assignedTo: 'u3' },
+          ],
+        },
+        {
+          // LOOP — repeats until every receipt is verified
+          id: 'wf5-t5', _instanceId: 'wf5-t5', name: 'Verify Receipts',
+          description: 'Loop: verify each receipt one by one, repeating until all receipts are checked',
+          executionMode: 'sequential', condition: 'loop', conditionExpr: 'verified < receipts',
+          branches: ['verified < receipts → repeat this task', 'verified === receipts → continue ↓'],
+          actions: [
+            { id: 'wf5-a8', name: 'Open Next Receipt', executorType: 'human', assignedTo: 'u4' },
+            { id: 'wf5-a9', name: 'Match Receipt to Line Item', executorType: 'human', assignedTo: 'u4' },
+            { id: 'wf5-a10', name: 'Mark Receipt Verified', executorType: 'human', assignedTo: 'u4' },
+          ],
+        },
+        {
+          id: 'wf5-t6', _instanceId: 'wf5-t6', name: 'Reimburse & Close',
+          description: 'Finance issues reimbursement and closes the expense report',
+          executionMode: 'parallel', condition: 'none', conditionExpr: '', branches: [],
+          actions: [
+            { id: 'wf5-a11', name: 'Issue Reimbursement', executorType: 'human', assignedTo: 'u3' },
+            { id: 'wf5-a12', name: 'Notify Employee', executorType: 'human', assignedTo: 'u1' },
           ],
         },
       ],
@@ -390,6 +468,7 @@ export function launchWorkflow(workflowId) {
         taskName: t.name,
         condition: t.condition || 'none',
         conditionExpr: t.conditionExpr || '',
+        branches: t.branches || [],
         executionMode: execMode,
         status: 'pending',
         actionInstances,
