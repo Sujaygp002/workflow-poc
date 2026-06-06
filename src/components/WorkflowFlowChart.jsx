@@ -123,25 +123,29 @@ function ConditionalBranch({ node, falseChild, trueChild }) {
   return (
     <div className="flex flex-col items-center">
       <Diamond node={node} />
-      {/* the two outgoing edges */}
-      <div className="flex items-start justify-center gap-16">
-        {/* FALSE → left task */}
-        <div className="flex flex-col items-center">
-          <svg width="50" height="26" viewBox="0 0 50 26" className="text-slate-300">
-            <path d="M50 0 Q0 0 0 20" fill="none" stroke="currentColor" strokeWidth="1.5" />
-            <path d="M-3 14 L0 22 L3 14" fill="currentColor" />
-          </svg>
-          <span className="text-[10px] font-semibold text-slate-500 -mt-1 mb-1">false</span>
-          {falseChild ? <StepBox node={falseChild} /> : <span className="text-[10px] text-slate-300 italic">—</span>}
+      {/* Connector: bar from the diamond fanning out, with vertical drops whose
+          arrowheads land on each box. Columns are 220px wide + 40px gap, so the
+          column centres are at x=110 and x=370 in a 480-wide canvas. */}
+      <svg width="480" height="34" viewBox="0 0 480 34" className="text-slate-300 -mt-1">
+        {/* down from diamond centre to the bar */}
+        <path d="M240 0 L240 10" stroke="currentColor" strokeWidth="1.5" fill="none" />
+        {/* horizontal bar spanning both column centres */}
+        <path d="M110 10 L370 10" stroke="currentColor" strokeWidth="1.5" fill="none" />
+        {/* left drop + arrowhead (touches false box) */}
+        <path d="M110 10 L110 30" stroke="currentColor" strokeWidth="1.5" fill="none" />
+        <path d="M106 26 L110 33 L114 26 Z" fill="currentColor" />
+        {/* right drop + arrowhead (touches true box) */}
+        <path d="M370 10 L370 30" stroke="currentColor" strokeWidth="1.5" fill="none" />
+        <path d="M366 26 L370 33 L374 26 Z" fill="currentColor" />
+      </svg>
+
+      {/* the two branch boxes; arrowheads above land on them. -mt removes the gap. */}
+      <div className="grid grid-cols-2 gap-10 -mt-2">
+        <div className="flex justify-center">
+          {falseChild ? <StepBox node={falseChild} /> : <span className="text-xs text-slate-300 italic">—</span>}
         </div>
-        {/* TRUE → right task */}
-        <div className="flex flex-col items-center">
-          <svg width="50" height="26" viewBox="0 0 50 26" className="text-slate-300">
-            <path d="M0 0 Q50 0 50 20" fill="none" stroke="currentColor" strokeWidth="1.5" />
-            <path d="M47 14 L50 22 L53 14" fill="currentColor" />
-          </svg>
-          <span className="text-[10px] font-semibold text-slate-500 -mt-1 mb-1">true</span>
-          {trueChild ? <StepBox node={trueChild} /> : <span className="text-[10px] text-slate-300 italic">—</span>}
+        <div className="flex justify-center">
+          {trueChild ? <StepBox node={trueChild} /> : <span className="text-xs text-slate-300 italic">—</span>}
         </div>
       </div>
     </div>
