@@ -607,9 +607,36 @@ export default function WorkflowBuilder() {
   }
 
   function handleSave() {
-    // strip builder-only _id before persisting
-    const clean = { ...wf, steps: (wf.steps || []).map(({ _id, ...s }) => s) };
-    saveWorkflow(clean);
+    const rawSteps = wf.steps || [];
+
+    // Give every step a stable real id (reuse existing id, else promote its
+    // builder _id). Build a map from whatever key was used in references
+    // (id OR _id) → the final stable id, so PreReq / branch targets survive.
+    const keyToId = {};
+    const withIds = rawSteps.map(s => {
+      const finalId = s.id || s._id || Math.random().toString(36).slice(2);
+      if (s.id) keyToId[s.id] = finalId;
+      if (s._id) keyToId[s._id] = finalId;
+      return { ...s, id: finalId };
+    });
+
+    const remap = ref => keyToId[ref] || ref;
+
+    const cleanSteps = withIds.map(({ _id, ...s }) => {
+      const out = { ...s };
+      if (Array.isArray(s.PreReq)) {
+        const mapped = s.PreReq.map(remap);
+        out.PreReq = mapped.length ? mapped : 'none';
+      }
+      if (s.trueTarget)  out.trueTarget  = remap(s.trueTarget);
+      if (s.falseTarget) out.falseTarget = remap(s.falseTarget);
+      if (Array.isArray(s.cases)) {
+        out.cases = s.cases.map(c => ({ ...c, target: c.target ? remap(c.target) : null }));
+      }
+      return out;
+    });
+
+    saveWorkflow({ ...wf, steps: cleanSteps });
     navigate('/builder/workflows');
   }
 
