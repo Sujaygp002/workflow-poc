@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Activity, ChevronDown, ChevronUp, CheckCircle2, Clock, Circle, AlertCircle, RefreshCw, Lock, ArrowDown, GitBranch } from 'lucide-react';
 import Badge from '../../components/Badge';
+import WorkflowFlowChart, { nodesFromInstance } from '../../components/WorkflowFlowChart';
 import { getInstances, getUsers } from '../../store';
 
 function statusIcon(status) {
@@ -134,7 +135,7 @@ function StepBlock({ ti, tIdx, isLast, users }) {
 }
 
 function InstanceCard({ instance, users }) {
-  const [open, setOpen] = useState(true);
+  const [view, setView] = useState('flow'); // 'flow' | 'detail' | 'collapsed'
 
   const totalActions = instance.taskInstances.reduce((s, t) => s + t.actionInstances.length, 0);
   const doneActions = instance.taskInstances.reduce((s, t) => s + t.actionInstances.filter(a => a.status === 'completed').length, 0);
@@ -157,13 +158,27 @@ function InstanceCard({ instance, users }) {
           </div>
           <div className="mt-2">{progressBar(doneActions, totalActions)}</div>
         </div>
-        <button onClick={() => setOpen(o => !o)}
-          className="px-2.5 py-1 rounded-md text-xs font-medium bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center gap-1 shrink-0">
-          <GitBranch size={11} /> {open ? <ChevronUp size={11} /> : <ChevronDown size={11} />} Flow
-        </button>
+
+        {/* view toggle — clicking the active button collapses */}
+        <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5 shrink-0">
+          <button onClick={() => setView(v => v === 'flow' ? 'collapsed' : 'flow')}
+            className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1 ${view === 'flow' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>
+            <GitBranch size={11} /> Flow
+          </button>
+          <button onClick={() => setView(v => v === 'detail' ? 'collapsed' : 'detail')}
+            className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1 ${view === 'detail' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>
+            {view === 'detail' ? <ChevronUp size={11} /> : <ChevronDown size={11} />} Detail
+          </button>
+        </div>
       </div>
 
-      {open && (
+      {view === 'flow' && (
+        <div className="border-t border-slate-100 bg-slate-50/40">
+          <WorkflowFlowChart nodes={nodesFromInstance(instance, users)} endDone={instance.status === 'completed'} />
+        </div>
+      )}
+
+      {view === 'detail' && (
         <div className="border-t border-slate-100 px-4 py-3 bg-slate-50/40 space-y-0">
           {instance.taskInstances.map((ti, tIdx) => (
             <StepBlock key={ti.id} ti={ti} tIdx={tIdx} isLast={tIdx === instance.taskInstances.length - 1} users={users} />

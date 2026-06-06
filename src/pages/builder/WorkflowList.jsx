@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Play, Trash2, GitBranch, Clock, Edit2, Zap, AlertCircle } from 'lucide-react';
+import { Plus, Play, Trash2, GitBranch, Clock, Edit2, Zap, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import WorkflowFlowChart, { nodesFromWorkflow } from '../../components/WorkflowFlowChart';
 import { getWorkflows, deleteWorkflow, launchWorkflow, getTriggers, getUnmappedTriggers } from '../../store';
 
 const typeBadgeCls = {
@@ -9,6 +10,74 @@ const typeBadgeCls = {
   loop:        'bg-purple-100 text-purple-700',
 };
 const typeIcon = { task: '▸', conditional: '◆', loop: '↻' };
+
+function WorkflowCard({ wf, trigger, onLaunch, onEdit, onDelete }) {
+  const [showFlow, setShowFlow] = useState(false);
+  const steps = wf.steps || wf.tasks || [];
+  const counts = steps.reduce((acc, s) => {
+    const t = s.type || 'task';
+    acc[t] = (acc[t] || 0) + 1;
+    return acc;
+  }, {});
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow overflow-hidden">
+      <div className="p-4">
+        <div className="flex items-start justify-between">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-semibold text-slate-800">{wf.name}</span>
+              {trigger && (
+                <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-violet-50 text-violet-600 font-medium">
+                  <Zap size={10} /> {trigger.name}
+                </span>
+              )}
+            </div>
+            {wf.description && <p className="text-sm text-slate-500 mt-1 line-clamp-1">{wf.description}</p>}
+            <div className="flex items-center gap-2 mt-2 flex-wrap">
+              <span className="text-xs text-slate-400">{steps.length} step{steps.length !== 1 ? 's' : ''}</span>
+              {['task', 'conditional', 'loop'].filter(t => counts[t]).map(t => (
+                <span key={t} className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${typeBadgeCls[t]}`}>
+                  {typeIcon[t]} {counts[t]}
+                </span>
+              ))}
+              {wf.createdAt && (
+                <span className="flex items-center gap-1 text-xs text-slate-400">
+                  <Clock size={10} />
+                  {new Date(wf.createdAt).toLocaleDateString()}
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="flex gap-2 ml-3 shrink-0">
+            <button onClick={() => setShowFlow(f => !f)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${showFlow ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-slate-600 border-slate-200 hover:border-violet-300'}`}>
+              <GitBranch size={13} /> Flow {showFlow ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+            </button>
+            <button onClick={() => onLaunch(wf)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 text-green-700 border border-green-200 rounded-lg text-sm font-medium hover:bg-green-100 transition-colors">
+              <Play size={13} /> Launch
+            </button>
+            <button onClick={() => onEdit(wf)}
+              className="p-2 rounded-lg hover:bg-violet-50 text-slate-400 hover:text-violet-500">
+              <Edit2 size={15} />
+            </button>
+            <button onClick={() => onDelete(wf.id)}
+              className="p-2 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500">
+              <Trash2 size={15} />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {showFlow && (
+        <div className="border-t border-slate-100 bg-slate-50/40">
+          <WorkflowFlowChart nodes={nodesFromWorkflow(wf)} />
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function WorkflowList() {
   const navigate = useNavigate();
@@ -79,60 +148,16 @@ export default function WorkflowList() {
         </div>
       ) : (
         <div className="grid gap-3">
-          {workflows.map(wf => {
-            const steps = wf.steps || wf.tasks || [];
-            const trig = triggerFor(wf);
-            const counts = steps.reduce((acc, s) => {
-              const t = s.type || 'task';
-              acc[t] = (acc[t] || 0) + 1;
-              return acc;
-            }, {});
-            return (
-              <div key={wf.id} className="bg-white rounded-xl border border-slate-100 p-4 shadow-sm hover:shadow-md transition-shadow">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-semibold text-slate-800">{wf.name}</span>
-                      {trig && (
-                        <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-violet-50 text-violet-600 font-medium">
-                          <Zap size={10} /> {trig.name}
-                        </span>
-                      )}
-                    </div>
-                    {wf.description && <p className="text-sm text-slate-500 mt-1 line-clamp-1">{wf.description}</p>}
-                    <div className="flex items-center gap-2 mt-2 flex-wrap">
-                      <span className="text-xs text-slate-400">{steps.length} step{steps.length !== 1 ? 's' : ''}</span>
-                      {['task', 'conditional', 'loop'].filter(t => counts[t]).map(t => (
-                        <span key={t} className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${typeBadgeCls[t]}`}>
-                          {typeIcon[t]} {counts[t]}
-                        </span>
-                      ))}
-                      {wf.createdAt && (
-                        <span className="flex items-center gap-1 text-xs text-slate-400">
-                          <Clock size={10} />
-                          {new Date(wf.createdAt).toLocaleDateString()}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex gap-2 ml-3 shrink-0">
-                    <button onClick={() => handleLaunch(wf)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 text-green-700 border border-green-200 rounded-lg text-sm font-medium hover:bg-green-100 transition-colors">
-                      <Play size={13} /> Launch
-                    </button>
-                    <button onClick={() => navigate('/builder/create', { state: { workflow: wf } })}
-                      className="p-2 rounded-lg hover:bg-violet-50 text-slate-400 hover:text-violet-500">
-                      <Edit2 size={15} />
-                    </button>
-                    <button onClick={() => handleDelete(wf.id)}
-                      className="p-2 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500">
-                      <Trash2 size={15} />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+          {workflows.map(wf => (
+            <WorkflowCard
+              key={wf.id}
+              wf={wf}
+              trigger={triggerFor(wf)}
+              onLaunch={handleLaunch}
+              onEdit={w => navigate('/builder/create', { state: { workflow: w } })}
+              onDelete={handleDelete}
+            />
+          ))}
         </div>
       )}
     </div>
