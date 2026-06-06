@@ -186,26 +186,39 @@ function buildRows(nodes) {
   return Object.keys(rowsMap).sort((a, b) => a - b).map(k => rowsMap[k]);
 }
 
-// Match a conditional's branch labels (false → X / true → Y) to actual child
-// nodes (children whose PreReq includes this conditional), by name.
+// Resolve a conditional's TRUE/FALSE branch task boxes.
+// Primary source of truth: the explicit trueTarget / falseTarget ids the user
+// picked in the builder. Falls back to PreReq + branch-label matching for
+// older data that has no explicit targets.
 function branchChildren(node, nodes) {
-  const children = nodes.filter(n =>
-    Array.isArray(n.PreReq) && n.PreReq.includes(node.id)
-  );
-  const branches = node.branches || [];
-  const findByLabel = (kw) => {
-    const label = branches.find(b => b.toLowerCase().startsWith(kw));
-    if (!label) return null;
-    return children.find(c => label.toLowerCase().includes(c.name.toLowerCase())) || null;
-  };
-  let falseChild = findByLabel('false');
-  let trueChild = findByLabel('true');
-  // fallback: if labels didn't resolve, assign in order
-  const used = new Set([falseChild?.id, trueChild?.id].filter(Boolean));
-  const rest = children.filter(c => !used.has(c.id));
-  if (!falseChild) falseChild = rest.shift() || null;
-  if (!trueChild) trueChild = rest.shift() || null;
-  return { falseChild, trueChild, childIds: children.map(c => c.id) };
+  const byId = {};
+  nodes.forEach(n => { byId[n.id] = n; });
+
+  // 1) explicit targets (preferred)
+  let trueChild  = node.trueTarget  ? byId[node.trueTarget]  : null;
+  let falseChild = node.falseTarget ? byId[node.falseTarget] : null;
+
+  // 2) fallback: children whose PreReq points at this conditional
+  if (!trueChild || !falseChild) {
+    const children = nodes.filter(n =>
+      Array.isArray(n.PreReq) && n.PreReq.includes(node.id)
+    );
+    const branches = node.branches || [];
+    const findByLabel = (kw) => {
+      const label = branches.find(b => b.toLowerCase().startsWith(kw));
+      if (!label) return null;
+      return children.find(c => label.toLowerCase().includes(c.name.toLowerCase())) || null;
+    };
+    if (!falseChild) falseChild = findByLabel('false');
+    if (!trueChild)  trueChild  = findByLabel('true');
+    const used = new Set([falseChild?.id, trueChild?.id].filter(Boolean));
+    const rest = children.filter(c => !used.has(c.id));
+    if (!falseChild) falseChild = rest.shift() || null;
+    if (!trueChild)  trueChild  = rest.shift() || null;
+  }
+
+  const childIds = [falseChild?.id, trueChild?.id].filter(Boolean);
+  return { falseChild, trueChild, childIds };
 }
 
 export default function WorkflowFlowChart({ nodes, endDone = false }) {
@@ -274,6 +287,8 @@ export function nodesFromWorkflow(wf) {
     condition: s.condition,
     conditionExpr: s.conditionExpr,
     branches: s.branches || [],
+    trueTarget: s.trueTarget || null,
+    falseTarget: s.falseTarget || null,
     loopSet: s.loopSet,
     loopExpr: s.loopExpr,
     PreReq: s.PreReq || 'none',
@@ -295,6 +310,8 @@ export function nodesFromInstance(instance, users = []) {
     condition: ti.condition,
     conditionExpr: ti.conditionExpr,
     branches: ti.branches || [],
+    trueTarget: ti.trueTarget ? stepIdToNodeId[ti.trueTarget] : null,
+    falseTarget: ti.falseTarget ? stepIdToNodeId[ti.falseTarget] : null,
     loopSet: ti.loopSet,
     loopExpr: ti.loopExpr,
     PreReq: Array.isArray(ti.PreReq)

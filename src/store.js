@@ -380,6 +380,8 @@ export function launchWorkflow(workflowId) {
         condition: s.condition || 'none',
         conditionExpr: s.conditionExpr || '',
         branches: s.branches || [],
+        trueTarget: s.trueTarget || null,
+        falseTarget: s.falseTarget || null,
         loopSet: s.loopSet || null,
         loopExpr: s.loopExpr || '',
         PreReq: s.PreReq || 'none',
