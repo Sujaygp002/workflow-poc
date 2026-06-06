@@ -1,13 +1,21 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Play, Trash2, GitBranch, Clock, Edit2 } from 'lucide-react';
-import Badge from '../../components/Badge';
-import { getWorkflows, deleteWorkflow, launchWorkflow } from '../../store';
+import { Plus, Play, Trash2, GitBranch, Clock, Edit2, Zap, AlertCircle } from 'lucide-react';
+import { getWorkflows, deleteWorkflow, launchWorkflow, getTriggers, getUnmappedTriggers } from '../../store';
+
+const typeBadgeCls = {
+  task:        'bg-violet-100 text-violet-700',
+  conditional: 'bg-amber-100 text-amber-700',
+  loop:        'bg-purple-100 text-purple-700',
+};
+const typeIcon = { task: '▸', conditional: '◆', loop: '↻' };
 
 export default function WorkflowList() {
   const navigate = useNavigate();
   const [workflows, setWorkflows] = useState(getWorkflows);
   const [launched, setLaunched] = useState(null);
+  const triggers = getTriggers();
+  const unmapped = getUnmappedTriggers();
 
   function handleDelete(id) {
     deleteWorkflow(id);
@@ -20,12 +28,16 @@ export default function WorkflowList() {
     setTimeout(() => setLaunched(null), 3000);
   }
 
+  function triggerFor(wf) {
+    return triggers.find(t => t.id === wf.triggerId || t.workflowId === wf.id);
+  }
+
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Workflows</h1>
-          <p className="text-sm text-slate-500 mt-1">Create, manage and launch your workflows</p>
+          <p className="text-sm text-slate-500 mt-1">Each workflow is the response to a trigger</p>
         </div>
         <button onClick={() => navigate('/builder/create')}
           className="flex items-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-lg hover:bg-violet-700 text-sm font-medium">
@@ -35,7 +47,24 @@ export default function WorkflowList() {
 
       {launched && (
         <div className="mb-4 px-4 py-3 bg-green-50 border border-green-200 rounded-xl text-green-700 text-sm font-medium flex items-center gap-2">
-          <Play size={14} /> «{launched}» launched successfully! Check the Work Bucket.
+          <Play size={14} /> «{launched}» launched! People auto-assigned — see the Orchestrator.
+        </div>
+      )}
+
+      {/* Triggers needing a workflow */}
+      {unmapped.length > 0 && (
+        <div className="mb-5 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl">
+          <div className="flex items-center gap-2 text-amber-800 text-sm font-semibold mb-2">
+            <AlertCircle size={14} /> {unmapped.length} trigger{unmapped.length > 1 ? 's' : ''} without a workflow
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {unmapped.map(t => (
+              <button key={t.id} onClick={() => navigate('/builder/create', { state: { presetTriggerId: t.id } })}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-amber-200 rounded-lg text-xs font-medium text-amber-700 hover:bg-amber-100">
+                <Zap size={12} /> {t.name} — {t.label}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -51,22 +80,35 @@ export default function WorkflowList() {
       ) : (
         <div className="grid gap-3">
           {workflows.map(wf => {
-            const taskCount = wf.tasks?.length || 0;
-            const stepCount = wf.tasks?.reduce((s, t) => s + (t.Tasksteps?.length || t.actions?.length || 0), 0) || 0;
+            const steps = wf.steps || wf.tasks || [];
+            const trig = triggerFor(wf);
+            const counts = steps.reduce((acc, s) => {
+              const t = s.type || 'task';
+              acc[t] = (acc[t] || 0) + 1;
+              return acc;
+            }, {});
             return (
               <div key={wf.id} className="bg-white rounded-xl border border-slate-100 p-4 shadow-sm hover:shadow-md transition-shadow">
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-semibold text-slate-800">{wf.name}</span>
-                      <Badge label={wf.trigger || wf.triggerType} type={wf.trigger || wf.triggerType} />
+                      {trig && (
+                        <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-violet-50 text-violet-600 font-medium">
+                          <Zap size={10} /> {trig.name}
+                        </span>
+                      )}
                     </div>
                     {wf.description && <p className="text-sm text-slate-500 mt-1 line-clamp-1">{wf.description}</p>}
-                    <div className="flex items-center gap-4 mt-2 text-xs text-slate-400">
-                      <span>{taskCount} task{taskCount !== 1 ? 's' : ''}</span>
-                      <span>{stepCount} step{stepCount !== 1 ? 's' : ''}</span>
+                    <div className="flex items-center gap-2 mt-2 flex-wrap">
+                      <span className="text-xs text-slate-400">{steps.length} step{steps.length !== 1 ? 's' : ''}</span>
+                      {['task', 'conditional', 'loop'].filter(t => counts[t]).map(t => (
+                        <span key={t} className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${typeBadgeCls[t]}`}>
+                          {typeIcon[t]} {counts[t]}
+                        </span>
+                      ))}
                       {wf.createdAt && (
-                        <span className="flex items-center gap-1">
+                        <span className="flex items-center gap-1 text-xs text-slate-400">
                           <Clock size={10} />
                           {new Date(wf.createdAt).toLocaleDateString()}
                         </span>

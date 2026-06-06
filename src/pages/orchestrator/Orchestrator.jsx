@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Activity, ChevronDown, ChevronUp, CheckCircle2, Clock, Circle, AlertCircle, RefreshCw, Lock, ArrowDown, Columns, GitBranch } from 'lucide-react';
+import { Activity, ChevronDown, ChevronUp, CheckCircle2, Clock, Circle, AlertCircle, RefreshCw, Lock, ArrowDown, GitBranch } from 'lucide-react';
 import Badge from '../../components/Badge';
 import { getInstances, getUsers } from '../../store';
 
@@ -23,202 +23,64 @@ function progressBar(done, total) {
   );
 }
 
-// ── Flowchart view ─────────────────────────────────────
+const typeBadgeCls = {
+  task:        'bg-violet-100 text-violet-700',
+  conditional: 'bg-amber-100 text-amber-700',
+  loop:        'bg-purple-100 text-purple-700',
+};
+const typeIcon = { task: '▸', conditional: '◆', loop: '↻' };
 
-function FlowArrow({ condition, conditionExpr, branches }) {
-  const condColors = {
-    'if/else': 'bg-amber-50 border-amber-300 text-amber-700',
-    'switch':  'bg-blue-50 border-blue-300 text-blue-700',
-    'loop':    'bg-purple-50 border-purple-300 text-purple-700',
-  };
-  return (
-    <div className="flex flex-col items-center gap-0 select-none">
-      <div className="w-px h-5 bg-slate-300" />
-      {condition && condition !== 'none' ? (
-        <>
-          {/* diamond gate */}
-          <div className={`border-2 rounded-lg px-3 py-1 text-xs font-semibold flex items-center gap-1.5 ${condColors[condition] || 'bg-slate-50 border-slate-300 text-slate-600'}`}>
-            <span className="text-base leading-none">◆</span>
-            <span className="capitalize">{condition}</span>
-            {conditionExpr && <span className="font-mono opacity-70">{conditionExpr}</span>}
+// ── Gate between steps (conditional branches / loop set) ──
+function StepGate({ ti }) {
+  if (ti.type === 'conditional') {
+    return (
+      <div className="flex items-start gap-2 px-5 py-1.5">
+        <div className="w-px h-4 bg-slate-200 mx-2 mt-1" />
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2 px-3 py-1 rounded-full border text-xs font-semibold bg-amber-50 border-amber-200 text-amber-700 w-fit">
+            <span>◆</span><span className="capitalize">{ti.condition}</span>
+            {ti.conditionExpr && <span className="opacity-70 font-mono">{ti.conditionExpr}</span>}
           </div>
-          {/* branch route labels */}
-          {branches && branches.length > 0 && (
-            <div className="flex flex-wrap justify-center gap-1.5 mt-1.5 max-w-[280px]">
-              {branches.map((b, i) => (
-                <span key={i} className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${condColors[condition] || 'bg-slate-50 border-slate-300 text-slate-600'} opacity-90`}>
-                  {b}
-                </span>
+          {(ti.branches || []).length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {ti.branches.map((b, i) => (
+                <span key={i} className="text-[10px] font-mono px-1.5 py-0.5 rounded border bg-amber-50 border-amber-200 text-amber-700">{b}</span>
               ))}
             </div>
           )}
-          <div className="w-px h-5 bg-slate-300" />
-        </>
-      ) : null}
-      <svg width="10" height="6" viewBox="0 0 10 6" className="text-slate-300">
-        <path d="M0 0 L5 6 L10 0" fill="currentColor" />
-      </svg>
-    </div>
-  );
-}
-
-function FlowActionChip({ ai, users }) {
-  const user = users.find(u => u.id === ai.assignedTo);
-  const statusCls =
-    ai.status === 'completed' ? 'border-green-200 bg-green-50' :
-    ai.status === 'active'    ? 'border-amber-200 bg-amber-50' :
-    'border-slate-200 bg-white opacity-50';
-
-  return (
-    <div className={`border rounded-lg px-3 py-1.5 flex items-center gap-2 text-xs min-w-[140px] ${statusCls}`}>
-      {statusIcon(ai.status)}
-      <span className={`flex-1 font-medium ${ai.status === 'completed' ? 'line-through text-slate-400' : 'text-slate-700'}`}>
-        {ai.actionName}
-      </span>
-      {user && (
-        <div className="w-5 h-5 rounded-full bg-violet-200 flex items-center justify-center text-violet-700 text-xs font-bold shrink-0">
-          {user.name[0]}
         </div>
-      )}
-    </div>
-  );
-}
-
-function FlowTaskNode({ ti, tIdx, users }) {
-  const mode = ti.executionMode || 'sequential';
-  const done = ti.actionInstances.filter(a => a.status === 'completed').length;
-  const total = ti.actionInstances.length;
-
-  const borderCls =
-    ti.status === 'completed' ? 'border-green-300 bg-green-50/40 shadow-green-100' :
-    ti.actionInstances.some(a => a.status === 'active') ? 'border-violet-300 bg-violet-50/40 shadow-violet-100 ring-2 ring-violet-100' :
-    'border-slate-200 bg-white';
-
-  return (
-    <div className={`border-2 rounded-2xl shadow-sm overflow-hidden min-w-[200px] ${borderCls}`}>
-      {/* Task header */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-100 bg-white/70">
-        <div className="w-5 h-5 rounded-full bg-violet-600 text-white text-xs font-bold flex items-center justify-center shrink-0">
-          {tIdx + 1}
+        <ArrowDown size={10} className="text-slate-300 mt-1" />
+      </div>
+    );
+  }
+  if (ti.type === 'loop') {
+    return (
+      <div className="flex items-start gap-2 px-5 py-1.5">
+        <div className="w-px h-4 bg-slate-200 mx-2 mt-1" />
+        <div className="flex items-center gap-2 px-3 py-1 rounded-full border text-xs font-semibold bg-purple-50 border-purple-200 text-purple-700 w-fit">
+          <span>↻</span><span>for each in {ti.loopSet}</span>
+          {ti.loopExpr && <span className="opacity-70 font-mono">· {ti.loopExpr}</span>}
         </div>
-        <span className="font-semibold text-slate-800 text-sm flex-1 truncate">{ti.taskName}</span>
-        <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${mode === 'parallel' ? 'bg-teal-100 text-teal-700' : 'bg-slate-100 text-slate-600'}`}>
-          {mode === 'parallel' ? '⫶' : '↓'} {mode}
-        </span>
-        <span className="text-xs text-slate-400">{done}/{total}</span>
+        <ArrowDown size={10} className="text-slate-300 mt-1" />
       </div>
-
-      {/* Actions */}
-      <div className={`p-2 ${mode === 'parallel' ? 'flex flex-row gap-2 flex-wrap' : 'flex flex-col gap-1.5'}`}>
-        {mode === 'sequential' && ti.actionInstances.map((ai, aIdx) => (
-          <div key={ai.id} className="flex flex-col items-stretch gap-0">
-            <FlowActionChip ai={ai} users={users} />
-            {aIdx < ti.actionInstances.length - 1 && (
-              <div className="flex justify-center">
-                <div className="flex flex-col items-center">
-                  <div className="w-px h-2 bg-slate-200" />
-                  <svg width="8" height="5" viewBox="0 0 10 6" className="text-slate-300">
-                    <path d="M0 0 L5 6 L10 0" fill="currentColor" />
-                  </svg>
-                </div>
-              </div>
-            )}
-          </div>
-        ))}
-        {mode === 'parallel' && ti.actionInstances.map(ai => (
-          <FlowActionChip key={ai.id} ai={ai} users={users} />
-        ))}
-      </div>
-    </div>
-  );
+    );
+  }
+  return null;
 }
 
-function FlowStartEnd({ label, done }) {
-  return (
-    <div className={`rounded-full px-6 py-2 text-sm font-bold border-2 ${done ? 'border-green-400 bg-green-50 text-green-700' : 'border-violet-400 bg-violet-50 text-violet-700'}`}>
-      {label}
-    </div>
-  );
-}
-
-function FlowChart({ instance, users }) {
-  return (
-    <div className="flex flex-col items-center py-6 px-4 overflow-x-auto">
-      <FlowStartEnd label="START" done={false} />
-
-      {instance.taskInstances.map((ti, tIdx) => (
-        <div key={ti.id} className="flex flex-col items-center w-full">
-          <FlowArrow
-            condition={tIdx > 0 ? ti.condition : null}
-            conditionExpr={ti.conditionExpr}
-            branches={ti.branches}
-          />
-          <FlowTaskNode ti={ti} tIdx={tIdx} users={users} />
-        </div>
-      ))}
-
-      <div className="flex flex-col items-center">
-        <FlowArrow condition={null} conditionExpr={null} />
-        <FlowStartEnd label="END" done={instance.status === 'completed'} />
-      </div>
-    </div>
-  );
-}
-
-// ── List view (existing detail view) ──────────────────
-
-function ConditionGate({ condition, conditionExpr, branches }) {
-  if (!condition || condition === 'none') return null;
-  const colors = {
-    'if/else': 'bg-amber-50 border-amber-200 text-amber-700',
-    'switch':  'bg-blue-50 border-blue-200 text-blue-700',
-    'loop':    'bg-purple-50 border-purple-200 text-purple-700',
-  };
-  const cls = colors[condition] || 'bg-slate-50 border-slate-200 text-slate-600';
-  return (
-    <div className="flex items-start gap-2 px-5 py-1.5">
-      <div className="w-px h-4 bg-slate-200 mx-2 mt-1" />
-      <div className="flex flex-col gap-1">
-        <div className={`flex items-center gap-2 px-3 py-1 rounded-full border text-xs font-semibold ${cls} w-fit`}>
-          <span>◆</span>
-          <span className="capitalize">{condition}</span>
-          {conditionExpr && <span className="opacity-70 font-mono">{conditionExpr}</span>}
-        </div>
-        {branches && branches.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {branches.map((b, i) => (
-              <span key={i} className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${cls}`}>{b}</span>
-            ))}
-          </div>
-        )}
-      </div>
-      <ArrowDown size={10} className="text-slate-300 mt-1" />
-    </div>
-  );
-}
-
-function ActionRow({ ai, users, isLast, mode }) {
+function ActionRow({ ai, users }) {
   const user = users.find(u => u.id === ai.assignedTo);
   const isBlocked = ai.status === 'blocked';
   const isDone = ai.status === 'completed';
 
   return (
     <div className={`flex items-center gap-3 text-sm transition-colors ${isBlocked ? 'opacity-40' : ''}`}>
-      {mode === 'sequential' && (
-        <div className="flex flex-col items-center w-4 shrink-0 self-stretch">
-          <div className="w-px flex-1 bg-slate-200" />
-          {!isLast && <div className="w-px flex-1 bg-slate-200" />}
-        </div>
-      )}
-      <div className={`flex items-center gap-2 flex-1 py-2 ${mode === 'parallel' ? 'bg-white border border-slate-100 rounded-xl px-3 shadow-sm' : 'pr-4'}`}>
+      <div className="flex items-center gap-2 flex-1 py-2 pr-4">
         <div className="shrink-0">{statusIcon(ai.status)}</div>
         <span className={`flex-1 text-sm ${isDone ? 'line-through text-slate-400' : isBlocked ? 'text-slate-400' : 'text-slate-700'}`}>
           {ai.actionName}
         </span>
-        <Badge label={ai.executorType} type={ai.executorType?.split('+')[0]} />
-        {isBlocked ? (
-          <span className="text-xs text-slate-300 italic">waiting</span>
-        ) : user ? (
+        {user ? (
           <div className="flex items-center gap-1.5 min-w-0">
             <div className="w-5 h-5 rounded-full bg-violet-200 flex items-center justify-center text-violet-700 text-xs font-bold shrink-0">
               {user.name[0]}
@@ -238,40 +100,28 @@ function ActionRow({ ai, users, isLast, mode }) {
   );
 }
 
-function TaskBlock({ ti, tIdx, isLast, users }) {
-  const mode = ti.executionMode || 'sequential';
-  const taskDone = ti.actionInstances.filter(a => a.status === 'completed').length;
-  const taskTotal = ti.actionInstances.length;
+function StepBlock({ ti, tIdx, isLast, users }) {
+  const done = ti.actionInstances.filter(a => a.status === 'completed').length;
+  const total = ti.actionInstances.length;
+  const type = ti.type || 'task';
 
   return (
     <>
-      {tIdx > 0 && ti.condition && ti.condition !== 'none' && (
-        <ConditionGate condition={ti.condition} conditionExpr={ti.conditionExpr} branches={ti.branches} />
-      )}
+      {tIdx > 0 && <StepGate ti={ti} />}
       <div className={`border rounded-xl overflow-hidden ${ti.status === 'completed' ? 'border-green-100 bg-green-50/20' : 'border-slate-200 bg-white'}`}>
         <div className="flex items-center gap-2 px-4 py-2.5 border-b border-slate-100">
-          <div className="flex items-center justify-center w-5 h-5 rounded-full bg-violet-100 text-violet-700 text-xs font-bold shrink-0">
+          <div className="flex items-center justify-center w-5 h-5 rounded-full bg-slate-100 text-slate-500 text-xs font-bold shrink-0">
             {tIdx + 1}
           </div>
+          <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${typeBadgeCls[type]}`}>{typeIcon[type]} {type}</span>
           <span className="font-medium text-slate-700 text-sm flex-1">{ti.taskName}</span>
-          <div className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${mode === 'parallel' ? 'bg-teal-50 text-teal-600 border border-teal-100' : 'bg-slate-50 text-slate-500 border border-slate-200'}`}>
-            {mode === 'parallel' ? <Columns size={10} /> : <ArrowDown size={10} />}
-            {mode}
-          </div>
-          <span className="text-xs text-slate-400">{taskDone}/{taskTotal}</span>
+          <span className="text-xs text-slate-400">{done}/{total}</span>
           {statusIcon(ti.status)}
         </div>
-        <div className={`px-3 py-2 ${mode === 'parallel' ? 'flex flex-wrap gap-2' : 'space-y-0'}`}>
-          {mode === 'parallel'
-            ? ti.actionInstances.map(ai => (
-                <div key={ai.id} className="flex-1 min-w-[140px]">
-                  <ActionRow ai={ai} users={users} isLast={false} mode="parallel" />
-                </div>
-              ))
-            : ti.actionInstances.map((ai, aIdx) => (
-                <ActionRow key={ai.id} ai={ai} users={users} isLast={aIdx === ti.actionInstances.length - 1} mode="sequential" />
-              ))
-          }
+        <div className="px-3 py-2 space-y-0">
+          {ti.actionInstances.map(ai => (
+            <ActionRow key={ai.id} ai={ai} users={users} />
+          ))}
         </div>
       </div>
       {!isLast && (
@@ -284,7 +134,7 @@ function TaskBlock({ ti, tIdx, isLast, users }) {
 }
 
 function InstanceCard({ instance, users }) {
-  const [view, setView] = useState('detail'); // 'detail' | 'flow' | 'collapsed'
+  const [open, setOpen] = useState(true);
 
   const totalActions = instance.taskInstances.reduce((s, t) => s + t.actionInstances.length, 0);
   const doneActions = instance.taskInstances.reduce((s, t) => s + t.actionInstances.filter(a => a.status === 'completed').length, 0);
@@ -293,7 +143,6 @@ function InstanceCard({ instance, users }) {
 
   return (
     <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-      {/* Header */}
       <div className="flex items-start gap-3 p-4">
         <div className="mt-0.5">{statusIcon(instance.status)}</div>
         <div className="flex-1 min-w-0">
@@ -303,38 +152,22 @@ function InstanceCard({ instance, users }) {
           </div>
           <div className="flex items-center gap-3 mt-1 text-xs text-slate-400">
             <span className="flex items-center gap-1"><Clock size={10} /> {new Date(instance.launchedAt).toLocaleString()}</span>
-            <span>{doneTasks}/{totalTasks} tasks</span>
-            <span>{doneActions}/{totalActions} actions</span>
+            <span>{doneTasks}/{totalTasks} steps</span>
+            <span>{doneActions}/{totalActions} sub-steps</span>
           </div>
           <div className="mt-2">{progressBar(doneActions, totalActions)}</div>
         </div>
-
-        {/* view toggle — clicking the active button collapses the panel */}
-        <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5 shrink-0">
-          <button onClick={() => setView(v => v === 'detail' ? 'collapsed' : 'detail')}
-            className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1 ${view === 'detail' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>
-            {view === 'detail' ? <ChevronUp size={11} /> : <ChevronDown size={11} />} Detail
-          </button>
-          <button onClick={() => setView(v => v === 'flow' ? 'collapsed' : 'flow')}
-            className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1 ${view === 'flow' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>
-            <GitBranch size={11} /> Flow
-          </button>
-        </div>
+        <button onClick={() => setOpen(o => !o)}
+          className="px-2.5 py-1 rounded-md text-xs font-medium bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center gap-1 shrink-0">
+          <GitBranch size={11} /> {open ? <ChevronUp size={11} /> : <ChevronDown size={11} />} Flow
+        </button>
       </div>
 
-      {/* Detail view */}
-      {view === 'detail' && (
+      {open && (
         <div className="border-t border-slate-100 px-4 py-3 bg-slate-50/40 space-y-0">
           {instance.taskInstances.map((ti, tIdx) => (
-            <TaskBlock key={ti.id} ti={ti} tIdx={tIdx} isLast={tIdx === instance.taskInstances.length - 1} users={users} />
+            <StepBlock key={ti.id} ti={ti} tIdx={tIdx} isLast={tIdx === instance.taskInstances.length - 1} users={users} />
           ))}
-        </div>
-      )}
-
-      {/* Flowchart view */}
-      {view === 'flow' && (
-        <div className="border-t border-slate-100 bg-slate-50/40">
-          <FlowChart instance={instance} users={users} />
         </div>
       )}
     </div>
@@ -356,7 +189,7 @@ function PeoplePanel({ instances, users }) {
   }
   const entries = Object.entries(workByUser);
   if (entries.length === 0) {
-    return <div className="text-center py-8 text-slate-400 text-sm">No active human tasks right now.</div>;
+    return <div className="text-center py-8 text-slate-400 text-sm">No active tasks right now.</div>;
   }
   return (
     <div className="space-y-3">
@@ -369,7 +202,7 @@ function PeoplePanel({ instances, users }) {
               <div className="w-8 h-8 rounded-full bg-violet-200 flex items-center justify-center text-violet-700 font-bold text-sm">{user.name[0]}</div>
               <div>
                 <div className="font-semibold text-slate-800 text-sm">{user.name}</div>
-                <div className="text-xs text-slate-400">{items.length} active action{items.length !== 1 ? 's' : ''}</div>
+                <div className="text-xs text-slate-400">{items.length} active sub-step{items.length !== 1 ? 's' : ''}</div>
               </div>
             </div>
             <div className="space-y-1.5">
@@ -413,8 +246,7 @@ function StatCard({ label, value, sub, color, onClick, active }) {
   );
 }
 
-// Aggregate every currently-active task across all running instances.
-// A task is "active" if it has at least one action with status === 'active'.
+// Aggregate every currently-active step across all running instances.
 function getActiveTaskGroups(instances) {
   const groups = [];
   for (const inst of instances) {
@@ -424,13 +256,12 @@ function getActiveTaskGroups(instances) {
       if (activeActions.length === 0) continue;
       const done = ti.actionInstances.filter(a => a.status === 'completed').length;
       const total = ti.actionInstances.length;
-      // distinct people currently working this task
       const peopleIds = [...new Set(activeActions.map(a => a.assignedTo).filter(Boolean))];
       groups.push({
         key: `${inst.id}-${ti.id}`,
         workflowName: inst.workflowName,
         taskName: ti.taskName,
-        executionMode: ti.executionMode || 'sequential',
+        type: ti.type || 'task',
         done, total,
         activeActions,
         peopleIds,
@@ -454,18 +285,16 @@ function ActiveTasksPanel({ instances, users }) {
     <div className="grid md:grid-cols-2 gap-3">
       {groups.map(g => (
         <div key={g.key} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-          {/* task header */}
           <div className="flex items-start gap-2 mb-3">
             <div className="flex-1 min-w-0">
-              <div className="font-semibold text-slate-800 text-sm">{g.taskName}</div>
+              <div className="flex items-center gap-2">
+                <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${typeBadgeCls[g.type]}`}>{typeIcon[g.type]} {g.type}</span>
+                <span className="font-semibold text-slate-800 text-sm">{g.taskName}</span>
+              </div>
               <div className="text-xs text-slate-400 mt-0.5">{g.workflowName}</div>
             </div>
-            <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${g.executionMode === 'parallel' ? 'bg-teal-100 text-teal-700' : 'bg-slate-100 text-slate-600'}`}>
-              {g.executionMode}
-            </span>
           </div>
 
-          {/* who's on it */}
           <div className="flex items-center gap-2 mb-3 flex-wrap">
             <span className="text-xs text-slate-500">
               {g.peopleIds.length === 0
@@ -484,10 +313,8 @@ function ActiveTasksPanel({ instances, users }) {
             })}
           </div>
 
-          {/* progress */}
           <div className="mb-3">{progressBar(g.done, g.total)}</div>
 
-          {/* per-action breakdown */}
           <div className="space-y-1.5">
             {g.actionInstances.map(ai => {
               const u = users.find(x => x.id === ai.assignedTo);
@@ -541,7 +368,7 @@ export default function Orchestrator() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Orchestrator</h1>
-          <p className="text-sm text-slate-500 mt-1">Live view of all workflow runs and who is doing what</p>
+          <p className="text-sm text-slate-500 mt-1">Runs workflows from triggers, routes & auto-assigns tasks to people</p>
         </div>
         <button onClick={refresh} className="flex items-center gap-2 px-3 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50">
           <RefreshCw size={14} /> Refresh
@@ -560,16 +387,13 @@ export default function Orchestrator() {
           active={showActiveTasks}
           onClick={() => setShowActiveTasks(s => !s)}
         />
-        <StatCard label="Active Actions" value={totalActiveActions} sub={`${totalDoneActions} done`} color="violet" />
+        <StatCard label="Active Sub-steps" value={totalActiveActions} sub={`${totalDoneActions} done`} color="violet" />
       </div>
 
-      {/* Active-tasks drill-down */}
       {showActiveTasks && (
         <div className="mb-6 bg-slate-50/60 border border-slate-100 rounded-2xl p-4">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold text-slate-700">
-              Active Tasks · who is working on what
-            </h2>
+            <h2 className="text-sm font-semibold text-slate-700">Active Tasks · who is working on what</h2>
             <button onClick={() => setShowActiveTasks(false)} className="text-xs text-slate-400 hover:text-slate-600">Close ✕</button>
           </div>
           <ActiveTasksPanel instances={instances} users={users} />

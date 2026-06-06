@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { CheckCircle2, Clock, ChevronDown, ChevronUp, ArrowLeft, RefreshCw, Inbox } from 'lucide-react';
-import Badge from '../../components/Badge';
 import { getUsers, getMyWorkItems, getMyCompletedItems, completeActionInstance } from '../../store';
 
 function ActionCard({ item, onComplete }) {
@@ -19,9 +18,7 @@ function ActionCard({ item, onComplete }) {
     <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
       <div className="flex items-start gap-3 p-4">
         <div className="w-10 h-10 rounded-xl bg-violet-100 flex items-center justify-center shrink-0 mt-0.5">
-          <span className="text-violet-600 text-xs font-bold">
-            {item.executorType === 'human+ai' ? 'H+A' : item.executorType[0].toUpperCase()}
-          </span>
+          <CheckCircle2 size={16} className="text-violet-500" />
         </div>
         <div className="flex-1 min-w-0">
           <div className="font-semibold text-slate-800 leading-tight">{item.actionName}</div>
@@ -31,7 +28,6 @@ function ActionCard({ item, onComplete }) {
             {item.taskName}
           </div>
           <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-            <Badge label={item.executorType} type={item.executorType?.split('+')[0]} />
             <span className="flex items-center gap-1 text-xs text-slate-400">
               <Clock size={10} />
               {new Date(item.launchedAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}

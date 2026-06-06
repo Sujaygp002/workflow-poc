@@ -1,12 +1,10 @@
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
-import { GitBranch, ListTodo, Inbox, Settings, Activity, Users } from 'lucide-react';
+import { GitBranch, Inbox, Settings, Activity } from 'lucide-react';
 import WorkflowList from './pages/builder/WorkflowList';
 import WorkflowBuilder from './pages/builder/WorkflowBuilder';
-import TaskRegistry from './pages/builder/TaskRegistry';
 import WorkBucket from './pages/workbucket/WorkBucket';
 import UserSelect from './pages/workbucket/UserSelect';
 import Orchestrator from './pages/orchestrator/Orchestrator';
-import Dispatcher from './pages/dispatcher/Dispatcher';
 
 function Sidebar() {
   const navItem = (to, icon, label, end) => (
@@ -33,10 +31,8 @@ function Sidebar() {
       <nav className="flex-1 p-3 space-y-1">
         <div className="text-xs font-semibold text-slate-400 px-3 py-1 uppercase tracking-wider">Builder</div>
         {navItem('/builder/workflows', <GitBranch size={16} />, 'Workflows', true)}
-        {navItem('/builder/tasks', <ListTodo size={16} />, 'Task Registry', true)}
 
         <div className="text-xs font-semibold text-slate-400 px-3 py-1 mt-4 uppercase tracking-wider">Execution</div>
-        {navItem('/dispatcher', <Users size={16} />, 'Dispatcher', true)}
         {navItem('/orchestrator', <Activity size={16} />, 'Orchestrator', true)}
         {navItem('/worker', <Inbox size={16} />, 'Work Bucket', true)}
       </nav>
@@ -66,8 +62,6 @@ export default function App() {
             <Route path="/" element={<Navigate to="/builder/workflows" replace />} />
             <Route path="/builder/workflows" element={<WorkflowList />} />
             <Route path="/builder/create" element={<WorkflowBuilder />} />
-            <Route path="/builder/tasks" element={<TaskRegistry />} />
-            <Route path="/dispatcher" element={<Dispatcher />} />
             <Route path="/orchestrator" element={<Orchestrator />} />
             <Route path="/worker" element={<UserSelect />} />
             <Route path="/worker/bucket/:userId" element={<WorkBucket />} />
