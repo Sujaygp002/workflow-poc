@@ -97,60 +97,38 @@ function StepGate({ ti }) {
   return null;
 }
 
-function ActionRow({ ai, users }) {
-  const user = users.find(u => u.id === ai.assignedTo);
-  const isBlocked = ai.status === 'blocked';
-  const isDone = ai.status === 'completed';
-
-  return (
-    <div className={`flex items-center gap-3 text-sm transition-colors ${isBlocked ? 'opacity-40' : ''}`}>
-      <div className="flex items-center gap-2 flex-1 py-2 pr-4">
-        <div className="shrink-0">{statusIcon(ai.status)}</div>
-        <span className={`flex-1 text-sm ${isDone ? 'line-through text-slate-400' : isBlocked ? 'text-slate-400' : 'text-slate-700'}`}>
-          {ai.actionName}
-        </span>
-        {user ? (
-          <div className="flex items-center gap-1.5 min-w-0">
-            <div className="w-5 h-5 rounded-full bg-violet-200 flex items-center justify-center text-violet-700 text-xs font-bold shrink-0">
-              {user.name[0]}
-            </div>
-            <span className="text-xs text-slate-500 truncate">{user.name}</span>
-          </div>
-        ) : (
-          <span className="text-xs text-slate-400 italic">unassigned</span>
-        )}
-        {isDone && ai.completedAt && (
-          <span className="text-xs text-slate-400 shrink-0">
-            {new Date(ai.completedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function StepBlock({ ti, tIdx, isLast, users }) {
-  const done = ti.actionInstances.filter(a => a.status === 'completed').length;
-  const total = ti.actionInstances.length;
   const type = ti.type || 'task';
+  const assignedTo = ti.assignedTo || (ti.actionInstances || [])[0]?.assignedTo;
+  const user = users.find(u => u.id === assignedTo);
+  const skipped = ti.status === 'skipped';
+  const isDone = ti.status === 'completed';
+
+  const borderCls = skipped
+    ? 'border-dashed border-slate-200 bg-slate-50 opacity-60'
+    : isDone ? 'border-green-100 bg-green-50/20' : 'border-slate-200 bg-white';
 
   return (
     <>
       {tIdx > 0 && <StepGate ti={ti} />}
-      <div className={`border rounded-xl overflow-hidden ${ti.status === 'completed' ? 'border-green-100 bg-green-50/20' : 'border-slate-200 bg-white'}`}>
-        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-slate-100">
+      <div className={`border rounded-xl overflow-hidden ${borderCls}`}>
+        <div className="flex items-center gap-2 px-4 py-3">
           <div className="flex items-center justify-center w-5 h-5 rounded-full bg-slate-100 text-slate-500 text-xs font-bold shrink-0">
             {tIdx + 1}
           </div>
           <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${typeBadgeCls[type]}`}>{typeIcon[type]} {type}</span>
-          <span className="font-medium text-slate-700 text-sm flex-1">{ti.taskName}</span>
-          <span className="text-xs text-slate-400">{done}/{total}</span>
-          {statusIcon(ti.status)}
-        </div>
-        <div className="px-3 py-2 space-y-0">
-          {ti.actionInstances.map(ai => (
-            <ActionRow key={ai.id} ai={ai} users={users} />
-          ))}
+          <span className={`font-medium text-sm flex-1 ${skipped ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{ti.taskName}</span>
+          {skipped ? (
+            <span className="text-xs text-slate-400 italic">skipped</span>
+          ) : user ? (
+            <div className="flex items-center gap-1.5">
+              <div className="w-5 h-5 rounded-full bg-violet-200 flex items-center justify-center text-violet-700 text-xs font-bold shrink-0">{user.name[0]}</div>
+              <span className="text-xs text-slate-500">{user.name}</span>
+            </div>
+          ) : (
+            <span className="text-xs text-slate-400 italic">unassigned</span>
+          )}
+          {!skipped && statusIcon(ti.status)}
         </div>
       </div>
       {!isLast && (
@@ -293,27 +271,23 @@ function StatCard({ label, value, sub, color, onClick, active }) {
   );
 }
 
-// Aggregate every task (step) across all running instances — including ones
-// not started yet. e.g. 3 runs of a 3-step workflow → 9 tasks.
+// Every (non-skipped) task across all running instances. A task is atomic:
+// one assignee, one status. e.g. 3 runs of a 3-step workflow → up to 9 tasks
+// (fewer if some branches were skipped).
 function getActiveTaskGroups(instances) {
   const groups = [];
   for (const inst of instances) {
     if (inst.status !== 'running') continue;
     for (const ti of inst.taskInstances) {
-      const activeActions = ti.actionInstances.filter(a => a.status === 'active');
-      const done = ti.actionInstances.filter(a => a.status === 'completed').length;
-      const total = ti.actionInstances.length;
-      const peopleIds = [...new Set(activeActions.map(a => a.assignedTo).filter(Boolean))];
+      if (ti.status === 'skipped') continue;
+      const assignedTo = ti.assignedTo || (ti.actionInstances || [])[0]?.assignedTo || null;
       groups.push({
         key: `${inst.id}-${ti.id}`,
         workflowName: inst.workflowName,
         taskName: ti.taskName,
         type: ti.type || 'task',
         status: ti.status,            // 'active' | 'pending' | 'completed'
-        done, total,
-        activeActions,
-        peopleIds,
-        actionInstances: ti.actionInstances,
+        assignedTo,
       });
     }
   }
@@ -331,65 +305,39 @@ function ActiveTasksPanel({ instances, users }) {
   }
   return (
     <div className="grid md:grid-cols-2 gap-3">
-      {groups.map(g => (
+      {groups.map(g => {
+        const u = users.find(x => x.id === g.assignedTo);
+        return (
         <div key={g.key} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-          <div className="flex items-start gap-2 mb-3">
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${typeBadgeCls[g.type]}`}>{typeIcon[g.type]} {g.type}</span>
-                <span className="font-semibold text-slate-800 text-sm">{g.taskName}</span>
-                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                  g.status === 'completed' ? 'bg-green-100 text-green-700'
-                  : g.status === 'active' ? 'bg-amber-100 text-amber-700'
-                  : 'bg-slate-100 text-slate-500'
-                }`}>
-                  {g.status === 'active' ? 'in progress' : g.status === 'completed' ? 'done' : 'waiting'}
-                </span>
-              </div>
-              <div className="text-xs text-slate-400 mt-0.5">{g.workflowName}</div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 mb-3 flex-wrap">
-            <span className="text-xs text-slate-500">
-              {g.status === 'pending'
-                ? 'not started yet'
-                : g.peopleIds.length === 0
-                  ? 'unassigned'
-                  : `${g.peopleIds.length} ${g.peopleIds.length === 1 ? 'person' : 'people'} working:`}
+          <div className="flex items-center gap-2 flex-wrap mb-2">
+            <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${typeBadgeCls[g.type]}`}>{typeIcon[g.type]} {g.type}</span>
+            <span className="font-semibold text-slate-800 text-sm">{g.taskName}</span>
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+              g.status === 'completed' ? 'bg-green-100 text-green-700'
+              : g.status === 'active' ? 'bg-amber-100 text-amber-700'
+              : 'bg-slate-100 text-slate-500'
+            }`}>
+              {g.status === 'active' ? 'in progress' : g.status === 'completed' ? 'done' : 'waiting'}
             </span>
-            {g.peopleIds.map(pid => {
-              const u = users.find(x => x.id === pid);
-              if (!u) return null;
-              return (
-                <span key={pid} className="flex items-center gap-1 bg-amber-50 border border-amber-200 rounded-full pl-1 pr-2 py-0.5">
-                  <span className="w-4 h-4 rounded-full bg-amber-200 text-amber-800 text-[10px] font-bold flex items-center justify-center">{u.name[0]}</span>
-                  <span className="text-xs text-amber-800 font-medium">{u.name}</span>
-                </span>
-              );
-            })}
           </div>
+          <div className="text-xs text-slate-400 mb-3">{g.workflowName}</div>
 
-          <div className="mb-3">{progressBar(g.done, g.total)}</div>
-
-          <div className="space-y-1.5">
-            {g.actionInstances.map(ai => {
-              const u = users.find(x => x.id === ai.assignedTo);
-              return (
-                <div key={ai.id} className="flex items-center gap-2 text-xs bg-slate-50 rounded-lg px-3 py-1.5">
-                  <span className="shrink-0">{statusIcon(ai.status)}</span>
-                  <span className={`flex-1 ${ai.status === 'completed' ? 'line-through text-slate-400' : ai.status === 'blocked' ? 'text-slate-400' : 'text-slate-700 font-medium'}`}>
-                    {ai.actionName}
-                  </span>
-                  {ai.status === 'active' && u && <span className="text-amber-600 font-medium">{u.name} · in progress</span>}
-                  {ai.status === 'completed' && <span className="text-green-600">done</span>}
-                  {ai.status === 'blocked' && <span className="text-slate-300 italic">waiting</span>}
-                </div>
-              );
-            })}
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-500">
+              {g.status === 'pending' ? 'not started yet · ' : 'assigned to '}
+            </span>
+            {u ? (
+              <span className="flex items-center gap-1 bg-violet-50 border border-violet-200 rounded-full pl-1 pr-2 py-0.5">
+                <span className="w-4 h-4 rounded-full bg-violet-200 text-violet-800 text-[10px] font-bold flex items-center justify-center">{u.name[0]}</span>
+                <span className="text-xs text-violet-800 font-medium">{u.name}</span>
+              </span>
+            ) : (
+              <span className="text-xs text-slate-400 italic">unassigned</span>
+            )}
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -444,7 +392,7 @@ export default function Orchestrator() {
           active={showActiveTasks}
           onClick={() => setShowActiveTasks(s => !s)}
         />
-        <StatCard label="Active Sub-steps" value={totalActiveActions} sub={`${totalDoneActions} done`} color="violet" />
+        <StatCard label="In Progress" value={totalActiveActions} sub={`${totalDoneActions} done`} color="violet" />
       </div>
 
       {showActiveTasks && (
@@ -479,7 +427,7 @@ export default function Orchestrator() {
           {filtered.length === 0 ? (
             <div className="text-center py-16 text-slate-400">
               <Activity size={40} className="mx-auto mb-3 opacity-30" />
-              <p>No workflow runs yet. Launch a workflow from the Workflows page.</p>
+              <p>No workflow runs yet. Fire a trigger from the Triggers page.</p>
             </div>
           ) : (
             <div className="space-y-3">

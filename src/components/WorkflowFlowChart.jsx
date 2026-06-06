@@ -15,7 +15,7 @@ import { CheckCircle2, Circle, Lock } from 'lucide-react';
 //   { id, name, type: 'task'|'conditional'|'loop',
 //     condition, conditionExpr, branches: [..],
 //     loopSet, loopExpr, PreReq: 'none' | [ids],
-//     subSteps: [{ name, status?, assignee? }],
+//     assignee?,   // present when live (the one person on the task)
 //     status? }   // present when live
 
 const typeBadgeCls = {
@@ -43,12 +43,9 @@ function ArrowDownTiny() {
   );
 }
 
-// ── Plain task / loop box ──────────────────────────────
+// ── Task / loop box — atomic unit (no sub-steps) ───────
 function StepBox({ node }) {
   const live = !!node.status;
-  const done = (node.subSteps || []).filter(s => s.status === 'completed').length;
-  const total = (node.subSteps || []).length;
-
   const skipped = node.status === 'skipped';
   const borderCls = !live
     ? 'border-slate-200 bg-white'
@@ -62,38 +59,28 @@ function StepBox({ node }) {
 
   return (
     <div className={`border-2 rounded-2xl shadow-sm overflow-hidden w-[220px] ${borderCls}`}>
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-100 bg-white/70">
+      <div className="flex items-center gap-2 px-3 py-2.5">
         <span className={`text-xs px-1.5 py-0.5 rounded font-semibold shrink-0 ${typeBadgeCls[node.type]}`}>
           {typeIcon[node.type]}
         </span>
         <span className={`font-semibold text-sm flex-1 truncate ${skipped ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{node.name}</span>
-        {skipped
+        {live && (skipped
           ? <span className="text-[10px] text-slate-400 shrink-0 italic">skipped</span>
-          : live && <span className="text-xs text-slate-400 shrink-0">{done}/{total}</span>}
+          : subStepIcon(node.status))}
       </div>
       {node.type === 'loop' && (
-        <div className="px-3 py-1 bg-purple-50/60 border-b border-purple-100 text-[10px] font-mono text-purple-700">
+        <div className="px-3 py-1 bg-purple-50/60 border-t border-purple-100 text-[10px] font-mono text-purple-700">
           ↻ for each in {node.loopSet}{node.loopExpr ? ` · ${node.loopExpr}` : ''}
         </div>
       )}
-      <div className="p-2 flex flex-col gap-1">
-        {(node.subSteps || []).map((s, i) => (
-          <div key={i} className="flex items-center gap-2 text-xs px-1 py-0.5">
-            {live ? subStepIcon(s.status) : <span className="w-1.5 h-1.5 rounded-full bg-slate-300 shrink-0" />}
-            <span className={`flex-1 truncate ${s.status === 'completed' ? 'line-through text-slate-400' : s.status === 'blocked' ? 'text-slate-400' : 'text-slate-700'}`}>
-              {s.name}
-            </span>
-            {s.assignee && (
-              <span className="w-4 h-4 rounded-full bg-violet-200 text-violet-700 text-[9px] font-bold flex items-center justify-center shrink-0" title={s.assignee}>
-                {s.assignee[0]}
-              </span>
-            )}
-          </div>
-        ))}
-        {(!node.subSteps || node.subSteps.length === 0) && (
-          <div className="text-xs text-slate-300 italic px-1">no sub-steps</div>
-        )}
-      </div>
+      {live && !skipped && node.assignee && (
+        <div className="px-3 py-1.5 border-t border-slate-100 flex items-center gap-1.5 bg-white/60">
+          <span className="w-4 h-4 rounded-full bg-violet-200 text-violet-700 text-[9px] font-bold flex items-center justify-center shrink-0">
+            {node.assignee[0]}
+          </span>
+          <span className="text-[11px] text-slate-500">{node.assignee}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -359,7 +346,6 @@ export function nodesFromWorkflow(wf) {
     loopSet: s.loopSet,
     loopExpr: s.loopExpr,
     PreReq: s.PreReq || 'none',
-    subSteps: (s.type === 'conditional' ? [] : (s.Tasksteps || [])).map(name => ({ name })),
   }));
 }
 
@@ -386,10 +372,6 @@ export function nodesFromInstance(instance, users = []) {
       ? ti.PreReq.map(sid => stepIdToNodeId[sid]).filter(Boolean)
       : 'none',
     status: ti.status,
-    subSteps: (ti.actionInstances || []).map(ai => ({
-      name: ai.actionName,
-      status: ai.status,
-      assignee: (users.find(u => u.id === ai.assignedTo) || {}).name || null,
-    })),
+    assignee: (users.find(u => u.id === (ti.assignedTo || (ti.actionInstances || [])[0]?.assignedTo)) || {}).name || null,
   }));
 }

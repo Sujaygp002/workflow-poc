@@ -123,44 +123,6 @@ function StepIdentity({ data, onChange }) {
   );
 }
 
-// ── Sub-step editor (display labels only) ──────────────
-function SubStepEditor({ subSteps, onChange }) {
-  const [newName, setNewName] = useState('');
-
-  function add() {
-    if (!newName.trim()) return;
-    onChange([...subSteps, newName.trim()]);
-    setNewName('');
-  }
-  function remove(i) { onChange(subSteps.filter((_, idx) => idx !== i)); }
-
-  return (
-    <div className="space-y-2">
-      {subSteps.length > 0 && (
-        <div className="space-y-1">
-          {subSteps.map((s, i) => (
-            <div key={i} className="flex items-center gap-2 bg-violet-50 border border-violet-100 rounded-lg px-3 py-2">
-              <span className="text-xs text-slate-400 w-4 shrink-0">{i + 1}</span>
-              <span className="flex-1 text-sm text-slate-700">{s}</span>
-              <button type="button" onClick={() => remove(i)} className="text-slate-300 hover:text-red-400"><X size={13} /></button>
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="flex gap-2">
-        <input className="flex-1 border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"
-          value={newName} onChange={e => setNewName(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), add())}
-          placeholder="Sub-step, e.g. Call Patient" />
-        <button type="button" onClick={add} disabled={!newName.trim()}
-          className="px-3 py-1.5 text-xs bg-violet-600 text-white rounded-lg hover:bg-violet-700 disabled:opacity-40">
-          Add
-        </button>
-      </div>
-    </div>
-  );
-}
-
 // Dropdown to route a conditional branch to a specific task.
 function BranchTargetPicker({ label, accent, value, tasks, onChange }) {
   const accentCls = accent === 'emerald'
@@ -235,7 +197,6 @@ function StepsBuilder({ steps, onChange }) {
       name: type === 'conditional' ? 'New Decision' : type === 'loop' ? 'New Loop' : 'New Task',
       description: '',
       PreReq: 'none',
-      Tasksteps: [],
     };
     if (type === 'conditional') {
       base.condition = 'if/else';
@@ -461,14 +422,6 @@ function StepsBuilder({ steps, onChange }) {
                         </div>
                       </div>
                     )}
-
-                    {/* Sub-steps (for task & loop) */}
-                    {step.type !== 'conditional' && (
-                      <div>
-                        <label className="block text-xs font-medium text-slate-600 mb-2">Sub-steps</label>
-                        <SubStepEditor subSteps={step.Tasksteps || []} onChange={v => update(idx, { Tasksteps: v })} />
-                      </div>
-                    )}
                   </div>
                 )}
               </div>
@@ -533,18 +486,14 @@ function StepReview({ data }) {
                   <span className="text-xs text-slate-400">after {s.PreReq.length} step{s.PreReq.length > 1 ? 's' : ''}</span>
                 )}
               </div>
-              {s.type === 'conditional'
-                ? (s.branches || []).map((b, bi) => (
-                    <div key={bi} className="ml-4 flex items-center gap-2 text-xs text-amber-600 mt-0.5 font-mono">
-                      <span className="w-1 h-1 rounded-full bg-amber-300" /> {b}
-                    </div>
-                  ))
-                : (s.Tasksteps || []).map((step, si) => (
-                    <div key={si} className="ml-4 flex items-center gap-2 text-xs text-slate-600 mt-0.5">
-                      <span className="w-1 h-1 rounded-full bg-slate-300" /> {step}
-                    </div>
-                  ))
-              }
+              {s.type === 'conditional' && (s.branches || []).map((b, bi) => (
+                <div key={bi} className="ml-4 flex items-center gap-2 text-xs text-amber-600 mt-0.5 font-mono">
+                  <span className="w-1 h-1 rounded-full bg-amber-300" /> {b}
+                </div>
+              ))}
+              {s.description && (
+                <div className="ml-4 text-xs text-slate-500 mt-0.5">{s.description}</div>
+              )}
             </div>
           );
         })}

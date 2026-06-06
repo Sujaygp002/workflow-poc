@@ -21,11 +21,9 @@ function ActionCard({ item, onComplete }) {
           <CheckCircle2 size={16} className="text-violet-500" />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="font-semibold text-slate-800 leading-tight">{item.actionName}</div>
+          <div className="font-semibold text-slate-800 leading-tight">{item.taskName}</div>
           <div className="text-xs text-slate-500 mt-0.5">
             <span className="font-medium text-slate-600">{item.workflowName}</span>
-            <span className="mx-1 text-slate-300">›</span>
-            {item.taskName}
           </div>
           <div className="flex items-center gap-2 mt-1.5 flex-wrap">
             <span className="flex items-center gap-1 text-xs text-slate-400">

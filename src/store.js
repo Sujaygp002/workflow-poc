@@ -13,7 +13,7 @@ const KEYS = {
   workflows: 'wf_workflows',
   instances: 'wf_instances',
   users: 'wf_users',
-  seeded: 'wf_seeded_v15',
+  seeded: 'wf_seeded_v16',
 };
 
 function load(key) {
@@ -409,21 +409,24 @@ export function launchWorkflow(workflowId) {
     allTargets.filter(t => t !== chosen).forEach(t => cascadeSkip(steps, statusByStepId, t));
   }
 
-  // 2) Build task instances.
+  // 2) Build task instances. A task is one atomic unit: exactly one assignee
+  //    and one completion (no sub-steps / actions).
   const taskInstances = steps.map(s => {
     const skipped = statusByStepId[s.id] === 'skipped';
-    const labels = s.Tasksteps && s.Tasksteps.length ? s.Tasksteps : [s.name];
     const noPrereq = !Array.isArray(s.PreReq) || s.PreReq.length === 0;
+    const startStatus = skipped ? 'skipped' : (noPrereq ? 'active' : 'pending');
 
-    const actionInstances = labels.map((label, aIdx) => ({
+    // Single action that represents the whole task (kept for the runtime
+    // complete/unlock plumbing; never surfaced as a separate sub-step).
+    const actionInstances = [{
       id: uid(),
-      actionName: label,
+      actionName: s.name,
       assignedTo: skipped ? null : autoAssign(users, counterRef),
       status: skipped ? 'skipped' : (noPrereq ? 'active' : 'blocked'),
       completedAt: null,
       notes: '',
-      order: aIdx,
-    }));
+      order: 0,
+    }];
 
     return {
       id: uid(),
@@ -440,8 +443,8 @@ export function launchWorkflow(workflowId) {
       loopSet: s.loopSet || null,
       loopExpr: s.loopExpr || '',
       PreReq: s.PreReq || 'none',
-      Tasksteps: labels,
-      status: skipped ? 'skipped' : (noPrereq ? 'active' : 'pending'),
+      assignedTo: actionInstances[0].assignedTo,
+      status: startStatus,
       actionInstances,
     };
   });
