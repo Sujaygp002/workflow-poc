@@ -183,6 +183,45 @@ function BranchTargetPicker({ label, accent, value, tasks, onChange }) {
   );
 }
 
+// Switch editor: a list of cases, each = a value + the task it routes to.
+function SwitchCaseEditor({ cases, tasks, onChange }) {
+  function addCase() { onChange([...cases, { value: '', target: null }]); }
+  function update(i, patch) { onChange(cases.map((c, idx) => idx === i ? { ...c, ...patch } : c)); }
+  function remove(i) { onChange(cases.filter((_, idx) => idx !== i)); }
+
+  return (
+    <div className="space-y-2">
+      <label className="block text-xs font-medium text-slate-600">Cases — value → task</label>
+      {cases.map((c, i) => (
+        <div key={i} className="flex items-center gap-2">
+          <input
+            className="w-32 border border-slate-200 rounded-md px-2 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-amber-400"
+            value={c.value}
+            onChange={e => update(i, { value: e.target.value })}
+            placeholder="e.g. travel"
+          />
+          <span className="text-slate-400 text-xs">→</span>
+          <select
+            value={c.target || ''}
+            onChange={e => update(i, { target: e.target.value || null })}
+            className="flex-1 bg-white border border-slate-200 rounded-md px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-400"
+          >
+            <option value="">— pick a task —</option>
+            {tasks.map(t => (
+              <option key={t.id || t._id} value={t.id || t._id}>{t.name}</option>
+            ))}
+          </select>
+          <button type="button" onClick={() => remove(i)} className="text-slate-300 hover:text-red-400"><X size={14} /></button>
+        </div>
+      ))}
+      <button type="button" onClick={addCase}
+        className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border border-dashed border-amber-300 text-amber-600 hover:bg-amber-50">
+        <Plus size={12} /> Add case
+      </button>
+    </div>
+  );
+}
+
 // ── Step 3: Steps (Task / Conditional / Loop) ──────────
 function StepsBuilder({ steps, onChange }) {
   const [expandedIdx, setExpandedIdx] = useState(null);
@@ -222,9 +261,34 @@ function StepsBuilder({ steps, onChange }) {
     if (expandedIdx === idx) setExpandedIdx(null);
   }
 
-  function updateBranches(idx, text) {
-    const branches = text.split('\n').map(s => s.trim()).filter(Boolean);
-    update(idx, { branches });
+  // Switch: set the full case list ([{ value, target }]). Patches the
+  // conditional's cases + branch labels, and wires each target task's PreReq
+  // to depend on this conditional.
+  function setSwitchCases(condIdx, cases) {
+    const cond = steps[condIdx];
+    const condId = stepKey(cond);
+    const targetIds = new Set(cases.map(c => c.target).filter(Boolean));
+
+    const nameOf = id => (steps.find(s => stepKey(s) === id) || {}).name || '';
+    const branches = cases
+      .filter(c => c.value || c.target)
+      .map(c => `${c.value || 'case'} → ${nameOf(c.target)}`);
+
+    const next = steps.map((s, i) => {
+      if (i === condIdx) return { ...s, cases, branches };
+      const sid = stepKey(s);
+      const cur = Array.isArray(s.PreReq) ? s.PreReq : [];
+      if (targetIds.has(sid)) {
+        return cur.includes(condId) ? s : { ...s, PreReq: [...cur, condId] };
+      }
+      // no longer a target → strip condId
+      if (cur.includes(condId)) {
+        const stripped = cur.filter(x => x !== condId);
+        return { ...s, PreReq: stripped.length ? stripped : 'none' };
+      }
+      return s;
+    });
+    onChange(next);
   }
 
   // Pick which task a conditional's TRUE/FALSE branch routes to. This patches
@@ -364,16 +428,13 @@ function StepsBuilder({ steps, onChange }) {
                           </div>
                         )}
 
-                        {/* switch → freeform case list */}
+                        {/* switch → per-case value + task picker */}
                         {step.condition === 'switch' && (
-                          <div>
-                            <label className="block text-xs font-medium text-slate-600 mb-1">Cases (one per line)</label>
-                            <textarea rows={3}
-                              className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none font-mono"
-                              value={(step.branches || []).join('\n')}
-                              onChange={e => updateBranches(idx, e.target.value)}
-                              placeholder={"travel → Travel Desk (Dave)\notherwise → General Desk (Alice)"} />
-                          </div>
+                          <SwitchCaseEditor
+                            cases={step.cases || []}
+                            tasks={branchTargetOptions(steps, idx)}
+                            onChange={cs => setSwitchCases(idx, cs)}
+                          />
                         )}
                       </div>
                     )}

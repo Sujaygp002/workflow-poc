@@ -117,36 +117,57 @@ function Diamond({ node }) {
   );
 }
 
-// A conditional with its two branch-target boxes laid out left (false) /
-// right (true), connected by plain labeled arrows directly to the tasks.
-function ConditionalBranch({ node, falseChild, trueChild }) {
+// A conditional drawn as a diamond that forks to N branch-target boxes.
+// `branches` is an array of { label, child }. Each column shows the case label
+// on the connector and the task box below, with an arrowhead touching it.
+function ConditionalBranch({ node, branches }) {
+  const COL = 230;            // column width (box 220 + breathing room)
+  const cols = Math.max(branches.length, 1);
+  const width = cols * COL;
+  const center = width / 2;
+  const colCenter = i => i * COL + COL / 2;
+
   return (
     <div className="flex flex-col items-center">
       <Diamond node={node} />
-      {/* Connector: bar from the diamond fanning out, with vertical drops whose
-          arrowheads land on each box. Columns are 220px wide + 40px gap, so the
-          column centres are at x=110 and x=370 in a 480-wide canvas. */}
-      <svg width="480" height="34" viewBox="0 0 480 34" className="text-slate-300 -mt-1">
-        {/* down from diamond centre to the bar */}
-        <path d="M240 0 L240 10" stroke="currentColor" strokeWidth="1.5" fill="none" />
-        {/* horizontal bar spanning both column centres */}
-        <path d="M110 10 L370 10" stroke="currentColor" strokeWidth="1.5" fill="none" />
-        {/* left drop + arrowhead (touches false box) */}
-        <path d="M110 10 L110 30" stroke="currentColor" strokeWidth="1.5" fill="none" />
-        <path d="M106 26 L110 33 L114 26 Z" fill="currentColor" />
-        {/* right drop + arrowhead (touches true box) */}
-        <path d="M370 10 L370 30" stroke="currentColor" strokeWidth="1.5" fill="none" />
-        <path d="M366 26 L370 33 L374 26 Z" fill="currentColor" />
+
+      {/* fork connector: diamond → bar → drop into each box */}
+      <svg width={width} height="40" viewBox={`0 0 ${width} 40`} className="text-slate-300 -mt-1">
+        <path d={`M${center} 0 L${center} 10`} stroke="currentColor" strokeWidth="1.5" fill="none" />
+        {cols > 1 && (
+          <path d={`M${colCenter(0)} 10 L${colCenter(cols - 1)} 10`} stroke="currentColor" strokeWidth="1.5" fill="none" />
+        )}
+        {branches.map((_, i) => {
+          const x = colCenter(i);
+          return (
+            <g key={i}>
+              <path d={`M${x} 10 L${x} 34`} stroke="currentColor" strokeWidth="1.5" fill="none" />
+              <path d={`M${x - 4} 30 L${x} 37 L${x + 4} 30 Z`} fill="currentColor" />
+            </g>
+          );
+        })}
       </svg>
 
-      {/* the two branch boxes; arrowheads above land on them. -mt removes the gap. */}
-      <div className="grid grid-cols-2 gap-10 -mt-2">
-        <div className="flex justify-center">
-          {falseChild ? <StepBox node={falseChild} /> : <span className="text-xs text-slate-300 italic">—</span>}
-        </div>
-        <div className="flex justify-center">
-          {trueChild ? <StepBox node={trueChild} /> : <span className="text-xs text-slate-300 italic">—</span>}
-        </div>
+      {/* case labels row */}
+      <div className="flex -mt-1" style={{ width }}>
+        {branches.map((b, i) => (
+          <div key={i} className="flex justify-center" style={{ width: COL }}>
+            {b.label && (
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-100">
+                {b.label}
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* target boxes */}
+      <div className="flex mt-1" style={{ width }}>
+        {branches.map((b, i) => (
+          <div key={i} className="flex justify-center" style={{ width: COL }}>
+            {b.child ? <StepBox node={b.child} /> : <span className="text-xs text-slate-300 italic">—</span>}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -186,26 +207,38 @@ function buildRows(nodes) {
   return Object.keys(rowsMap).sort((a, b) => a - b).map(k => rowsMap[k]);
 }
 
-// Resolve a conditional's TRUE/FALSE branch task boxes.
-// Primary source of truth: the explicit trueTarget / falseTarget ids the user
-// picked in the builder. Falls back to PreReq + branch-label matching for
-// older data that has no explicit targets.
+// Resolve a conditional into an ordered list of branches: [{ label, child }].
+//  - switch: one branch per case ({ value, target }), in order.
+//  - if/else: FALSE (left) then TRUE (right), from explicit targets, with a
+//    PreReq/label fallback for older data.
 function branchChildren(node, nodes) {
   const byId = {};
   nodes.forEach(n => { byId[n.id] = n; });
 
-  // 1) explicit targets (preferred)
+  // ── switch ──
+  if (node.condition === 'switch') {
+    const cases = node.cases || [];
+    if (cases.length) {
+      const branches = cases.map(c => ({
+        label: c.value || 'case',
+        child: c.target ? byId[c.target] || null : null,
+      }));
+      return { branches, childIds: branches.map(b => b.child?.id).filter(Boolean) };
+    }
+    // fallback: children by PreReq, labels from branch strings
+    const children = nodes.filter(n => Array.isArray(n.PreReq) && n.PreReq.includes(node.id));
+    const branches = children.map((c, i) => ({ label: (node.branches || [])[i] || '', child: c }));
+    return { branches, childIds: children.map(c => c.id) };
+  }
+
+  // ── if/else ──
   let trueChild  = node.trueTarget  ? byId[node.trueTarget]  : null;
   let falseChild = node.falseTarget ? byId[node.falseTarget] : null;
-
-  // 2) fallback: children whose PreReq points at this conditional
   if (!trueChild || !falseChild) {
-    const children = nodes.filter(n =>
-      Array.isArray(n.PreReq) && n.PreReq.includes(node.id)
-    );
-    const branches = node.branches || [];
+    const children = nodes.filter(n => Array.isArray(n.PreReq) && n.PreReq.includes(node.id));
+    const labels = node.branches || [];
     const findByLabel = (kw) => {
-      const label = branches.find(b => b.toLowerCase().startsWith(kw));
+      const label = labels.find(b => b.toLowerCase().startsWith(kw));
       if (!label) return null;
       return children.find(c => label.toLowerCase().includes(c.name.toLowerCase())) || null;
     };
@@ -216,9 +249,11 @@ function branchChildren(node, nodes) {
     if (!falseChild) falseChild = rest.shift() || null;
     if (!trueChild)  trueChild  = rest.shift() || null;
   }
-
-  const childIds = [falseChild?.id, trueChild?.id].filter(Boolean);
-  return { falseChild, trueChild, childIds };
+  const branches = [
+    { label: 'false', child: falseChild },
+    { label: 'true',  child: trueChild },
+  ];
+  return { branches, childIds: [falseChild?.id, trueChild?.id].filter(Boolean) };
 }
 
 export default function WorkflowFlowChart({ nodes, endDone = false }) {
@@ -255,9 +290,9 @@ export default function WorkflowFlowChart({ nodes, endDone = false }) {
           <div className="flex items-start justify-center gap-6 flex-wrap">
             {visible.map(node => {
               if (node.type === 'conditional') {
-                const { falseChild, trueChild } = branchChildren(node, nodes);
+                const { branches } = branchChildren(node, nodes);
                 return (
-                  <ConditionalBranch key={node.id} node={node} falseChild={falseChild} trueChild={trueChild} />
+                  <ConditionalBranch key={node.id} node={node} branches={branches} />
                 );
               }
               return (
@@ -289,6 +324,7 @@ export function nodesFromWorkflow(wf) {
     branches: s.branches || [],
     trueTarget: s.trueTarget || null,
     falseTarget: s.falseTarget || null,
+    cases: s.cases || [],
     loopSet: s.loopSet,
     loopExpr: s.loopExpr,
     PreReq: s.PreReq || 'none',
@@ -312,6 +348,7 @@ export function nodesFromInstance(instance, users = []) {
     branches: ti.branches || [],
     trueTarget: ti.trueTarget ? stepIdToNodeId[ti.trueTarget] : null,
     falseTarget: ti.falseTarget ? stepIdToNodeId[ti.falseTarget] : null,
+    cases: (ti.cases || []).map(c => ({ value: c.value, target: c.target ? stepIdToNodeId[c.target] : null })),
     loopSet: ti.loopSet,
     loopExpr: ti.loopExpr,
     PreReq: Array.isArray(ti.PreReq)

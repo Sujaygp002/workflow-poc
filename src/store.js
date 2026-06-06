@@ -382,6 +382,7 @@ export function launchWorkflow(workflowId) {
         branches: s.branches || [],
         trueTarget: s.trueTarget || null,
         falseTarget: s.falseTarget || null,
+        cases: s.cases || [],
         loopSet: s.loopSet || null,
         loopExpr: s.loopExpr || '',
         PreReq: s.PreReq || 'none',
