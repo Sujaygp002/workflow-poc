@@ -13,7 +13,7 @@ const KEYS = {
   workflows: 'wf_workflows',
   instances: 'wf_instances',
   users: 'wf_users',
-  seeded: 'wf_seeded_v12',
+  seeded: 'wf_seeded_v13',
 };
 
 function load(key) {
@@ -108,13 +108,26 @@ function seedIfNeeded() {
           description: 'Decide routing based on how urgent the request is.',
           PreReq: ['wf1-s1'],
           condition: 'if/else', conditionExpr: 'urgency === "high"',
-          branches: ['if true → On-call Doctor (Bob)', 'else → Scheduled Doctor (Carol)'],
-          Tasksteps: ['Assess Urgency'],
+          // false → left, true → right (each points to a real task below)
+          branches: ['false → Scheduled Doctor', 'true → On-call Doctor'],
+          Tasksteps: [],
         },
         {
-          id: 'wf1-s3', type: 'task', name: 'Doctor Call-back',
-          description: 'The assigned doctor calls the patient back.',
+          id: 'wf1-s3', type: 'task', name: 'Scheduled Doctor',
+          description: 'Non-urgent: route to the scheduled doctor (Carol).',
           PreReq: ['wf1-s2'],
+          Tasksteps: ['Find Next Available Slot', 'Notify Scheduled Doctor'],
+        },
+        {
+          id: 'wf1-s4', type: 'task', name: 'On-call Doctor',
+          description: 'Urgent: page the on-call doctor (Bob) immediately.',
+          PreReq: ['wf1-s2'],
+          Tasksteps: ['Page On-call Doctor', 'Confirm Availability'],
+        },
+        {
+          id: 'wf1-s5', type: 'task', name: 'Doctor Call-back',
+          description: 'The assigned doctor calls the patient back.',
+          PreReq: ['wf1-s3', 'wf1-s4'],
           Tasksteps: ['Review Patient History', 'Call Patient', 'Log Outcome'],
         },
       ],

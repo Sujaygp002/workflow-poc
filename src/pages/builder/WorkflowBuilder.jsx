@@ -216,9 +216,13 @@ function StepsBuilder({ steps, onChange }) {
                     {/* PreReq */}
                     {idx > 0 && (
                       <div>
-                        <label className="block text-xs font-medium text-slate-600 mb-1">Prerequisites (when can it run)</label>
+                        <label className="block text-xs font-medium text-slate-600 mb-1">
+                          Prerequisites <span className="font-normal text-slate-400">(none = runs in parallel)</span>
+                        </label>
                         <div className="flex flex-wrap gap-1.5">
-                          {steps.slice(0, idx).map((t, ti) => {
+                          {/* Only Task/Loop steps can be prerequisites — a conditional
+                              just routes, so depending on a diamond is hidden. */}
+                          {steps.slice(0, idx).filter(t => t.type !== 'conditional').map((t, ti) => {
                             const tid = t.id || t._id;
                             const selected = Array.isArray(step.PreReq) && step.PreReq.includes(tid);
                             return (
@@ -234,8 +238,8 @@ function StepsBuilder({ steps, onChange }) {
                           })}
                           <button type="button"
                             onClick={() => update(idx, { PreReq: 'none' })}
-                            className={`text-xs px-2.5 py-1 rounded-full border ${step.PreReq === 'none' ? 'bg-slate-600 text-white border-slate-600' : 'border-slate-200 text-slate-400'}`}>
-                            none
+                            className={`text-xs px-2.5 py-1 rounded-full border ${(step.PreReq === 'none' || !Array.isArray(step.PreReq) || step.PreReq.length === 0) ? 'bg-slate-600 text-white border-slate-600' : 'border-slate-200 text-slate-400'}`}>
+                            none (parallel)
                           </button>
                         </div>
                       </div>
