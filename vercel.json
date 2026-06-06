@@ -1,6 +1,7 @@
 {
   "rewrites": [
     { "source": "/worker", "destination": "/worker.html" },
+    { "source": "/worker/(.*)", "destination": "/worker.html" },
     { "source": "/((?!assets/|.*\\.\\w+$).*)", "destination": "/index.html" }
   ]
 }
