@@ -261,14 +261,14 @@ function StatCard({ label, value, sub, color, onClick, active }) {
   );
 }
 
-// Aggregate every currently-active step across all running instances.
+// Aggregate every task (step) across all running instances — including ones
+// not started yet. e.g. 3 runs of a 3-step workflow → 9 tasks.
 function getActiveTaskGroups(instances) {
   const groups = [];
   for (const inst of instances) {
     if (inst.status !== 'running') continue;
     for (const ti of inst.taskInstances) {
       const activeActions = ti.actionInstances.filter(a => a.status === 'active');
-      if (activeActions.length === 0) continue;
       const done = ti.actionInstances.filter(a => a.status === 'completed').length;
       const total = ti.actionInstances.length;
       const peopleIds = [...new Set(activeActions.map(a => a.assignedTo).filter(Boolean))];
@@ -277,6 +277,7 @@ function getActiveTaskGroups(instances) {
         workflowName: inst.workflowName,
         taskName: ti.taskName,
         type: ti.type || 'task',
+        status: ti.status,            // 'active' | 'pending' | 'completed'
         done, total,
         activeActions,
         peopleIds,
@@ -302,9 +303,16 @@ function ActiveTasksPanel({ instances, users }) {
         <div key={g.key} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
           <div className="flex items-start gap-2 mb-3">
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${typeBadgeCls[g.type]}`}>{typeIcon[g.type]} {g.type}</span>
                 <span className="font-semibold text-slate-800 text-sm">{g.taskName}</span>
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                  g.status === 'completed' ? 'bg-green-100 text-green-700'
+                  : g.status === 'active' ? 'bg-amber-100 text-amber-700'
+                  : 'bg-slate-100 text-slate-500'
+                }`}>
+                  {g.status === 'active' ? 'in progress' : g.status === 'completed' ? 'done' : 'waiting'}
+                </span>
               </div>
               <div className="text-xs text-slate-400 mt-0.5">{g.workflowName}</div>
             </div>
@@ -312,9 +320,11 @@ function ActiveTasksPanel({ instances, users }) {
 
           <div className="flex items-center gap-2 mb-3 flex-wrap">
             <span className="text-xs text-slate-500">
-              {g.peopleIds.length === 0
-                ? 'unassigned'
-                : `${g.peopleIds.length} ${g.peopleIds.length === 1 ? 'person' : 'people'} working:`}
+              {g.status === 'pending'
+                ? 'not started yet'
+                : g.peopleIds.length === 0
+                  ? 'unassigned'
+                  : `${g.peopleIds.length} ${g.peopleIds.length === 1 ? 'person' : 'people'} working:`}
             </span>
             {g.peopleIds.map(pid => {
               const u = users.find(x => x.id === pid);
@@ -397,7 +407,7 @@ export default function Orchestrator() {
         <StatCard
           label="Active Tasks"
           value={activeTaskGroups.length}
-          sub="click to see who & progress"
+          sub="tasks across running runs"
           color="amber"
           active={showActiveTasks}
           onClick={() => setShowActiveTasks(s => !s)}
