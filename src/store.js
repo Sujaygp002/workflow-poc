@@ -6,7 +6,7 @@ const KEYS = {
   actions: 'wf_actions',
   instances: 'wf_instances',
   users: 'wf_users',
-  seeded: 'wf_seeded_v9',
+  seeded: 'wf_seeded_v10',
 };
 
 function load(key) {
@@ -263,7 +263,7 @@ function seedIfNeeded() {
           id: 'wf5-t2', _instanceId: 'wf5-t2', name: 'Amount Check',
           description: 'If amount > $1,000 it needs manager approval, else it is auto-approved by finance',
           executionMode: 'sequential', condition: 'if/else', conditionExpr: 'amount > 1000',
-          branches: ['if true → Manager Approval', 'else → Finance Auto-approve'],
+          branches: ['if true → Manager Approval (Bob)', 'else → Finance Auto-approve (Dave)'],
           actions: [
             { id: 'wf5-a3', name: 'Evaluate Claimed Amount', executorType: 'human', assignedTo: 'u3' },
           ],
@@ -282,7 +282,7 @@ function seedIfNeeded() {
           id: 'wf5-t4', _instanceId: 'wf5-t4', name: 'Route by Category',
           description: 'Switch on category: travel → Travel desk, equipment → IT asset desk, meals → Finance',
           executionMode: 'sequential', condition: 'switch', conditionExpr: 'category',
-          branches: ['travel → Travel Desk', 'equipment → IT Asset Desk', 'meals → Finance Review'],
+          branches: ['category === "travel" → next task to Dave', 'otherwise → next task to Alice'],
           actions: [
             { id: 'wf5-a6', name: 'Classify Expense Category', executorType: 'human', assignedTo: 'u3' },
             { id: 'wf5-a7', name: 'Forward to Matching Desk', executorType: 'human', assignedTo: 'u3' },
