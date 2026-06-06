@@ -28,6 +28,29 @@ const typeBadgeCls = {
   loop:        'bg-purple-100 text-purple-700',
 };
 
+// ── Branch routing helpers ─────────────────────────────
+function stepKey(t) { return t.id || t._id; }
+
+// Tasks/loops a conditional's branch can route to (any non-conditional step
+// other than itself).
+function branchTargetOptions(steps, condIdx) {
+  return steps.filter((t, i) => i !== condIdx && t.type !== 'conditional');
+}
+
+// Keep the human-readable `branches` labels and the target tasks' PreReq in
+// sync with the picked trueTarget / falseTarget. Returns the patched step;
+// PreReq wiring is applied by syncBranches' caller via the returned step.
+function syncBranches(step, steps) {
+  const nameOf = id => {
+    const t = steps.find(s => stepKey(s) === id);
+    return t ? t.name : '';
+  };
+  const branches = [];
+  if (step.falseTarget) branches.push(`false → ${nameOf(step.falseTarget)}`);
+  if (step.trueTarget)  branches.push(`true → ${nameOf(step.trueTarget)}`);
+  return { ...step, branches };
+}
+
 // ── Step 1: Trigger selection ──────────────────────────
 function StepTrigger({ data, onChange, workflows }) {
   const triggers = getTriggers();
@@ -138,6 +161,28 @@ function SubStepEditor({ subSteps, onChange }) {
   );
 }
 
+// Dropdown to route a conditional branch to a specific task.
+function BranchTargetPicker({ label, accent, value, tasks, onChange }) {
+  const accentCls = accent === 'emerald'
+    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+    : 'border-rose-200 bg-rose-50 text-rose-700';
+  return (
+    <div className={`rounded-lg border p-2 ${accentCls}`}>
+      <label className="block text-[11px] font-bold mb-1">{label}</label>
+      <select
+        value={value || ''}
+        onChange={e => onChange(e.target.value || null)}
+        className="w-full bg-white border border-slate-200 rounded-md px-2 py-1.5 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-400"
+      >
+        <option value="">— pick a task —</option>
+        {tasks.map(t => (
+          <option key={t.id || t._id} value={t.id || t._id}>{t.name}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 // ── Step 3: Steps (Task / Conditional / Loop) ──────────
 function StepsBuilder({ steps, onChange }) {
   const [expandedIdx, setExpandedIdx] = useState(null);
@@ -180,6 +225,39 @@ function StepsBuilder({ steps, onChange }) {
   function updateBranches(idx, text) {
     const branches = text.split('\n').map(s => s.trim()).filter(Boolean);
     update(idx, { branches });
+  }
+
+  // Pick which task a conditional's TRUE/FALSE branch routes to. This patches
+  // both the conditional (target ids + labels) AND wires the target task's
+  // PreReq to depend on this conditional, so the flow chart routes correctly.
+  function setBranchTarget(condIdx, side, targetId) {
+    const cond = steps[condIdx];
+    const condId = stepKey(cond);
+    const prevId = side === 'true' ? cond.trueTarget : cond.falseTarget;
+
+    const next = steps.map((s, i) => {
+      if (i === condIdx) {
+        const patched = syncBranches(
+          { ...s, [side === 'true' ? 'trueTarget' : 'falseTarget']: targetId || null },
+          steps
+        );
+        return patched;
+      }
+      const sid = stepKey(s);
+      // newly selected target → add condId to its PreReq
+      if (sid === targetId) {
+        const cur = Array.isArray(s.PreReq) ? s.PreReq : [];
+        return { ...s, PreReq: cur.includes(condId) ? cur : [...cur, condId] };
+      }
+      // previously selected target that's being replaced → remove condId
+      if (sid === prevId && prevId !== targetId) {
+        const cur = Array.isArray(s.PreReq) ? s.PreReq : [];
+        const stripped = cur.filter(x => x !== condId);
+        return { ...s, PreReq: stripped.length ? stripped : 'none' };
+      }
+      return s;
+    });
+    onChange(next);
   }
 
   return (
@@ -265,14 +343,38 @@ function StepsBuilder({ steps, onChange }) {
                             value={step.conditionExpr} onChange={e => update(idx, { conditionExpr: e.target.value })}
                             placeholder={step.condition === 'switch' ? 'e.g. category' : 'e.g. amount > 1000'} />
                         </div>
-                        <div>
-                          <label className="block text-xs font-medium text-slate-600 mb-1">Branches (one per line)</label>
-                          <textarea rows={2}
-                            className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none font-mono"
-                            value={(step.branches || []).join('\n')}
-                            onChange={e => updateBranches(idx, e.target.value)}
-                            placeholder={"if true → Manager (Bob)\nelse → Auto-approve (Dave)"} />
-                        </div>
+
+                        {/* if/else → pick which task each branch routes to */}
+                        {step.condition === 'if/else' && (
+                          <div className="grid grid-cols-2 gap-2">
+                            <BranchTargetPicker
+                              label="if TRUE → do task"
+                              accent="emerald"
+                              value={step.trueTarget}
+                              tasks={branchTargetOptions(steps, idx)}
+                              onChange={tid => setBranchTarget(idx, 'true', tid)}
+                            />
+                            <BranchTargetPicker
+                              label="if FALSE → do task"
+                              accent="rose"
+                              value={step.falseTarget}
+                              tasks={branchTargetOptions(steps, idx)}
+                              onChange={tid => setBranchTarget(idx, 'false', tid)}
+                            />
+                          </div>
+                        )}
+
+                        {/* switch → freeform case list */}
+                        {step.condition === 'switch' && (
+                          <div>
+                            <label className="block text-xs font-medium text-slate-600 mb-1">Cases (one per line)</label>
+                            <textarea rows={3}
+                              className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none font-mono"
+                              value={(step.branches || []).join('\n')}
+                              onChange={e => updateBranches(idx, e.target.value)}
+                              placeholder={"travel → Travel Desk (Dave)\notherwise → General Desk (Alice)"} />
+                          </div>
+                        )}
                       </div>
                     )}
 
