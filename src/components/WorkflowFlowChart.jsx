@@ -49,13 +49,16 @@ function StepBox({ node }) {
   const done = (node.subSteps || []).filter(s => s.status === 'completed').length;
   const total = (node.subSteps || []).length;
 
+  const skipped = node.status === 'skipped';
   const borderCls = !live
     ? 'border-slate-200 bg-white'
-    : node.status === 'completed'
-      ? 'border-green-300 bg-green-50/40'
-      : node.status === 'active'
-        ? 'border-violet-300 bg-violet-50/40 ring-2 ring-violet-100'
-        : 'border-slate-200 bg-white opacity-70';
+    : skipped
+      ? 'border-dashed border-slate-200 bg-slate-50 opacity-50'
+      : node.status === 'completed'
+        ? 'border-green-300 bg-green-50/40'
+        : node.status === 'active'
+          ? 'border-violet-300 bg-violet-50/40 ring-2 ring-violet-100'
+          : 'border-slate-200 bg-white opacity-70';
 
   return (
     <div className={`border-2 rounded-2xl shadow-sm overflow-hidden w-[220px] ${borderCls}`}>
@@ -63,8 +66,10 @@ function StepBox({ node }) {
         <span className={`text-xs px-1.5 py-0.5 rounded font-semibold shrink-0 ${typeBadgeCls[node.type]}`}>
           {typeIcon[node.type]}
         </span>
-        <span className="font-semibold text-slate-800 text-sm flex-1 truncate">{node.name}</span>
-        {live && <span className="text-xs text-slate-400 shrink-0">{done}/{total}</span>}
+        <span className={`font-semibold text-sm flex-1 truncate ${skipped ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{node.name}</span>
+        {skipped
+          ? <span className="text-[10px] text-slate-400 shrink-0 italic">skipped</span>
+          : live && <span className="text-xs text-slate-400 shrink-0">{done}/{total}</span>}
       </div>
       {node.type === 'loop' && (
         <div className="px-3 py-1 bg-purple-50/60 border-b border-purple-100 text-[10px] font-mono text-purple-700">

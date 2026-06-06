@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Inbox } from 'lucide-react';
-import { getUsers, getMyWorkItems } from '../../store';
+import { getUsers, getMyWorkItems, getMyCompletedItems } from '../../store';
 
 const AVATAR_COLORS = [
   'bg-violet-200 text-violet-700',
@@ -36,6 +36,9 @@ export default function UserSelect() {
         <div className="space-y-3">
           {users.map((user, i) => {
             const pending = getMyWorkItems(user.id).length;
+            const done = getMyCompletedItems(user.id).length;
+            const total = pending + done;
+            const pct = total === 0 ? 0 : Math.round((done / total) * 100);
             return (
               <button
                 key={user.id}
@@ -49,9 +52,18 @@ export default function UserSelect() {
                   <div className="font-semibold text-slate-800 group-hover:text-violet-700 transition-colors">{user.name}</div>
                   <div className="text-xs text-slate-400 mt-0.5">
                     {pending > 0
-                      ? <span className="text-amber-600 font-medium">{pending} task{pending !== 1 ? 's' : ''} pending</span>
+                      ? <span className="text-amber-600 font-medium">{pending} pending</span>
                       : <span className="text-green-600">All clear</span>}
+                    {done > 0 && <span className="text-slate-400"> · {done} done</span>}
                   </div>
+                  {total > 0 && (
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div className="h-full bg-violet-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                      </div>
+                      <span className="text-[10px] text-slate-400 w-7 text-right">{pct}%</span>
+                    </div>
+                  )}
                 </div>
                 {pending > 0 && (
                   <div className="w-6 h-6 rounded-full bg-amber-100 text-amber-700 text-xs font-bold flex items-center justify-center shrink-0">

@@ -13,7 +13,7 @@ const KEYS = {
   workflows: 'wf_workflows',
   instances: 'wf_instances',
   users: 'wf_users',
-  seeded: 'wf_seeded_v14',
+  seeded: 'wf_seeded_v15',
 };
 
 function load(key) {
@@ -86,7 +86,6 @@ function seedIfNeeded() {
     { id: 'u1', name: 'Alice' },
     { id: 'u2', name: 'Bob' },
     { id: 'u3', name: 'Carol' },
-    { id: 'u4', name: 'Dave' },
   ];
 
   const workflows = [
@@ -157,7 +156,7 @@ function seedIfNeeded() {
         },
         {
           id: 'wf2-s3', type: 'task', name: 'Verify Coverage',
-          description: 'Has insurance: Dave verifies the coverage details.',
+          description: 'Has insurance: Carol verifies the coverage details.',
           PreReq: ['wf2-s2'],
           Tasksteps: ['Check Plan Eligibility', 'Record Coverage'],
         },
@@ -194,7 +193,7 @@ function seedIfNeeded() {
           description: 'Switch on claim type to the matching desk.',
           PreReq: ['wf3-s1'],
           condition: 'switch', conditionExpr: 'claimType',
-          branches: ['inpatient → Inpatient Desk (Bob)', 'outpatient → Outpatient Desk (Carol)', 'pharmacy → Pharmacy Desk (Dave)'],
+          branches: ['inpatient → Inpatient Desk (Bob)', 'outpatient → Outpatient Desk (Carol)', 'pharmacy → Pharmacy Desk (Alice)'],
           Tasksteps: ['Determine Desk'],
         },
         {
@@ -256,18 +255,18 @@ function seedIfNeeded() {
         },
         {
           id: 'wf5-s2', type: 'conditional', name: 'Amount Check',
-          description: 'If amount > $1,000 → Manager Approval (Bob), else → Finance Auto-approve (Dave).',
+          description: 'If amount > $1,000 → Manager Approval (Bob), else → Finance Auto-approve (Carol).',
           PreReq: ['wf5-s1'],
           condition: 'if/else', conditionExpr: 'amount > 1000',
-          branches: ['if true → Manager Approval (Bob)', 'else → Finance Auto-approve (Dave)'],
+          branches: ['if true → Manager Approval (Bob)', 'else → Finance Auto-approve (Carol)'],
           Tasksteps: ['Evaluate Claimed Amount'],
         },
         {
           id: 'wf5-s3', type: 'conditional', name: 'Route by Category',
-          description: 'Switch on category: "travel" → Dave, otherwise → Alice.',
+          description: 'Switch on category: "travel" → Carol, otherwise → Alice.',
           PreReq: ['wf5-s2'],
           condition: 'switch', conditionExpr: 'category',
-          branches: ['category === "travel" → Travel Desk (Dave)', 'otherwise → General Desk (Alice)'],
+          branches: ['category === "travel" → Travel Desk (Carol)', 'otherwise → General Desk (Alice)'],
           Tasksteps: ['Classify Expense Category', 'Forward to Matching Desk'],
         },
         {
@@ -339,21 +338,52 @@ export function deleteWorkflow(id) {
 export function getInstances() { return load(KEYS.instances); }
 
 // ── Execution helpers ──────────────────────────────────
+//
+// Execution is prerequisite + branch aware:
+//   - A step becomes 'active' once ALL its prerequisites are completed
+//     (skipped prereqs are treated as satisfied so flow can continue).
+//   - A conditional randomly picks ONE branch target (if/else or switch case).
+//     The chosen target activates; the NOT-chosen targets are 'skipped', and
+//     any step that depended only on a skipped step cascades to 'skipped'.
 
 function activateStep(si) {
-  // All sub-steps of a task start active together (parallel by default).
   si.actionInstances.forEach(a => {
     if (a.status === 'blocked') a.status = 'active';
   });
+  si.status = 'active';
 }
 
-// The orchestrator auto-assigns people (no manual Dispatcher). Round-robin
-// across the team so every active sub-step has an owner.
+// Round-robin auto-assignment across the team.
 function autoAssign(users, counterRef) {
   if (!users.length) return null;
   const u = users[counterRef.n % users.length];
   counterRef.n += 1;
   return u.id;
+}
+
+// The single branch target a conditional routes to (random pick at launch).
+function pickBranchTarget(step) {
+  if (step.condition === 'switch') {
+    const targets = (step.cases || []).map(c => c.target).filter(Boolean);
+    if (!targets.length) return null;
+    return targets[Math.floor(Math.random() * targets.length)];
+  }
+  // if/else
+  const opts = [step.trueTarget, step.falseTarget].filter(Boolean);
+  if (!opts.length) return null;
+  return opts[Math.floor(Math.random() * opts.length)];
+}
+
+// Mark a step (by stepId) and everything reachable only through it as skipped.
+function cascadeSkip(steps, statusByStepId, stepId) {
+  if (statusByStepId[stepId] === 'skipped') return;
+  statusByStepId[stepId] = 'skipped';
+  for (const s of steps) {
+    if (!Array.isArray(s.PreReq) || !s.PreReq.includes(stepId)) continue;
+    // skip this dependent only if every prereq is now skipped
+    const allSkipped = s.PreReq.every(p => statusByStepId[p] === 'skipped');
+    if (allSkipped) cascadeSkip(steps, statusByStepId, s.id);
+  }
 }
 
 export function launchWorkflow(workflowId) {
@@ -363,8 +393,58 @@ export function launchWorkflow(workflowId) {
   const users = load(KEYS.users);
   const counterRef = { n: 0 };
   const now = new Date();
+  const steps = wf.steps || wf.tasks || [];
 
-  const steps = wf.steps || wf.tasks || []; // tolerate old data
+  // 1) Decide branch outcomes + which steps are skipped (by stepId).
+  const statusByStepId = {}; // stepId -> 'skipped' (only skips recorded here)
+  const chosenByCond = {};   // conditional stepId -> chosen target stepId
+  for (const s of steps) {
+    if (s.type !== 'conditional') continue;
+    const allTargets = s.condition === 'switch'
+      ? (s.cases || []).map(c => c.target).filter(Boolean)
+      : [s.trueTarget, s.falseTarget].filter(Boolean);
+    if (!allTargets.length) continue;
+    const chosen = pickBranchTarget(s);
+    chosenByCond[s.id] = chosen;
+    allTargets.filter(t => t !== chosen).forEach(t => cascadeSkip(steps, statusByStepId, t));
+  }
+
+  // 2) Build task instances.
+  const taskInstances = steps.map(s => {
+    const skipped = statusByStepId[s.id] === 'skipped';
+    const labels = s.Tasksteps && s.Tasksteps.length ? s.Tasksteps : [s.name];
+    const noPrereq = !Array.isArray(s.PreReq) || s.PreReq.length === 0;
+
+    const actionInstances = labels.map((label, aIdx) => ({
+      id: uid(),
+      actionName: label,
+      assignedTo: skipped ? null : autoAssign(users, counterRef),
+      status: skipped ? 'skipped' : (noPrereq ? 'active' : 'blocked'),
+      completedAt: null,
+      notes: '',
+      order: aIdx,
+    }));
+
+    return {
+      id: uid(),
+      stepId: s.id,
+      taskName: s.name,
+      type: s.type || 'task',
+      condition: s.condition || 'none',
+      conditionExpr: s.conditionExpr || '',
+      branches: s.branches || [],
+      trueTarget: s.trueTarget || null,
+      falseTarget: s.falseTarget || null,
+      cases: s.cases || [],
+      chosenTarget: chosenByCond[s.id] || null,
+      loopSet: s.loopSet || null,
+      loopExpr: s.loopExpr || '',
+      PreReq: s.PreReq || 'none',
+      Tasksteps: labels,
+      status: skipped ? 'skipped' : (noPrereq ? 'active' : 'pending'),
+      actionInstances,
+    };
+  });
 
   const instance = {
     id: uid(),
@@ -372,51 +452,33 @@ export function launchWorkflow(workflowId) {
     workflowName: wf.name,
     launchedAt: now.toISOString(),
     status: 'running',
-    taskInstances: steps.map((s, sIdx) => {
-      const labels = s.Tasksteps && s.Tasksteps.length ? s.Tasksteps : [s.name];
-      const actionInstances = labels.map((label, aIdx) => ({
-        id: uid(),
-        actionName: label,
-        // Backend auto-assigns the person for this sub-step.
-        assignedTo: autoAssign(users, counterRef),
-        status: sIdx === 0 ? 'active' : 'blocked',
-        completedAt: null,
-        notes: '',
-        order: aIdx,
-      }));
-
-      const si = {
-        id: uid(),
-        stepId: s.id,
-        taskName: s.name,
-        type: s.type || 'task',
-        condition: s.condition || 'none',
-        conditionExpr: s.conditionExpr || '',
-        branches: s.branches || [],
-        trueTarget: s.trueTarget || null,
-        falseTarget: s.falseTarget || null,
-        cases: s.cases || [],
-        loopSet: s.loopSet || null,
-        loopExpr: s.loopExpr || '',
-        PreReq: s.PreReq || 'none',
-        Tasksteps: labels,
-        status: sIdx === 0 ? 'active' : 'pending',
-        actionInstances,
-      };
-
-      if (sIdx === 0) activateStep(si);
-      return si;
-    }),
+    taskInstances,
   };
 
-  if (instance.taskInstances.every(t => t.status === 'completed')) {
-    instance.status = 'completed';
-  }
+  recomputeInstance(instance);
 
   const list = load(KEYS.instances);
   list.push(instance);
   save(KEYS.instances, list);
   return instance;
+}
+
+// Unlock any pending step whose prerequisites are all completed/skipped, and
+// roll up the overall instance status.
+function recomputeInstance(inst) {
+  const doneStepIds = new Set(
+    inst.taskInstances.filter(t => t.status === 'completed' || t.status === 'skipped').map(t => t.stepId)
+  );
+
+  for (const ti of inst.taskInstances) {
+    if (ti.status !== 'pending') continue;
+    const prereqs = Array.isArray(ti.PreReq) ? ti.PreReq : [];
+    const ready = prereqs.every(p => doneStepIds.has(p));
+    if (ready) activateStep(ti);
+  }
+
+  const live = inst.taskInstances.filter(t => t.status !== 'skipped');
+  if (live.every(t => t.status === 'completed')) inst.status = 'completed';
 }
 
 export function completeActionInstance(instanceId, taskInstanceId, actionInstanceId, notes) {
@@ -426,7 +488,6 @@ export function completeActionInstance(instanceId, taskInstanceId, actionInstanc
 
   const ti = inst.taskInstances.find(t => t.id === taskInstanceId);
   if (!ti) return;
-
   const ai = ti.actionInstances.find(a => a.id === actionInstanceId);
   if (!ai) return;
 
@@ -434,22 +495,24 @@ export function completeActionInstance(instanceId, taskInstanceId, actionInstanc
   ai.completedAt = new Date().toISOString();
   ai.notes = notes;
 
-  if (ti.actionInstances.every(a => a.status === 'completed')) {
+  if (ti.actionInstances.filter(a => a.status !== 'skipped').every(a => a.status === 'completed')) {
     ti.status = 'completed';
-    // unlock the next pending step
-    const nextStep = inst.taskInstances.find(t => t.status === 'pending');
-    if (nextStep) {
-      nextStep.status = 'active';
-      activateStep(nextStep);
-    }
   }
 
-  if (inst.taskInstances.every(t => t.status === 'completed')) {
-    inst.status = 'completed';
-  }
-
+  recomputeInstance(inst);
   save(KEYS.instances, list);
   return list;
+}
+
+// ── Instance status header: unassigned → assigned → done ──
+export function instanceStage(inst) {
+  const live = inst.taskInstances.filter(t => t.status !== 'skipped');
+  const allDone = live.every(t => t.status === 'completed');
+  if (allDone) return 'done';
+  const anyAssigned = live.some(t =>
+    t.actionInstances.some(a => a.assignedTo && a.status !== 'skipped' && a.status !== 'completed')
+  );
+  return anyAssigned ? 'assigned' : 'unassigned';
 }
 
 export function getMyWorkItems(userId) {

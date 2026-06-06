@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Play, Trash2, GitBranch, Clock, Edit2, Zap, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import { Plus, Trash2, GitBranch, Clock, Edit2, Zap, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
 import WorkflowFlowChart, { nodesFromWorkflow } from '../../components/WorkflowFlowChart';
-import { getWorkflows, deleteWorkflow, launchWorkflow, getTriggers, getUnmappedTriggers } from '../../store';
+import { getWorkflows, deleteWorkflow, getTriggers, getUnmappedTriggers } from '../../store';
 
 const typeBadgeCls = {
   task:        'bg-violet-100 text-violet-700',
@@ -11,7 +11,7 @@ const typeBadgeCls = {
 };
 const typeIcon = { task: '▸', conditional: '◆', loop: '↻' };
 
-function WorkflowCard({ wf, trigger, onLaunch, onEdit, onDelete }) {
+function WorkflowCard({ wf, trigger, onEdit, onDelete }) {
   const [showFlow, setShowFlow] = useState(false);
   const steps = wf.steps || wf.tasks || [];
   const counts = steps.reduce((acc, s) => {
@@ -54,10 +54,6 @@ function WorkflowCard({ wf, trigger, onLaunch, onEdit, onDelete }) {
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${showFlow ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-slate-600 border-slate-200 hover:border-violet-300'}`}>
               <GitBranch size={13} /> Flow {showFlow ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
             </button>
-            <button onClick={() => onLaunch(wf)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 text-green-700 border border-green-200 rounded-lg text-sm font-medium hover:bg-green-100 transition-colors">
-              <Play size={13} /> Launch
-            </button>
             <button onClick={() => onEdit(wf)}
               className="p-2 rounded-lg hover:bg-violet-50 text-slate-400 hover:text-violet-500">
               <Edit2 size={15} />
@@ -82,19 +78,12 @@ function WorkflowCard({ wf, trigger, onLaunch, onEdit, onDelete }) {
 export default function WorkflowList() {
   const navigate = useNavigate();
   const [workflows, setWorkflows] = useState(getWorkflows);
-  const [launched, setLaunched] = useState(null);
   const triggers = getTriggers();
   const unmapped = getUnmappedTriggers();
 
   function handleDelete(id) {
     deleteWorkflow(id);
     setWorkflows(getWorkflows());
-  }
-
-  function handleLaunch(wf) {
-    const inst = launchWorkflow(wf.id);
-    if (inst) setLaunched(inst.workflowName);
-    setTimeout(() => setLaunched(null), 3000);
   }
 
   function triggerFor(wf) {
@@ -106,19 +95,13 @@ export default function WorkflowList() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Workflows</h1>
-          <p className="text-sm text-slate-500 mt-1">Each workflow is the response to a trigger</p>
+          <p className="text-sm text-slate-500 mt-1">Each workflow is the response to a trigger. Fire it from the Triggers page.</p>
         </div>
         <button onClick={() => navigate('/builder/create')}
           className="flex items-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-lg hover:bg-violet-700 text-sm font-medium">
           <Plus size={16} /> New Workflow
         </button>
       </div>
-
-      {launched && (
-        <div className="mb-4 px-4 py-3 bg-green-50 border border-green-200 rounded-xl text-green-700 text-sm font-medium flex items-center gap-2">
-          <Play size={14} /> «{launched}» launched! People auto-assigned — see the Orchestrator.
-        </div>
-      )}
 
       {/* Triggers needing a workflow */}
       {unmapped.length > 0 && (
@@ -153,7 +136,6 @@ export default function WorkflowList() {
               key={wf.id}
               wf={wf}
               trigger={triggerFor(wf)}
-              onLaunch={handleLaunch}
               onEdit={w => navigate('/builder/create', { state: { workflow: w } })}
               onDelete={handleDelete}
             />

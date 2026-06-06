@@ -2,7 +2,35 @@ import { useState, useEffect } from 'react';
 import { Activity, ChevronDown, ChevronUp, CheckCircle2, Clock, Circle, AlertCircle, RefreshCw, Lock, ArrowDown, GitBranch } from 'lucide-react';
 import Badge from '../../components/Badge';
 import WorkflowFlowChart, { nodesFromInstance } from '../../components/WorkflowFlowChart';
-import { getInstances, getUsers } from '../../store';
+import { getInstances, getUsers, instanceStage } from '../../store';
+
+// Instance lifecycle header: unassigned → assigned → done
+function StageHeader({ stage }) {
+  const stages = ['unassigned', 'assigned', 'done'];
+  const activeIdx = stages.indexOf(stage);
+  return (
+    <div className="flex items-center gap-1.5 mt-2">
+      {stages.map((s, i) => {
+        const reached = i <= activeIdx;
+        const isCurrent = i === activeIdx;
+        return (
+          <div key={s} className="flex items-center gap-1.5">
+            <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full border transition-colors ${
+              isCurrent
+                ? (s === 'done' ? 'bg-green-100 text-green-700 border-green-200' : 'bg-violet-100 text-violet-700 border-violet-200')
+                : reached ? 'bg-slate-100 text-slate-500 border-slate-200' : 'bg-white text-slate-300 border-slate-100'
+            }`}>
+              {s}
+            </span>
+            {i < stages.length - 1 && (
+              <span className={`text-xs ${i < activeIdx ? 'text-violet-400' : 'text-slate-300'}`}>→</span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function statusIcon(status) {
   if (status === 'completed') return <CheckCircle2 size={14} className="text-green-500" />;
@@ -137,10 +165,13 @@ function StepBlock({ ti, tIdx, isLast, users }) {
 function InstanceCard({ instance, users }) {
   const [view, setView] = useState('flow'); // 'flow' | 'detail' | 'collapsed'
 
-  const totalActions = instance.taskInstances.reduce((s, t) => s + t.actionInstances.length, 0);
-  const doneActions = instance.taskInstances.reduce((s, t) => s + t.actionInstances.filter(a => a.status === 'completed').length, 0);
-  const totalTasks = instance.taskInstances.length;
-  const doneTasks = instance.taskInstances.filter(t => t.status === 'completed').length;
+  // Skipped (not-taken branch) steps are excluded from progress counts.
+  const liveTasks = instance.taskInstances.filter(t => t.status !== 'skipped');
+  const totalActions = liveTasks.reduce((s, t) => s + t.actionInstances.filter(a => a.status !== 'skipped').length, 0);
+  const doneActions = liveTasks.reduce((s, t) => s + t.actionInstances.filter(a => a.status === 'completed').length, 0);
+  const totalTasks = liveTasks.length;
+  const doneTasks = liveTasks.filter(t => t.status === 'completed').length;
+  const stage = instanceStage(instance);
 
   return (
     <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
@@ -156,6 +187,7 @@ function InstanceCard({ instance, users }) {
             <span>{doneTasks}/{totalTasks} steps</span>
             <span>{doneActions}/{totalActions} sub-steps</span>
           </div>
+          <StageHeader stage={stage} />
           <div className="mt-2">{progressBar(doneActions, totalActions)}</div>
         </div>
 
