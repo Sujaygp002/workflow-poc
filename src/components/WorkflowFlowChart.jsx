@@ -93,14 +93,9 @@ function StepBox({ node }) {
   );
 }
 
-// ── Conditional: diamond that branches false ← → true ──
-function ConditionalNode({ node }) {
+// ── Diamond only (the decision shape) ──────────────────
+function Diamond({ node }) {
   const live = !!node.status;
-  const branches = node.branches || [];
-  // false → left, true → right. Use first two branches; extras stack on the right.
-  const leftBranch = branches[0];
-  const rightBranches = branches.slice(1);
-
   const diamondCls = !live
     ? 'border-amber-300 bg-amber-50 text-amber-700'
     : node.status === 'completed'
@@ -108,50 +103,45 @@ function ConditionalNode({ node }) {
       : node.status === 'active'
         ? 'border-amber-400 bg-amber-50 text-amber-800 ring-2 ring-amber-100'
         : 'border-slate-300 bg-white text-slate-500 opacity-70';
+  return (
+    <div className="relative w-40 h-40 flex items-center justify-center">
+      <div className={`absolute w-28 h-28 rotate-45 border-2 rounded-lg ${diamondCls}`} />
+      <div className="relative z-10 text-center px-2 max-w-[130px]">
+        <div className="text-lg leading-none">◆</div>
+        <div className="font-semibold text-xs mt-1 leading-tight">{node.name}</div>
+        {node.conditionExpr && (
+          <div className="font-mono text-[10px] opacity-70 mt-0.5 break-words">{node.conditionExpr}</div>
+        )}
+      </div>
+    </div>
+  );
+}
 
+// A conditional with its two branch-target boxes laid out left (false) /
+// right (true), connected by plain labeled arrows directly to the tasks.
+function ConditionalBranch({ node, falseChild, trueChild }) {
   return (
     <div className="flex flex-col items-center">
-      {/* diamond */}
-      <div className={`relative w-40 h-40 flex items-center justify-center`}>
-        <div className={`absolute w-28 h-28 rotate-45 border-2 rounded-lg ${diamondCls}`} />
-        <div className="relative z-10 text-center px-2 max-w-[130px]">
-          <div className="text-lg leading-none">◆</div>
-          <div className="font-semibold text-xs mt-1 leading-tight">{node.name}</div>
-          {node.conditionExpr && (
-            <div className="font-mono text-[10px] opacity-70 mt-0.5 break-words">{node.conditionExpr}</div>
-          )}
-        </div>
-      </div>
-
-      {/* split into two labeled arrows */}
-      <div className="flex items-start justify-center gap-10 -mt-2">
-        {/* FALSE / left */}
+      <Diamond node={node} />
+      {/* the two outgoing edges */}
+      <div className="flex items-start justify-center gap-16">
+        {/* FALSE → left task */}
         <div className="flex flex-col items-center">
-          <span className="text-[10px] font-bold text-rose-500 mb-0.5">✗ false</span>
-          <svg width="40" height="22" viewBox="0 0 40 22" className="text-slate-300">
-            <path d="M40 0 Q0 0 0 16" fill="none" stroke="currentColor" strokeWidth="1.5" />
-            <path d="M-3 12 L0 18 L3 12" fill="currentColor" transform="translate(0,-2)" />
+          <svg width="50" height="26" viewBox="0 0 50 26" className="text-slate-300">
+            <path d="M50 0 Q0 0 0 20" fill="none" stroke="currentColor" strokeWidth="1.5" />
+            <path d="M-3 14 L0 22 L3 14" fill="currentColor" />
           </svg>
-          {leftBranch && (
-            <span className="text-[10px] font-mono px-2 py-1 rounded-lg border border-rose-200 bg-rose-50 text-rose-700 text-center max-w-[150px] mt-1">
-              {leftBranch}
-            </span>
-          )}
+          <span className="text-[10px] font-semibold text-slate-500 -mt-1 mb-1">false</span>
+          {falseChild ? <StepBox node={falseChild} /> : <span className="text-[10px] text-slate-300 italic">—</span>}
         </div>
-        {/* TRUE / right */}
+        {/* TRUE → right task */}
         <div className="flex flex-col items-center">
-          <span className="text-[10px] font-bold text-emerald-600 mb-0.5">✓ true</span>
-          <svg width="40" height="22" viewBox="0 0 40 22" className="text-slate-300">
-            <path d="M0 0 Q40 0 40 16" fill="none" stroke="currentColor" strokeWidth="1.5" />
-            <path d="M37 12 L40 18 L43 12" fill="currentColor" transform="translate(0,-2)" />
+          <svg width="50" height="26" viewBox="0 0 50 26" className="text-slate-300">
+            <path d="M0 0 Q50 0 50 20" fill="none" stroke="currentColor" strokeWidth="1.5" />
+            <path d="M47 14 L50 22 L53 14" fill="currentColor" />
           </svg>
-          <div className="flex flex-col gap-1 mt-1">
-            {(rightBranches.length ? rightBranches : ['→ continue']).map((b, i) => (
-              <span key={i} className="text-[10px] font-mono px-2 py-1 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 text-center max-w-[150px]">
-                {b}
-              </span>
-            ))}
-          </div>
+          <span className="text-[10px] font-semibold text-slate-500 -mt-1 mb-1">true</span>
+          {trueChild ? <StepBox node={trueChild} /> : <span className="text-[10px] text-slate-300 italic">—</span>}
         </div>
       </div>
     </div>
@@ -192,6 +182,28 @@ function buildRows(nodes) {
   return Object.keys(rowsMap).sort((a, b) => a - b).map(k => rowsMap[k]);
 }
 
+// Match a conditional's branch labels (false → X / true → Y) to actual child
+// nodes (children whose PreReq includes this conditional), by name.
+function branchChildren(node, nodes) {
+  const children = nodes.filter(n =>
+    Array.isArray(n.PreReq) && n.PreReq.includes(node.id)
+  );
+  const branches = node.branches || [];
+  const findByLabel = (kw) => {
+    const label = branches.find(b => b.toLowerCase().startsWith(kw));
+    if (!label) return null;
+    return children.find(c => label.toLowerCase().includes(c.name.toLowerCase())) || null;
+  };
+  let falseChild = findByLabel('false');
+  let trueChild = findByLabel('true');
+  // fallback: if labels didn't resolve, assign in order
+  const used = new Set([falseChild?.id, trueChild?.id].filter(Boolean));
+  const rest = children.filter(c => !used.has(c.id));
+  if (!falseChild) falseChild = rest.shift() || null;
+  if (!trueChild) trueChild = rest.shift() || null;
+  return { falseChild, trueChild, childIds: children.map(c => c.id) };
+}
+
 export default function WorkflowFlowChart({ nodes, endDone = false }) {
   if (!nodes || nodes.length === 0) {
     return <div className="text-center py-6 text-slate-400 text-sm">No steps to display.</div>;
@@ -199,35 +211,48 @@ export default function WorkflowFlowChart({ nodes, endDone = false }) {
 
   const rows = buildRows(nodes);
 
+  // Children that are rendered inside a conditional's branch are removed from
+  // their own row so they don't appear twice.
+  const consumed = new Set();
+  nodes.forEach(n => {
+    if (n.type === 'conditional') {
+      branchChildren(n, nodes).childIds.forEach(id => consumed.add(id));
+    }
+  });
+
   return (
     <div className="flex flex-col items-center py-6 px-4 overflow-x-auto">
       <Terminal label="START" done={false} />
-      {rows.map((row, ri) => (
+      {rows.map((row, ri) => {
+        const visible = row.filter(n => !consumed.has(n.id));
+        if (visible.length === 0) return null;
+        return (
         <div key={ri} className="flex flex-col items-center">
           <ArrowDownTiny />
           {/* parallel lane note when >1 in a row */}
-          {row.length > 1 && (
+          {visible.length > 1 && (
             <div className="text-[10px] font-medium text-slate-400 mb-1 flex items-center gap-1">
-              ⫶ {row.length} parallel · no prerequisite
+              ⫶ {visible.length} parallel · no prerequisite
             </div>
           )}
           <div className="flex items-start justify-center gap-6 flex-wrap">
-            {row.map(node => (
-              <div key={node.id} className="flex flex-col items-center">
-                {node.type === 'conditional'
-                  ? <ConditionalNode node={node} />
-                  : <StepBox node={node} />}
-                {/* show prereq label for sequential steps */}
-                {Array.isArray(node.PreReq) && node.PreReq.length > 0 && (
-                  <span className="text-[10px] text-slate-400 mt-1">
-                    after: {node.PreReq.map(id => (nodes.find(n => n.id === id) || {}).name).filter(Boolean).join(', ')}
-                  </span>
-                )}
-              </div>
-            ))}
+            {visible.map(node => {
+              if (node.type === 'conditional') {
+                const { falseChild, trueChild } = branchChildren(node, nodes);
+                return (
+                  <ConditionalBranch key={node.id} node={node} falseChild={falseChild} trueChild={trueChild} />
+                );
+              }
+              return (
+                <div key={node.id} className="flex flex-col items-center">
+                  <StepBox node={node} />
+                </div>
+              );
+            })}
           </div>
         </div>
-      ))}
+        );
+      })}
       <ArrowDownTiny />
       <Terminal label="END" done={endDone} />
     </div>
