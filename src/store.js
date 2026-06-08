@@ -13,7 +13,7 @@ const KEYS = {
   workflows: 'wf_workflows',
   instances: 'wf_instances',
   users: 'wf_users',
-  seeded: 'wf_seeded_v17',
+  seeded: 'wf_seeded_v18',
 };
 
 function load(key) {
@@ -32,16 +32,107 @@ function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
 
-// ── Predefined object-model sets ───────────────────────
-// Set-based object model. Loops / for-each operate over one of these.
-export const OBJECT_SETS = [
-  { id: 'MSA', name: 'MSA', label: 'Metropolitan Statistical Areas', size: 6 },
-  { id: 'PG',  name: 'PG',  label: 'Provider Groups',                  size: 4 },
-  { id: 'HHS', name: 'HHS', label: 'Home Health Services',            size: 8 },
+// ── Object-model modules ───────────────────────────────
+// Three real modules with schemas. `fields` drives the fill-in form and the
+// validation (required fields). `sample` are a couple of seed records.
+//
+//  SA      — Statistical Area (has counties → zipcodes; SA is the map target)
+//  PG      — Physician Group / Practice
+//  Agency  — Home Health Agency / Hospice / Hospital org
+export const MODULES = {
+  SA: {
+    id: 'SA', name: 'SA', label: 'Statistical Area',
+    fields: [
+      { key: 'sa', label: 'Statistical Area name', required: true },
+      { key: 'sa_type', label: 'Type (metro | micro)', required: true },
+    ],
+    // counties/zipcodes are structured; kept on the record, not in the simple form
+  },
+  PG: {
+    id: 'PG', name: 'PG', label: 'Physician Group',
+    fields: [
+      { key: 'name', label: 'Group / Practice name', required: true },
+      { key: 'npi', label: 'NPI', required: true },
+      { key: 'type', label: 'Organization type', required: true },
+      { key: 'phone_number', label: 'Phone number', required: true },
+      { key: 'email', label: 'Email', required: true },
+      { key: 'address', label: 'Street address', required: true },
+      { key: 'city', label: 'City', required: true },
+      { key: 'state', label: 'State', required: true },
+      { key: 'county', label: 'County', required: false },
+      { key: 'zip', label: 'ZIP code', required: true },
+    ],
+  },
+  Agency: {
+    id: 'Agency', name: 'Agency', label: 'Home Health Agency',
+    fields: [
+      { key: 'name', label: 'Organization name', required: true },
+      { key: 'npi', label: 'NPI', required: true },
+      { key: 'type', label: 'Organization type', required: true },
+      { key: 'type_of_service', label: 'Type of service', required: false },
+      { key: 'phone_number', label: 'Phone number', required: true },
+      { key: 'email', label: 'Email', required: true },
+      { key: 'address', label: 'Street address', required: true },
+      { key: 'city', label: 'City', required: true },
+      { key: 'state', label: 'State', required: true },
+      { key: 'county', label: 'County', required: false },
+      { key: 'zip', label: 'ZIP code', required: true },
+    ],
+  },
+};
+
+// Seed SA records (the map targets). zipcodes here are matched against PG/Agency zip.
+export const SA_RECORDS = [
+  {
+    sa: 'Austin-Round Rock, TX', sa_type: 'metro',
+    counties: [
+      { county_name: 'Travis', zipcodes: ['78701', '78702', '78703', '78704'] },
+      { county_name: 'Williamson', zipcodes: ['78664', '78681'] },
+    ],
+  },
+  {
+    sa: 'Boise City, ID', sa_type: 'metro',
+    counties: [
+      { county_name: 'Ada', zipcodes: ['83702', '83704', '83709'] },
+      { county_name: 'Canyon', zipcodes: ['83605', '83651'] },
+    ],
+  },
+  {
+    sa: 'Pinedale, WY', sa_type: 'micro',
+    counties: [
+      { county_name: 'Sublette', zipcodes: ['82941', '82935'] },
+    ],
+  },
 ];
 
+// Loops / for-each can still operate over a module. `size` = sample count.
 export function getObjectSets() {
-  return OBJECT_SETS;
+  return Object.values(MODULES).map(m => ({ id: m.id, name: m.name, label: m.label, size: m.id === 'SA' ? SA_RECORDS.length : 0 }));
+}
+
+export function getModules() { return MODULES; }
+export function getModule(id) { return MODULES[id] || null; }
+export function getSARecords() { return SA_RECORDS; }
+
+// Find the SA whose counties contain this zipcode. Returns { sa, county } or null.
+export function mapZipToSA(zip) {
+  const z = String(zip || '').trim();
+  for (const sa of SA_RECORDS) {
+    for (const c of sa.counties) {
+      if (c.zipcodes.includes(z)) return { sa: sa.sa, sa_type: sa.sa_type, county: c.county_name };
+    }
+  }
+  return null;
+}
+
+// Required-field validation for a module record. Returns { ok, missing: [..] }.
+export function validateRecord(moduleId, data) {
+  const mod = MODULES[moduleId];
+  if (!mod) return { ok: false, missing: ['(unknown module)'] };
+  const missing = mod.fields
+    .filter(f => f.required && !String((data || {})[f.key] || '').trim())
+    .map(f => f.label);
+  return { ok: missing.length === 0, missing };
 }
 
 // ── Predefined triggers ────────────────────────────────
@@ -54,7 +145,7 @@ export const TRIGGERS = [
   { id: 'trigger-3', name: 'Trigger 3', label: 'Claim Submitted',    description: 'An insurance claim is filed for review.',          workflowId: 'wf3' },
   { id: 'trigger-4', name: 'Trigger 4', label: 'Episode Review',     description: 'A care episode is flagged for batch review.',      workflowId: 'wf4' },
   { id: 'trigger-5', name: 'Trigger 5', label: 'Expense Submitted',  description: 'An expense report is submitted for approval.',     workflowId: 'wf5' },
-  { id: 'trigger-6', name: 'Trigger 6', label: 'Discharge Planning', description: 'A patient is scheduled for discharge.',            workflowId: null },
+  { id: 'trigger-6', name: 'Trigger 6', label: 'Provider Onboarding', description: 'A new Physician Group + Agency need onboarding & SA mapping.', workflowId: 'wf6' },
   { id: 'trigger-7', name: 'Trigger 7', label: 'Lab Result Ready',   description: 'A lab result is returned and needs routing.',      workflowId: null },
 ];
 
@@ -284,6 +375,55 @@ function seedIfNeeded() {
         },
       ],
     },
+
+    {
+      id: 'wf6',
+      name: 'Provider Onboarding (PG + Agency → SA)',
+      description: 'Two people fill in a Physician Group and a Home Health Agency in parallel, the records are validated, and on success they are mapped to a Statistical Area by ZIP code. Invalid records are sent back to the creators to fix.',
+      triggerId: 'trigger-6',
+      createdAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+      steps: [
+        {
+          id: 'wf6-s1', type: 'task', taskKind: 'fill', module: 'PG',
+          name: 'Create Physician Group',
+          description: 'Fill in the Physician Group (PG) details: name, NPI, type, contact and address (incl. ZIP).',
+          PreReq: 'none',
+        },
+        {
+          id: 'wf6-s2', type: 'task', taskKind: 'fill', module: 'Agency',
+          name: 'Create Home Health Agency',
+          description: 'Fill in the Home Health Agency details: name, NPI, type, contact and address (incl. ZIP).',
+          PreReq: 'none',
+        },
+        {
+          id: 'wf6-s3', type: 'task', taskKind: 'validate',
+          name: 'Validate Records',
+          description: 'Check that both the PG and Agency records have all required fields filled correctly.',
+          PreReq: ['wf6-s1', 'wf6-s2'],
+        },
+        {
+          id: 'wf6-s4', type: 'conditional', name: 'Records Valid?',
+          description: 'If both records pass validation, map them to a Statistical Area; otherwise send them back to be fixed.',
+          PreReq: ['wf6-s3'],
+          condition: 'if/else', conditionExpr: 'records valid',
+          trueTarget: 'wf6-s5', falseTarget: 'wf6-s6',
+          branches: ['true → Map to SA', 'false → Send Back to Fix'],
+        },
+        {
+          id: 'wf6-s5', type: 'task', taskKind: 'map',
+          name: 'Map to Statistical Area',
+          description: 'Match each record’s ZIP code to a Statistical Area (SA) and link them.',
+          PreReq: ['wf6-s4'],
+        },
+        {
+          id: 'wf6-s6', type: 'task', taskKind: 'fix',
+          name: 'Send Back to Fix',
+          description: 'Validation failed — the creators correct the PG / Agency data, then it is re-validated.',
+          PreReq: ['wf6-s4'],
+          loopBackTo: 'wf6-s3',
+        },
+      ],
+    },
   ];
 
   save(KEYS.users, users);
@@ -361,31 +501,6 @@ function autoAssign(users, counterRef) {
   return u.id;
 }
 
-// The single branch target a conditional routes to (random pick at launch).
-function pickBranchTarget(step) {
-  if (step.condition === 'switch') {
-    const targets = (step.cases || []).map(c => c.target).filter(Boolean);
-    if (!targets.length) return null;
-    return targets[Math.floor(Math.random() * targets.length)];
-  }
-  // if/else
-  const opts = [step.trueTarget, step.falseTarget].filter(Boolean);
-  if (!opts.length) return null;
-  return opts[Math.floor(Math.random() * opts.length)];
-}
-
-// Mark a step (by stepId) and everything reachable only through it as skipped.
-function cascadeSkip(steps, statusByStepId, stepId) {
-  if (statusByStepId[stepId] === 'skipped') return;
-  statusByStepId[stepId] = 'skipped';
-  for (const s of steps) {
-    if (!Array.isArray(s.PreReq) || !s.PreReq.includes(stepId)) continue;
-    // skip this dependent only if every prereq is now skipped
-    const allSkipped = s.PreReq.every(p => statusByStepId[p] === 'skipped');
-    if (allSkipped) cascadeSkip(steps, statusByStepId, s.id);
-  }
-}
-
 export function launchWorkflow(workflowId) {
   const wf = load(KEYS.workflows).find(w => w.id === workflowId);
   if (!wf) return null;
@@ -395,34 +510,18 @@ export function launchWorkflow(workflowId) {
   const now = new Date();
   const steps = wf.steps || wf.tasks || [];
 
-  // 1) Decide branch outcomes + which steps are skipped (by stepId).
-  const statusByStepId = {}; // stepId -> 'skipped' (only skips recorded here)
-  const chosenByCond = {};   // conditional stepId -> chosen target stepId
-  for (const s of steps) {
-    if (s.type !== 'conditional') continue;
-    const allTargets = s.condition === 'switch'
-      ? (s.cases || []).map(c => c.target).filter(Boolean)
-      : [s.trueTarget, s.falseTarget].filter(Boolean);
-    if (!allTargets.length) continue;
-    const chosen = pickBranchTarget(s);
-    chosenByCond[s.id] = chosen;
-    allTargets.filter(t => t !== chosen).forEach(t => cascadeSkip(steps, statusByStepId, t));
-  }
-
-  // 2) Build task instances. A task is one atomic unit: exactly one assignee
-  //    and one completion (no sub-steps / actions).
+  // Build task instances. Branch decisions are DEFERRED to recompute (decided
+  // when the conditional becomes ready) so they can use real form data and
+  // support loop-back. A task is one atomic unit (one assignee, one complete).
   const taskInstances = steps.map(s => {
-    const skipped = statusByStepId[s.id] === 'skipped';
     const noPrereq = !Array.isArray(s.PreReq) || s.PreReq.length === 0;
-    const startStatus = skipped ? 'skipped' : (noPrereq ? 'active' : 'pending');
+    const startStatus = noPrereq ? 'active' : 'pending';
 
-    // Single action that represents the whole task (kept for the runtime
-    // complete/unlock plumbing; never surfaced as a separate sub-step).
     const actionInstances = [{
       id: uid(),
       actionName: s.name,
-      assignedTo: skipped ? null : autoAssign(users, counterRef),
-      status: skipped ? 'skipped' : (noPrereq ? 'active' : 'blocked'),
+      assignedTo: autoAssign(users, counterRef),
+      status: noPrereq ? 'active' : 'blocked',
       completedAt: null,
       notes: '',
       order: 0,
@@ -434,13 +533,19 @@ export function launchWorkflow(workflowId) {
       taskName: s.name,
       description: s.description || '',
       type: s.type || 'task',
+      taskKind: s.taskKind || null,        // 'fill' | 'validate' | 'map' | 'fix'
+      module: s.module || null,            // 'PG' | 'Agency' | 'SA'
+      loopBackTo: s.loopBackTo || null,    // stepId to re-open on send-back
+      formData: {},                        // filled-in record (fill tasks)
+      validation: null,                    // { ok, missing } (validate task)
+      mapping: null,                       // SA mapping result (map task)
       condition: s.condition || 'none',
       conditionExpr: s.conditionExpr || '',
       branches: s.branches || [],
       trueTarget: s.trueTarget || null,
       falseTarget: s.falseTarget || null,
       cases: s.cases || [],
-      chosenTarget: chosenByCond[s.id] || null,
+      chosenTarget: null,
       loopSet: s.loopSet || null,
       loopExpr: s.loopExpr || '',
       PreReq: s.PreReq || 'none',
@@ -467,22 +572,78 @@ export function launchWorkflow(workflowId) {
   return instance;
 }
 
-// Unlock any pending step whose prerequisites are all completed/skipped, and
-// roll up the overall instance status.
-function recomputeInstance(inst) {
-  const doneStepIds = new Set(
-    inst.taskInstances.filter(t => t.status === 'completed' || t.status === 'skipped').map(t => t.stepId)
+// Decide a conditional that has just become ready. Returns the chosen target
+// stepId. Data-driven if/else (records valid) uses the validation result of the
+// prereq validate task; otherwise random.
+function decideBranch(inst, condTi) {
+  if (condTi.condition === 'switch') {
+    const targets = (condTi.cases || []).map(c => c.target).filter(Boolean);
+    return targets.length ? targets[Math.floor(Math.random() * targets.length)] : null;
+  }
+  // if/else
+  const prereqs = Array.isArray(condTi.PreReq) ? condTi.PreReq : [];
+  const validatePrereq = inst.taskInstances.find(t =>
+    prereqs.includes(t.stepId) && t.taskKind === 'validate'
   );
+  if (validatePrereq && validatePrereq.validation) {
+    return validatePrereq.validation.ok ? condTi.trueTarget : condTi.falseTarget;
+  }
+  // no data backing → random
+  const opts = [condTi.trueTarget, condTi.falseTarget].filter(Boolean);
+  return opts.length ? opts[Math.floor(Math.random() * opts.length)] : null;
+}
 
-  for (const ti of inst.taskInstances) {
-    if (ti.status !== 'pending') continue;
-    const prereqs = Array.isArray(ti.PreReq) ? ti.PreReq : [];
-    const ready = prereqs.every(p => doneStepIds.has(p));
-    if (ready) activateStep(ti);
+// Mark a task-instance (and anything reachable only through it) as skipped.
+function cascadeSkipInstance(inst, stepId) {
+  const ti = inst.taskInstances.find(t => t.stepId === stepId);
+  if (!ti || ti.status === 'skipped' || ti.status === 'completed') return;
+  ti.status = 'skipped';
+  ti.actionInstances.forEach(a => { if (a.status !== 'completed') a.status = 'skipped'; });
+  for (const t of inst.taskInstances) {
+    if (!Array.isArray(t.PreReq) || !t.PreReq.includes(stepId)) continue;
+    const allSkipped = t.PreReq.every(p => {
+      const pt = inst.taskInstances.find(x => x.stepId === p);
+      return pt && pt.status === 'skipped';
+    });
+    if (allSkipped) cascadeSkipInstance(inst, t.stepId);
+  }
+}
+
+// Unlock ready steps, decide conditionals as they become ready, roll up status.
+function recomputeInstance(inst) {
+  const isSatisfied = id => {
+    const t = inst.taskInstances.find(x => x.stepId === id);
+    return t && (t.status === 'completed' || t.status === 'skipped');
+  };
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const ti of inst.taskInstances) {
+      if (ti.status !== 'pending') continue;
+      const prereqs = Array.isArray(ti.PreReq) ? ti.PreReq : [];
+      if (!prereqs.every(isSatisfied)) continue;
+
+      if (ti.type === 'conditional') {
+        // Decide now: activate chosen target, skip the others.
+        const chosen = decideBranch(inst, ti);
+        ti.chosenTarget = chosen;
+        ti.status = 'completed';                 // the decision itself is instant
+        ti.actionInstances.forEach(a => { a.status = 'completed'; });
+        const allTargets = ti.condition === 'switch'
+          ? (ti.cases || []).map(c => c.target).filter(Boolean)
+          : [ti.trueTarget, ti.falseTarget].filter(Boolean);
+        allTargets.filter(t => t && t !== chosen).forEach(t => cascadeSkipInstance(inst, t));
+        changed = true;
+      } else {
+        activateStep(ti);
+        changed = true;
+      }
+    }
   }
 
   const live = inst.taskInstances.filter(t => t.status !== 'skipped');
-  if (live.every(t => t.status === 'completed')) inst.status = 'completed';
+  if (live.length && live.every(t => t.status === 'completed')) inst.status = 'completed';
 }
 
 export function completeActionInstance(instanceId, taskInstanceId, actionInstanceId, notes) {
@@ -503,9 +664,89 @@ export function completeActionInstance(instanceId, taskInstanceId, actionInstanc
     ti.status = 'completed';
   }
 
+  // ── Validate task: compute validity from the fill prereqs' formData ──
+  if (ti.taskKind === 'validate') {
+    const prereqs = Array.isArray(ti.PreReq) ? ti.PreReq : [];
+    const fillTasks = inst.taskInstances.filter(t => prereqs.includes(t.stepId) && t.taskKind === 'fill');
+    const results = fillTasks.map(ft => ({
+      module: ft.module,
+      name: ft.taskName,
+      ...validateRecord(ft.module, ft.formData),
+    }));
+    const ok = results.every(r => r.ok);
+    ti.validation = { ok, results };
+  }
+
+  // ── Map task: resolve each fill record's ZIP to an SA ──
+  if (ti.taskKind === 'map') {
+    const fills = inst.taskInstances.filter(t => t.taskKind === 'fill');
+    ti.mapping = fills.map(ft => ({
+      module: ft.module,
+      name: ft.formData?.name || ft.taskName,
+      zip: ft.formData?.zip || '',
+      sa: mapZipToSA(ft.formData?.zip),
+    }));
+  }
+
+  // ── Fix / send-back: re-open the loop target (and its dependent gate) ──
+  if (ti.taskKind === 'fix' && ti.loopBackTo) {
+    reopenLoop(inst, ti);
+  }
+
   recomputeInstance(inst);
   save(KEYS.instances, list);
   return list;
+}
+
+// Save the filled-in record for a fill task (does not complete it).
+export function setTaskFormData(instanceId, taskInstanceId, formData) {
+  const list = load(KEYS.instances);
+  const inst = list.find(i => i.id === instanceId);
+  if (!inst) return;
+  const ti = inst.taskInstances.find(t => t.id === taskInstanceId);
+  if (!ti) return;
+  ti.formData = { ...(ti.formData || {}), ...formData };
+  save(KEYS.instances, list);
+  return ti.formData;
+}
+
+// Re-open the validate task the fix loops back to, plus re-open the fill tasks
+// so the creators can correct data, and reset the gate + branches for a re-run.
+function reopenLoop(inst, fixTi) {
+  const reset = ti => {
+    ti.status = 'active';
+    ti.validation = null;
+    ti.mapping = null;
+    ti.chosenTarget = null;
+    ti.actionInstances.forEach(a => { a.status = 'active'; a.completedAt = null; });
+  };
+  const toPending = ti => {
+    ti.status = 'pending';
+    ti.validation = null;
+    ti.mapping = null;
+    ti.chosenTarget = null;
+    ti.actionInstances.forEach(a => { a.status = 'blocked'; a.completedAt = null; });
+  };
+
+  const validate = inst.taskInstances.find(t => t.stepId === fixTi.loopBackTo);
+  if (!validate) return;
+
+  // Re-open the fill tasks the validate depends on so they can be corrected.
+  const fillIds = Array.isArray(validate.PreReq) ? validate.PreReq : [];
+  inst.taskInstances.forEach(t => {
+    if (fillIds.includes(t.stepId) && t.taskKind === 'fill') reset(t);
+  });
+  // Validate becomes pending again (waits for the re-opened fills).
+  toPending(validate);
+
+  // The gate (conditional) that depended on validate, the map branch, and the
+  // fix branch all reset to pending so the gate can re-route next round.
+  inst.taskInstances.forEach(t => {
+    if (t.type === 'conditional' && Array.isArray(t.PreReq) && t.PreReq.includes(validate.stepId)) {
+      toPending(t);
+    }
+    if (t.taskKind === 'map' || t.taskKind === 'fix') toPending(t);
+  });
 }
 
 // ── Instance status header: unassigned → assigned → done ──
@@ -535,6 +776,11 @@ export function getMyWorkItems(userId) {
             taskName: ti.taskName,
             description: ti.description || '',
             type: ti.type || 'task',
+            taskKind: ti.taskKind || null,
+            module: ti.module || null,
+            formData: ti.formData || {},
+            validation: ti.validation || null,
+            mapping: ti.mapping || null,
             actionInstanceId: ai.id,
             actionName: ai.actionName,
             status: ai.status,

@@ -130,6 +130,31 @@ function StepBlock({ ti, tIdx, isLast, users }) {
           )}
           {!skipped && statusIcon(ti.status)}
         </div>
+
+        {/* Module results: filled record / validation / SA mapping */}
+        {!skipped && ti.taskKind === 'fill' && ti.formData?.name && (
+          <div className="px-4 py-2 border-t border-slate-100 text-xs text-slate-500">
+            <span className="font-medium text-slate-600">{ti.module}:</span> {ti.formData.name}
+            {ti.formData.zip && <span className="text-slate-400"> · ZIP {ti.formData.zip}</span>}
+          </div>
+        )}
+        {ti.taskKind === 'validate' && ti.validation && (
+          <div className={`px-4 py-2 border-t text-xs ${ti.validation.ok ? 'border-green-100 bg-green-50/40 text-green-700' : 'border-rose-100 bg-rose-50/40 text-rose-700'}`}>
+            {ti.validation.ok
+              ? '✓ all records valid'
+              : <>✗ invalid: {(ti.validation.results || []).filter(r => !r.ok).map(r => `${r.module} (${r.missing.join(', ')})`).join('; ')}</>}
+          </div>
+        )}
+        {ti.taskKind === 'map' && ti.mapping && (
+          <div className="px-4 py-2 border-t border-slate-100 text-xs space-y-0.5">
+            {ti.mapping.map((m, i) => (
+              <div key={i} className="text-slate-600">
+                <span className="font-medium">{m.module}</span> · ZIP {m.zip || '—'} →{' '}
+                {m.sa ? <span className="text-green-700">{m.sa.sa} ({m.sa.county})</span> : <span className="text-rose-600">no SA match</span>}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       {!isLast && (
         <div className="flex justify-center py-1">

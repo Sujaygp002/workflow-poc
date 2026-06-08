@@ -1,16 +1,71 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { CheckCircle2, Clock, ChevronDown, ChevronUp, ArrowLeft, RefreshCw, Inbox } from 'lucide-react';
-import { getUsers, getMyWorkItems, getMyCompletedItems, completeActionInstance } from '../../store';
+import { getUsers, getMyWorkItems, getMyCompletedItems, completeActionInstance, getModule, setTaskFormData } from '../../store';
+
+// Plausible valid sample per module (a button prefills it for the demo).
+const SAMPLES = {
+  PG: {
+    name: 'Lakeside Family Practice', npi: '1234567890', type: 'Single-Specialty Group',
+    phone_number: '512-555-0143', email: 'contact@lakesidefp.com',
+    address: '101 Lavaca St', city: 'Austin', state: 'TX', county: 'Travis', zip: '78701',
+  },
+  Agency: {
+    name: 'Boise Home Health', npi: '9876543210', type: 'Home Health Agency',
+    type_of_service: 'Skilled Nursing', phone_number: '208-555-0199', email: 'intake@boisehh.com',
+    address: '500 Capitol Blvd', city: 'Boise', state: 'ID', county: 'Ada', zip: '83702',
+  },
+};
+
+// Schema-driven form for a fill task.
+function FillForm({ module, data, onChange }) {
+  const mod = getModule(module);
+  if (!mod) return null;
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">{mod.label} details</label>
+        <button type="button" onClick={() => onChange({ ...(SAMPLES[module] || {}) })}
+          className="text-[11px] px-2 py-0.5 rounded-full border border-violet-200 text-violet-600 hover:bg-violet-50">
+          fill sample
+        </button>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        {mod.fields.map(f => (
+          <div key={f.key} className={f.key === 'address' || f.key === 'name' ? 'col-span-2' : ''}>
+            <label className="block text-[11px] text-slate-500 mb-0.5">
+              {f.label}{f.required && <span className="text-rose-400"> *</span>}
+            </label>
+            <input
+              className="w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 bg-white"
+              value={data[f.key] || ''}
+              onChange={e => onChange({ ...data, [f.key]: e.target.value })}
+              placeholder={f.label} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function ActionCard({ item, onComplete }) {
   const [open, setOpen] = useState(false);
   const [notes, setNotes] = useState('');
+  const [form, setForm] = useState(item.formData || {});
   const [loading, setLoading] = useState(false);
+
+  const isFill = item.taskKind === 'fill' || item.taskKind === 'fix';
+  const kindBadge = {
+    fill: 'create / fill', validate: 'validate', map: 'map to SA', fix: 'fix data',
+  }[item.taskKind];
 
   async function handleComplete() {
     setLoading(true);
-    await new Promise(r => setTimeout(r, 250));
+    // Persist the filled-in record before completing the task.
+    if (isFill && item.taskInstanceId) {
+      setTaskFormData(item.instanceId, item.taskInstanceId, form);
+    }
+    await new Promise(r => setTimeout(r, 200));
     onComplete(item, notes);
   }
 
@@ -23,6 +78,7 @@ function ActionCard({ item, onComplete }) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-semibold text-slate-800 leading-tight">{item.taskName}</span>
+            {kindBadge && <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-violet-100 text-violet-700">{kindBadge}</span>}
             <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700">in progress</span>
           </div>
           {item.description && (
@@ -40,7 +96,7 @@ function ActionCard({ item, onComplete }) {
         <button
           onClick={() => setOpen(o => !o)}
           className={`shrink-0 px-3 py-1.5 rounded-xl text-sm font-medium flex items-center gap-1 transition-colors ${open ? 'bg-violet-600 text-white' : 'bg-violet-50 text-violet-700 hover:bg-violet-100'}`}>
-          {open ? 'Cancel' : 'Complete'}
+          {open ? 'Cancel' : (isFill ? 'Open' : 'Complete')}
           {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
         </button>
       </div>
@@ -48,18 +104,30 @@ function ActionCard({ item, onComplete }) {
       {open && (
         <div className="border-t border-slate-100 px-4 pb-4 bg-slate-50/50">
           <div className="pt-3 space-y-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Notes / Output</label>
-              <textarea
-                autoFocus
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 resize-none bg-white"
-                rows={3} value={notes} onChange={e => setNotes(e.target.value)}
-                placeholder="Add notes, decisions, or output..." />
-            </div>
+            {isFill && item.module && (
+              <FillForm module={item.module} data={form} onChange={setForm} />
+            )}
+
+            {item.taskKind === 'validate' && (
+              <div className="text-xs text-slate-500 bg-white border border-slate-200 rounded-xl p-3">
+                Completing this task will check that the PG and Agency records have all required fields.
+              </div>
+            )}
+
+            {!isFill && item.taskKind !== 'validate' && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Notes / Output</label>
+                <textarea
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 resize-none bg-white"
+                  rows={2} value={notes} onChange={e => setNotes(e.target.value)}
+                  placeholder="Add notes, decisions, or output..." />
+              </div>
+            )}
+
             <button onClick={handleComplete} disabled={loading}
               className="flex items-center gap-2 px-4 py-2.5 bg-green-600 text-white rounded-xl hover:bg-green-700 text-sm font-semibold disabled:opacity-60 transition-colors">
               <CheckCircle2 size={16} />
-              {loading ? 'Saving...' : 'Mark Complete'}
+              {loading ? 'Saving...' : isFill ? 'Submit & Complete' : 'Mark Complete'}
             </button>
           </div>
         </div>
