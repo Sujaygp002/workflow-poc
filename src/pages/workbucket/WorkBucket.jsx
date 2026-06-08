@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { CheckCircle2, Clock, ChevronDown, ChevronUp, ArrowLeft, RefreshCw, Inbox } from 'lucide-react';
-import { getUsers, getMyWorkItems, getMyCompletedItems, completeActionInstance, getModule, setTaskFormData } from '../../store';
+import { CheckCircle2, Clock, ChevronDown, ChevronUp, ArrowLeft, RefreshCw, Inbox, Eye, EyeOff } from 'lucide-react';
+import { getUsers, getMyWorkItems, getMyCompletedItems, completeActionInstance, getModule, setTaskFormData, getInstance, validateRecord } from '../../store';
 
 // Plausible valid sample per module (a button prefills it for the demo).
 const SAMPLES = {
@@ -48,25 +48,107 @@ function FillForm({ module, data, onChange }) {
   );
 }
 
+// Per-module row inside the validate card: name + verdict dropdown + detail toggle.
+function ValidateModuleRow({ fillTi, verdict, onVerdict }) {
+  const [showDetails, setShowDetails] = useState(false);
+  const mod = getModule(fillTi.module);
+  const name = fillTi.formData?.name || '(no name yet)';
+  const zip  = fillTi.formData?.zip  || '';
+  const fields = mod ? mod.fields : [];
+
+  return (
+    <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
+      <div className="flex items-center gap-3 px-3 py-2.5">
+        <span className="text-xs font-bold text-slate-500 uppercase w-14 shrink-0">{fillTi.module}</span>
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-semibold text-slate-700 truncate">{name}</div>
+          {zip && <div className="text-[11px] text-slate-400">ZIP {zip}</div>}
+        </div>
+
+        {/* true / false verdict dropdown */}
+        <select
+          value={verdict === true ? 'true' : verdict === false ? 'false' : ''}
+          onChange={e => onVerdict(e.target.value === 'true' ? true : e.target.value === 'false' ? false : null)}
+          className={`text-xs font-semibold px-2 py-1.5 rounded-lg border focus:outline-none focus:ring-2 focus:ring-violet-400 ${
+            verdict === true  ? 'bg-green-50 border-green-300 text-green-700' :
+            verdict === false ? 'bg-rose-50 border-rose-300 text-rose-700' :
+            'bg-slate-50 border-slate-200 text-slate-500'
+          }`}
+        >
+          <option value="">— decide —</option>
+          <option value="true">✓ Valid</option>
+          <option value="false">✗ Invalid</option>
+        </select>
+
+        {/* details toggle */}
+        <button
+          onClick={() => setShowDetails(s => !s)}
+          className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 shrink-0"
+          title="View filled details">
+          {showDetails ? <EyeOff size={14} /> : <Eye size={14} />}
+        </button>
+      </div>
+
+      {showDetails && (
+        <div className="border-t border-slate-100 px-3 py-2 bg-slate-50/60 grid grid-cols-2 gap-x-4 gap-y-1">
+          {fields.map(f => (
+            <div key={f.key} className="flex flex-col">
+              <span className="text-[10px] text-slate-400 uppercase tracking-wide">{f.label}</span>
+              <span className={`text-xs font-medium ${fillTi.formData?.[f.key] ? 'text-slate-700' : 'text-rose-400 italic'}`}>
+                {fillTi.formData?.[f.key] || (f.required ? 'missing' : '—')}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ActionCard({ item, onComplete }) {
   const [open, setOpen] = useState(false);
   const [notes, setNotes] = useState('');
   const [form, setForm] = useState(item.formData || {});
   const [loading, setLoading] = useState(false);
+  // verdicts: { [taskInstanceId]: true | false | null }
+  const [verdicts, setVerdicts] = useState({});
 
   const isFill = item.taskKind === 'fill' || item.taskKind === 'fix';
+  const isValidate = item.taskKind === 'validate';
   const kindBadge = {
     fill: 'create / fill', validate: 'validate', map: 'map to SA', fix: 'fix data',
   }[item.taskKind];
 
+  // Resolve fill tasks from the live instance so we always have up-to-date formData.
+  const fillTasks = (() => {
+    if (!isValidate) return [];
+    const inst = getInstance(item.instanceId);
+    if (!inst) return [];
+    const prereqs = inst.taskInstances.find(t => t.id === item.taskInstanceId);
+    const prereqIds = Array.isArray(prereqs?.PreReq) ? prereqs.PreReq : [];
+    return inst.taskInstances.filter(t => prereqIds.includes(t.stepId) && t.taskKind === 'fill');
+  })();
+
+  // Initialise verdicts from auto-check once we know the fill tasks.
+  useEffect(() => {
+    if (!isValidate || fillTasks.length === 0) return;
+    const init = {};
+    fillTasks.forEach(ft => {
+      init[ft.id] = validateRecord(ft.module, ft.formData).ok;
+    });
+    setVerdicts(init);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item.taskInstanceId]);
+
+  const allDecided = isValidate ? fillTasks.every(ft => verdicts[ft.id] !== undefined && verdicts[ft.id] !== null) : true;
+
   async function handleComplete() {
     setLoading(true);
-    // Persist the filled-in record before completing the task.
     if (isFill && item.taskInstanceId) {
       setTaskFormData(item.instanceId, item.taskInstanceId, form);
     }
     await new Promise(r => setTimeout(r, 200));
-    onComplete(item, notes);
+    onComplete(item, notes, isValidate ? verdicts : undefined);
   }
 
   return (
@@ -96,7 +178,7 @@ function ActionCard({ item, onComplete }) {
         <button
           onClick={() => setOpen(o => !o)}
           className={`shrink-0 px-3 py-1.5 rounded-xl text-sm font-medium flex items-center gap-1 transition-colors ${open ? 'bg-violet-600 text-white' : 'bg-violet-50 text-violet-700 hover:bg-violet-100'}`}>
-          {open ? 'Cancel' : (isFill ? 'Open' : 'Complete')}
+          {open ? 'Cancel' : (isFill ? 'Open' : 'Review')}
           {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
         </button>
       </div>
@@ -108,13 +190,27 @@ function ActionCard({ item, onComplete }) {
               <FillForm module={item.module} data={form} onChange={setForm} />
             )}
 
-            {item.taskKind === 'validate' && (
-              <div className="text-xs text-slate-500 bg-white border border-slate-200 rounded-xl p-3">
-                Completing this task will check that the PG and Agency records have all required fields.
+            {isValidate && fillTasks.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Review each record</p>
+                {fillTasks.map(ft => (
+                  <ValidateModuleRow
+                    key={ft.id}
+                    fillTi={ft}
+                    verdict={verdicts[ft.id] ?? null}
+                    onVerdict={v => setVerdicts(prev => ({ ...prev, [ft.id]: v }))}
+                  />
+                ))}
               </div>
             )}
 
-            {!isFill && item.taskKind !== 'validate' && (
+            {isValidate && fillTasks.length === 0 && (
+              <div className="text-xs text-slate-500 bg-white border border-slate-200 rounded-xl p-3">
+                No fill tasks found for this validation step.
+              </div>
+            )}
+
+            {!isFill && !isValidate && (
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Notes / Output</label>
                 <textarea
@@ -124,11 +220,14 @@ function ActionCard({ item, onComplete }) {
               </div>
             )}
 
-            <button onClick={handleComplete} disabled={loading}
-              className="flex items-center gap-2 px-4 py-2.5 bg-green-600 text-white rounded-xl hover:bg-green-700 text-sm font-semibold disabled:opacity-60 transition-colors">
+            <button onClick={handleComplete} disabled={loading || (isValidate && !allDecided)}
+              className="flex items-center gap-2 px-4 py-2.5 bg-green-600 text-white rounded-xl hover:bg-green-700 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
               <CheckCircle2 size={16} />
-              {loading ? 'Saving...' : isFill ? 'Submit & Complete' : 'Mark Complete'}
+              {loading ? 'Saving...' : isFill ? 'Submit & Complete' : isValidate ? 'Submit Validation' : 'Mark Complete'}
             </button>
+            {isValidate && !allDecided && (
+              <p className="text-xs text-rose-500">Set a verdict (Valid / Invalid) for each record before submitting.</p>
+            )}
           </div>
         </div>
       )}
@@ -194,8 +293,8 @@ export default function WorkBucket() {
     );
   }
 
-  function handleComplete(item, notes) {
-    completeActionInstance(item.instanceId, item.taskInstanceId, item.actionInstanceId, notes);
+  function handleComplete(item, notes, validationOverrides) {
+    completeActionInstance(item.instanceId, item.taskInstanceId, item.actionInstanceId, notes, validationOverrides);
     refresh();
   }
 

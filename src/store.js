@@ -476,6 +476,7 @@ export function deleteWorkflow(id) {
 
 // ── Instances (launched workflows) ────────────────────
 export function getInstances() { return load(KEYS.instances); }
+export function getInstance(id) { return load(KEYS.instances).find(i => i.id === id) || null; }
 
 // ── Execution helpers ──────────────────────────────────
 //
@@ -646,7 +647,11 @@ function recomputeInstance(inst) {
   if (live.length && live.every(t => t.status === 'completed')) inst.status = 'completed';
 }
 
-export function completeActionInstance(instanceId, taskInstanceId, actionInstanceId, notes) {
+// completeActionInstance accepts an optional `validationOverrides` map:
+//   { [taskInstanceId]: true | false }
+// When provided for a validate task, the per-module verdict comes from the
+// override rather than the auto-computed required-field check.
+export function completeActionInstance(instanceId, taskInstanceId, actionInstanceId, notes, validationOverrides) {
   const list = load(KEYS.instances);
   const inst = list.find(i => i.id === instanceId);
   if (!inst) return;
@@ -664,15 +669,31 @@ export function completeActionInstance(instanceId, taskInstanceId, actionInstanc
     ti.status = 'completed';
   }
 
-  // ── Validate task: compute validity from the fill prereqs' formData ──
+  // ── Validate task: per-module verdicts (user override > auto-check) ──
   if (ti.taskKind === 'validate') {
     const prereqs = Array.isArray(ti.PreReq) ? ti.PreReq : [];
     const fillTasks = inst.taskInstances.filter(t => prereqs.includes(t.stepId) && t.taskKind === 'fill');
-    const results = fillTasks.map(ft => ({
-      module: ft.module,
-      name: ft.taskName,
-      ...validateRecord(ft.module, ft.formData),
-    }));
+    const results = fillTasks.map(ft => {
+      // If the reviewer explicitly set a verdict for this fill task, use it.
+      const override = validationOverrides && validationOverrides[ft.id];
+      if (override !== undefined) {
+        const auto = validateRecord(ft.module, ft.formData);
+        return {
+          module: ft.module,
+          taskInstanceId: ft.id,
+          name: ft.formData?.name || ft.taskName,
+          ok: override === true,
+          missing: override === true ? [] : auto.missing,
+          overridden: true,
+        };
+      }
+      return {
+        module: ft.module,
+        taskInstanceId: ft.id,
+        name: ft.formData?.name || ft.taskName,
+        ...validateRecord(ft.module, ft.formData),
+      };
+    });
     const ok = results.every(r => r.ok);
     ti.validation = { ok, results };
   }
@@ -710,8 +731,9 @@ export function setTaskFormData(instanceId, taskInstanceId, formData) {
   return ti.formData;
 }
 
-// Re-open the validate task the fix loops back to, plus re-open the fill tasks
-// so the creators can correct data, and reset the gate + branches for a re-run.
+// Re-open the validate task the fix loops back to, plus re-open ONLY the fill
+// tasks whose module was marked invalid in the last validation result. If all
+// were invalid (or no granular result exists) all fills are re-opened.
 function reopenLoop(inst, fixTi) {
   const reset = ti => {
     ti.status = 'active';
@@ -731,16 +753,22 @@ function reopenLoop(inst, fixTi) {
   const validate = inst.taskInstances.find(t => t.stepId === fixTi.loopBackTo);
   if (!validate) return;
 
-  // Re-open the fill tasks the validate depends on so they can be corrected.
+  // Determine which fill task-instance IDs were invalid in the last round.
+  const lastResults = validate.validation?.results || [];
+  const invalidIds = new Set(
+    lastResults.filter(r => !r.ok).map(r => r.taskInstanceId).filter(Boolean)
+  );
+
   const fillIds = Array.isArray(validate.PreReq) ? validate.PreReq : [];
   inst.taskInstances.forEach(t => {
-    if (fillIds.includes(t.stepId) && t.taskKind === 'fill') reset(t);
+    if (!fillIds.includes(t.stepId) || t.taskKind !== 'fill') return;
+    // Re-open only the invalid ones; if no granular info re-open all.
+    if (invalidIds.size === 0 || invalidIds.has(t.id)) reset(t);
   });
-  // Validate becomes pending again (waits for the re-opened fills).
+  // Validate becomes pending again (waits for the re-opened fills to complete).
   toPending(validate);
 
-  // The gate (conditional) that depended on validate, the map branch, and the
-  // fix branch all reset to pending so the gate can re-route next round.
+  // Gate, map, and fix all reset so the gate can re-route next round.
   inst.taskInstances.forEach(t => {
     if (t.type === 'conditional' && Array.isArray(t.PreReq) && t.PreReq.includes(validate.stepId)) {
       toPending(t);
