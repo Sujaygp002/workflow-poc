@@ -13,7 +13,7 @@ const KEYS = {
   workflows: 'wf_workflows',
   instances: 'wf_instances',
   users: 'wf_users',
-  seeded: 'wf_seeded_v19',
+  seeded: 'wf_seeded_v20',
   patientDb: 'wf_patient_db',   // persistent "database" of patients (existence check)
   orderDb: 'wf_order_db',       // persistent "database" of orders
 };
@@ -590,46 +590,39 @@ function seedIfNeeded() {
       // once per patient (see launchBulkUpload).
       id: 'wf7',
       name: 'Bulk Upload Patient & Order',
-      description: 'Ingest an uploaded CSV/XLSX of patients & orders. For each patient (one at a time): check if the patient exists → create or update; check if the order exists → create or update; then a person reviews & confirms the assembled record.',
+      description: 'Ingest an uploaded CSV/XLSX of patients & orders, looping over every patient one at a time until the last patient & last order. A condition (does the patient/order already exist?) picks create vs update — the condition is an attribute on the task, not its own step. A person reviews & confirms each assembled record.',
       triggerId: 'trigger-7',
       bulkUpload: true,
+      // The loop is explicit: run the body for-each patient, until last patient & order.
+      loop: { over: 'patient', until: 'last patient & last order' },
       createdAt: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+      // Loop BODY. A condition is NOT a step — it lives on the task as `when`:
+      //   { decision, expr, equals }  → the task runs only when decision === equals.
+      // Two tasks share a decision (one for true, one for false) = the branch.
       steps: [
-        {
-          id: 'wf7-s1', type: 'conditional', actor: 'system', name: 'Patient Exists?',
-          description: 'Look the patient up by name + DOB + MRN.',
-          PreReq: 'none',
-          condition: 'if/else', conditionExpr: 'patient (name+dob+mrn) in DB',
-          trueTarget: 'wf7-s2', falseTarget: 'wf7-s3',
-          branches: ['true → Update Patient', 'false → Create Patient'],
-        },
         {
           id: 'wf7-s2', type: 'task', actor: 'system', taskKind: 'update-patient',
           name: 'Update Patient', description: 'Patient found — append the new admission & episode.',
-          PreReq: ['wf7-s1'],
+          PreReq: 'none',
+          when: { decision: 'patientExists', expr: 'patient (name+dob+mrn) in DB', equals: true },
         },
         {
           id: 'wf7-s3', type: 'task', actor: 'system', taskKind: 'create-patient',
           name: 'Create Patient', description: 'New patient — create with admission & episode.',
-          PreReq: ['wf7-s1'],
-        },
-        {
-          id: 'wf7-s4', type: 'conditional', actor: 'system', name: 'Order Exists?',
-          description: 'Look the order up by order no.',
-          PreReq: ['wf7-s2', 'wf7-s3'],
-          condition: 'if/else', conditionExpr: 'orderno in DB',
-          trueTarget: 'wf7-s5', falseTarget: 'wf7-s6',
-          branches: ['true → Update Order', 'false → Create Order'],
+          PreReq: 'none',
+          when: { decision: 'patientExists', expr: 'patient (name+dob+mrn) in DB', equals: false },
         },
         {
           id: 'wf7-s5', type: 'task', actor: 'system', taskKind: 'update-order',
           name: 'Update Order', description: 'Order found — update it.',
-          PreReq: ['wf7-s4'],
+          PreReq: ['wf7-s2', 'wf7-s3'],
+          when: { decision: 'orderExists', expr: 'orderno in DB', equals: true },
         },
         {
           id: 'wf7-s6', type: 'task', actor: 'system', taskKind: 'create-order',
           name: 'Create Order', description: 'New order — create and link to the patient.',
-          PreReq: ['wf7-s4'],
+          PreReq: ['wf7-s2', 'wf7-s3'],
+          when: { decision: 'orderExists', expr: 'orderno in DB', equals: false },
         },
         {
           id: 'wf7-s7', type: 'task', actor: 'human', taskKind: 'review-record',
@@ -845,15 +838,26 @@ export function launchBulkUpload(rows) {
   patients.forEach((pp, pIdx) => {
     const { patient, orders } = pp;
     const order = orders[0];                 // primary order for this patient
-    const exists = patientExists(patient);
-    const ordExists = orderExists(order?.orderno);
+
+    // Per-patient condition outcomes (the "conditions", not steps).
+    const decisions = {
+      patientExists: patientExists(patient),
+      orderExists: orderExists(order?.orderno),
+    };
+
+    // The system actually creates/updates in the DB now.
+    const storedPatient = upsertPatient(patient);
+    const storedOrder = order ? upsertOrder(order) : null;
 
     // unique per-patient step id so PreReq references stay within this patient
     const sid = stepBase => `p${pIdx}-${stepBase}`;
     const uidByStep = {};
 
-    const makeTi = (s, extra = {}) => {
+    const makeTi = (s) => {
       const isHuman = s.actor === 'human';
+      // resolve the task's condition: it runs only when decision === equals
+      const when = s.when || null;
+      const conditionMet = when ? decisions[when.decision] === when.equals : true;
       const ti = {
         id: uid(),
         stepId: sid(s.id),
@@ -863,25 +867,19 @@ export function launchBulkUpload(rows) {
         actor: s.actor || 'system',
         taskName: s.name,
         description: s.description || '',
-        type: s.type || 'task',
+        type: 'task',
         taskKind: s.taskKind || null,
-        condition: s.condition || 'none',
-        conditionExpr: s.conditionExpr || '',
-        branches: s.branches || [],
-        trueTarget: s.trueTarget ? sid(s.trueTarget) : null,
-        falseTarget: s.falseTarget ? sid(s.falseTarget) : null,
-        cases: [],
-        chosenTarget: null,
+        when,                          // { decision, expr, equals } | null
+        decisionValue: when ? decisions[when.decision] : null,
+        conditionMet,                  // false → this branch is skipped
         PreReq: Array.isArray(s.PreReq) ? s.PreReq.map(sid) : 'none',
-        patientRecord: null,
-        orderRecord: null,
-        existsDecision: null,
+        patientRecord: storedPatient,
+        orderRecord: storedOrder,
+        allOrders: orders,
         status: 'pending',
         assignedTo: null,
         actionInstances: [{ id: uid(), actionName: s.name, assignedTo: null, status: 'blocked', completedAt: null, notes: '', order: 0 }],
-        ...extra,
       };
-      // Humans get assigned; the human review also gates the next patient.
       if (isHuman) {
         const a = autoAssign(users, counterRef);
         ti.assignedTo = a;
@@ -894,45 +892,13 @@ export function launchBulkUpload(rows) {
 
     body.forEach(s => makeTi(s));
 
-    // Sequence patients: this patient's first conditional waits on the previous
-    // patient's human review (one patient at a time).
-    const first = uidByStep['wf7-s1'];
+    // Sequence patients: this patient's first tasks wait on the previous
+    // patient's human review (one patient at a time, until the last).
     if (prevPatientReviewStepUid) {
-      first.PreReq = [prevPatientReviewStepUid];
-    } else {
-      first.PreReq = 'none';
+      ['wf7-s2', 'wf7-s3'].forEach(b => { uidByStep[b].PreReq = [prevPatientReviewStepUid]; });
     }
 
-    // ── Pre-resolve the system branches & auto-run system steps ──
-    const condPatient = uidByStep['wf7-s1'];
-    const updPatient = uidByStep['wf7-s2'];
-    const crtPatient = uidByStep['wf7-s3'];
-    const condOrder = uidByStep['wf7-s4'];
-    const updOrder = uidByStep['wf7-s5'];
-    const crtOrder = uidByStep['wf7-s6'];
-    const review = uidByStep['wf7-s7'];
-
-    condPatient.existsDecision = exists;
-    condOrder.existsDecision = ordExists;
-
-    // Persist to the DB (the system actually creates/updates).
-    const storedPatient = upsertPatient(patient);
-    const storedOrder = order ? upsertOrder(order) : null;
-
-    const chosenPatient = exists ? updPatient : crtPatient;
-    const skippedPatient = exists ? crtPatient : updPatient;
-    const chosenOrder = ordExists ? updOrder : crtOrder;
-    const skippedOrder = ordExists ? crtOrder : updOrder;
-
-    chosenPatient.patientRecord = storedPatient;
-    chosenOrder.orderRecord = storedOrder;
-    review.patientRecord = storedPatient;
-    review.orderRecord = storedOrder;
-    review.allOrders = orders;
-
-    review.PreReq = [chosenOrder.stepId];   // review only follows the taken order branch
-
-    prevPatientReviewStepUid = review.stepId;
+    prevPatientReviewStepUid = uidByStep['wf7-s7'].stepId;
   });
 
   const instance = {
@@ -984,15 +950,14 @@ function recomputeBulk(inst) {
       const prereqs = Array.isArray(ti.PreReq) ? ti.PreReq : [];
       if (!prereqs.every(isSatisfied)) continue;
 
-      if (ti.type === 'conditional') {
-        const chosen = ti.existsDecision ? ti.trueTarget : ti.falseTarget;
-        const other = ti.existsDecision ? ti.falseTarget : ti.trueTarget;
-        ti.chosenTarget = chosen;
-        ti.status = 'completed';
-        ti.actionInstances.forEach(a => { a.status = 'completed'; a.completedAt = new Date().toISOString(); });
-        if (other) skip(other);
+      // Condition on the task: if it's not met, this branch is skipped.
+      if (ti.conditionMet === false) {
+        skip(ti.stepId);
         changed = true;
-      } else if (ti.actor === 'system') {
+        continue;
+      }
+
+      if (ti.actor === 'system') {
         // System task auto-completes immediately.
         ti.status = 'completed';
         ti.actionInstances.forEach(a => { a.status = 'completed'; a.completedAt = new Date().toISOString(); });

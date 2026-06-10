@@ -166,9 +166,102 @@ function StepBlock({ ti, tIdx, isLast, users }) {
   );
 }
 
-// ── Bulk upload: per-patient flow charts ───────────────
+// ── Bulk upload: a visible loop over patients ──────────
 // System (blue) steps auto-run; the human (pink) review is the only person task.
-// Each uploaded patient runs the loop body, shown as its own START→…→END chart.
+// A condition is NOT a step — it's a label on the arrow between two steps, showing
+// which branch (create vs update) was taken. The whole body sits inside a loop
+// frame that repeats until the last patient & last order are done.
+
+function StepCard({ ti }) {
+  const skipped = ti.status === 'skipped';
+  if (skipped) return null; // not-taken branch isn't shown; the taken one is the box
+  const isHuman = ti.actor === 'human';
+  const done = ti.status === 'completed';
+  const active = ti.status === 'active';
+  const tone = isHuman
+    ? (active ? 'border-pink-300 bg-pink-50/60 ring-1 ring-pink-100' : done ? 'border-green-200 bg-green-50/40' : 'border-pink-100 bg-pink-50/30')
+    : (done ? 'border-green-200 bg-green-50/40' : 'border-sky-200 bg-sky-50/50');
+  return (
+    <div className={`w-[260px] border-2 rounded-xl px-3 py-2.5 ${tone}`}>
+      <div className="flex items-center gap-2">
+        <span className={`text-[9px] px-1 py-0.5 rounded font-bold ${isHuman ? 'bg-pink-100 text-pink-600' : 'bg-sky-100 text-sky-600'}`}>
+          {isHuman ? 'HUMAN' : 'SYS'}
+        </span>
+        <span className="text-sm font-semibold text-slate-700 flex-1">{ti.taskName}</span>
+        {done ? <CheckCircle2 size={14} className="text-green-500" />
+          : active ? <Circle size={13} className="text-pink-400 fill-pink-100" />
+          : <Circle size={13} className="text-slate-300" />}
+      </div>
+    </div>
+  );
+}
+
+// A small arrow with the condition outcome written on it.
+function ConditionArrow({ cond }) {
+  // cond: { expr, decided (bool|null), takenLabel }
+  return (
+    <div className="flex flex-col items-center py-1 select-none">
+      <div className="w-px h-3 bg-slate-300" />
+      {cond && (
+        <div className="text-[10px] font-mono px-2 py-0.5 rounded-full border bg-amber-50 border-amber-200 text-amber-700 my-0.5">
+          ◆ {cond.expr}
+          {cond.decided != null && (
+            <> → <b>{cond.decided ? 'TRUE' : 'FALSE'}</b> · {cond.takenLabel}</>
+          )}
+        </div>
+      )}
+      <svg width="10" height="8" viewBox="0 0 10 8" className="text-slate-300">
+        <path d="M0 0 L5 8 L10 0" fill="currentColor" />
+      </svg>
+    </div>
+  );
+}
+
+// One patient's pass through the loop body. A condition lives on the arrow; the
+// task it gates (whichever branch was taken) is the box below it.
+function PatientPass({ rows }) {
+  const byBase = {};
+  rows.forEach(r => { byBase[r.baseStepId] = r; });
+
+  const updPatient = byBase['wf7-s2'];
+  const crtPatient = byBase['wf7-s3'];
+  const updOrder   = byBase['wf7-s5'];
+  const crtOrder   = byBase['wf7-s6'];
+  const review     = byBase['wf7-s7'];
+
+  // the taken task for a branch = the one whose condition was met (not skipped)
+  const taken = (a, b) => (a && a.status !== 'skipped') ? a : b;
+  const patientStep = taken(updPatient, crtPatient);
+  const orderStep   = taken(updOrder, crtOrder);
+
+  // a decision is "made" once its branch task has resolved
+  const patientDecided = (updPatient?.status !== 'pending') || (crtPatient?.status !== 'pending');
+  const orderDecided   = (updOrder?.status !== 'pending') || (crtOrder?.status !== 'pending');
+
+  return (
+    <div className="flex flex-col items-center">
+      <ConditionArrow cond={{
+        expr: updPatient?.when?.expr || 'patient exists?',
+        decided: patientDecided ? !!patientStep?.decisionValue : null,
+        takenLabel: patientStep?.taskName,
+      }} />
+      {patientStep && <StepCard ti={patientStep} />}
+
+      <ConditionArrow cond={{
+        expr: updOrder?.when?.expr || 'order exists?',
+        decided: orderDecided ? !!orderStep?.decisionValue : null,
+        takenLabel: orderStep?.taskName,
+      }} />
+      {orderStep && <StepCard ti={orderStep} />}
+
+      <div className="flex flex-col items-center py-1">
+        <div className="w-px h-4 bg-slate-300" />
+        <svg width="10" height="8" viewBox="0 0 10 8" className="text-slate-300"><path d="M0 0 L5 8 L10 0" fill="currentColor" /></svg>
+      </div>
+      {review && <StepCard ti={review} />}
+    </div>
+  );
+}
 
 function BulkInstanceCard({ instance, users, onComplete, onDelete }) {
   // group task instances by patient index, preserving body order
@@ -177,18 +270,18 @@ function BulkInstanceCard({ instance, users, onComplete, onDelete }) {
     (byPatient[ti.patientIndex] = byPatient[ti.patientIndex] || []).push({ ...ti, _instanceId: instance.id });
   });
   const patientIdxs = Object.keys(byPatient).map(Number).sort((a, b) => a - b);
+  const total = patientIdxs.length;
 
   const live = instance.taskInstances.filter(t => t.status !== 'skipped');
   const doneTasks = live.filter(t => t.status === 'completed').length;
   const stage = instanceStage(instance);
+  const donePatients = patientIdxs.filter(i => byPatient[i].filter(t => t.status !== 'skipped').every(t => t.status === 'completed')).length;
   const activePatient = patientIdxs.find(i => byPatient[i].some(t => t.status === 'active' || (t.status !== 'completed' && t.status !== 'skipped')));
 
-  // default the visible patient to whoever is currently active
-  const [selected, setSelected] = useState(activePatient != null ? activePatient : patientIdxs[0]);
-  const rows = byPatient[selected] || [];
-  const laneDone = rows.filter(t => t.status !== 'skipped').every(t => t.status === 'completed');
-  // the human review for the visible patient (its record + confirm button)
-  const review = rows.find(t => t.actor === 'human');
+  // the currently active human review (if any) for the record + confirm panel
+  const activeReview = instance.taskInstances.find(t => t.actor === 'human' && t.status === 'active');
+
+  const allDone = instance.status === 'completed';
 
   return (
     <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
@@ -199,13 +292,13 @@ function BulkInstanceCard({ instance, users, onComplete, onDelete }) {
             <span className="font-semibold text-slate-800">{instance.workflowName}</span>
             <Badge label={instance.status} type={instance.status} />
             <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-100">
-              <UsersIcon size={10} /> {instance.patientCount} patient{instance.patientCount !== 1 ? 's' : ''} · one at a time
+              <UsersIcon size={10} /> {total} patient{total !== 1 ? 's' : ''} · one at a time
             </span>
           </div>
           <div className="flex items-center gap-3 mt-1 text-xs text-slate-400">
             <span className="flex items-center gap-1"><Clock size={10} /> {new Date(instance.launchedAt).toLocaleString()}</span>
             <span>{doneTasks}/{live.length} steps</span>
-            {instance.status === 'running' && activePatient != null && <span>· now on patient {activePatient + 1}</span>}
+            <span>· {donePatients}/{total} patients done</span>
           </div>
           <StageHeader stage={stage} />
         </div>
@@ -215,64 +308,90 @@ function BulkInstanceCard({ instance, users, onComplete, onDelete }) {
         </button>
       </div>
 
-      {/* patient selector (one chart at a time, like a single workflow) */}
-      <div className="border-t border-slate-100 bg-slate-50/40 px-4 pt-3">
-        <div className="flex items-center gap-2 flex-wrap">
-          {patientIdxs.map(pIdx => {
-            const r = byPatient[pIdx];
-            const pname = r[0]?.patientName || `Patient ${pIdx + 1}`;
-            const active = r.some(t => t.status === 'active');
-            const done = r.filter(t => t.status !== 'skipped').every(t => t.status === 'completed');
-            const isSel = pIdx === selected;
-            return (
-              <button key={pIdx} onClick={() => setSelected(pIdx)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
-                  isSel ? 'bg-white border-violet-300 text-violet-700 shadow-sm'
-                  : 'bg-white/60 border-slate-200 text-slate-500 hover:border-violet-200'}`}>
-                <span className={`w-4 h-4 rounded-full text-[9px] font-bold flex items-center justify-center ${
-                  done ? 'bg-green-200 text-green-700' : active ? 'bg-pink-200 text-pink-700' : 'bg-slate-200 text-slate-500'}`}>
-                  {pIdx + 1}
-                </span>
-                {pname}
-                {active && <span className="w-1.5 h-1.5 rounded-full bg-pink-400" />}
-                {done && <CheckCircle2 size={11} className="text-green-500" />}
-              </button>
-            );
-          })}
-        </div>
-        {/* legend */}
-        <div className="flex items-center gap-3 text-[11px] text-slate-500 mt-2">
-          <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-sky-200 border border-sky-300" /> system (auto)</span>
-          <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-pink-200 border border-pink-300" /> human (review)</span>
+      {/* legend */}
+      <div className="border-t border-slate-100 bg-slate-50/40 px-4 pt-3 flex items-center gap-3 text-[11px] text-slate-500">
+        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-sky-200 border border-sky-300" /> system (auto)</span>
+        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-pink-200 border border-pink-300" /> human (review)</span>
+        <span className="inline-flex items-center gap-1"><span className="text-amber-500">◆</span> condition on arrow</span>
+      </div>
+
+      {/* the visible LOOP: START → (for each patient) body → loop back → END */}
+      <div className="bg-slate-50/40 px-4 py-5 overflow-x-auto">
+        <div className="flex flex-col items-center min-w-fit">
+          <div className="rounded-full px-6 py-1.5 text-sm font-bold border-2 border-violet-400 bg-violet-50 text-violet-700">START</div>
+
+          {/* loop frame */}
+          <div className="mt-3 w-full max-w-md border-2 border-dashed border-purple-300 rounded-2xl bg-purple-50/30 px-4 py-3">
+            <div className="flex items-center justify-center gap-1.5 text-[11px] font-bold text-purple-700 mb-1">
+              <RefreshCw size={12} /> LOOP · for each patient ({Math.min(donePatients + (activePatient != null ? 1 : 0), total)} of {total})
+            </div>
+
+            {patientIdxs.map((pIdx, i) => {
+              const rows = byPatient[pIdx];
+              const pname = rows[0]?.patientName || `Patient ${pIdx + 1}`;
+              const pActive = rows.some(t => t.status === 'active');
+              const pDone = rows.filter(t => t.status !== 'skipped').every(t => t.status === 'completed');
+              const pStarted = rows.some(t => t.status !== 'pending');
+              const isLast = i === patientIdxs.length - 1;
+              return (
+                <div key={pIdx}>
+                  {/* iteration header */}
+                  <div className="flex items-center justify-center gap-2 my-2">
+                    <span className={`w-6 h-6 rounded-full text-xs font-bold flex items-center justify-center ${
+                      pDone ? 'bg-green-200 text-green-700' : pActive ? 'bg-pink-200 text-pink-700' : 'bg-slate-200 text-slate-500'}`}>{pIdx + 1}</span>
+                    <span className="text-sm font-semibold text-slate-700">{pname}</span>
+                    {pDone && <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-semibold">done</span>}
+                    {pActive && <span className="text-[10px] px-2 py-0.5 rounded-full bg-pink-100 text-pink-700 font-semibold">in progress</span>}
+                    {!pStarted && <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-semibold">waiting</span>}
+                  </div>
+
+                  {/* only draw the body once it's started; collapsed for waiting ones */}
+                  {pStarted ? (
+                    <div className={pActive || pDone ? '' : 'opacity-60'}>
+                      <PatientPass rows={rows} />
+                    </div>
+                  ) : (
+                    <div className="text-center text-[11px] text-slate-400 italic pb-1">…queued, runs after patient {pIdx}</div>
+                  )}
+
+                  {/* loop-back arrow between iterations */}
+                  {!isLast && (
+                    <div className="flex items-center justify-center gap-2 my-2 text-[11px] text-purple-600">
+                      <RefreshCw size={11} /> more patients? → next iteration
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            <div className="flex items-center justify-center gap-2 mt-2 text-[11px] font-medium text-purple-700">
+              {allDone ? '✓ last patient & last order reached — exit loop' : 'repeat until last patient & last order'}
+            </div>
+          </div>
+
+          <div className="mt-3 flex flex-col items-center">
+            <div className="w-px h-4 bg-slate-300" />
+            <svg width="10" height="8" viewBox="0 0 10 8" className="text-slate-300"><path d="M0 0 L5 8 L10 0" fill="currentColor" /></svg>
+          </div>
+          <div className={`rounded-full px-6 py-1.5 text-sm font-bold border-2 ${allDone ? 'border-green-400 bg-green-50 text-green-700' : 'border-slate-300 bg-white text-slate-400'}`}>
+            END {allDone && '· all patients done'}
+          </div>
         </div>
       </div>
 
-      {/* the selected patient's run as a flow chart (START → diamonds → END) */}
-      <div className="border-t border-slate-100 bg-slate-50/40">
-        <WorkflowFlowChart
-          nodes={nodesFromInstance(instance, users, rows)}
-          endDone={laneDone}
-        />
-      </div>
-
-      {/* the human review for this patient: record + confirm */}
-      {review && review.status === 'active' && (
+      {/* the active human review: record + confirm */}
+      {activeReview && (
         <div className="border-t border-slate-100 px-4 py-4 bg-pink-50/30 space-y-2">
           <div className="flex items-center gap-2">
             <User size={13} className="text-pink-500" />
-            <span className="text-sm font-semibold text-slate-700">Review & confirm — {review.patientName}</span>
+            <span className="text-sm font-semibold text-slate-700">Review & confirm — {activeReview.patientName}</span>
           </div>
-          <RecordView patient={review.patientRecord} orders={review.allOrders} />
+          <RecordView patient={activeReview.patientRecord} orders={activeReview.allOrders} />
           <button
-            onClick={() => onComplete({ instanceId: instance.id, taskInstanceId: review.id, actionInstanceId: review.actionInstances[0].id })}
+            onClick={() => onComplete({ instanceId: instance.id, taskInstanceId: activeReview.id, actionInstanceId: activeReview.actionInstances[0].id })}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-green-600 text-white hover:bg-green-700">
-            <CheckCircle2 size={14} /> Confirm record
+            <CheckCircle2 size={14} /> Confirm record & continue loop
           </button>
-        </div>
-      )}
-      {review && review.status === 'completed' && (
-        <div className="border-t border-slate-100 px-4 py-2.5 bg-green-50/30 text-xs text-green-700 flex items-center gap-1.5">
-          <CheckCircle2 size={13} /> {review.patientName}: record confirmed
         </div>
       )}
     </div>

@@ -84,6 +84,11 @@ function StepBox({ node }) {
           ↻ for each in {node.loopSet}{node.loopExpr ? ` · ${node.loopExpr}` : ''}
         </div>
       )}
+      {node.when && (
+        <div className="px-3 py-1 bg-amber-50/60 border-t border-amber-100 text-[10px] font-mono text-amber-700">
+          ◆ when {node.when.expr} = {String(node.when.equals).toUpperCase()}
+        </div>
+      )}
       {live && !skipped && node.assignee && (
         <div className="px-3 py-1.5 border-t border-slate-100 flex items-center gap-1.5 bg-white/60">
           <span className="w-4 h-4 rounded-full bg-violet-200 text-violet-700 text-[9px] font-bold flex items-center justify-center shrink-0">
@@ -349,6 +354,7 @@ export function nodesFromWorkflow(wf) {
     name: s.name,
     type: s.type || 'task',
     actor: s.actor || null,
+    when: s.when || null,
     condition: s.condition,
     conditionExpr: s.conditionExpr,
     branches: s.branches || [],
