@@ -182,7 +182,7 @@ function aggStep(instance, baseStepId) {
   return { tis, total, done, active, skipped, ran };
 }
 
-function StepNode({ name, actor, agg, sub }) {
+function StepNode({ name, actor, agg, sub, compact }) {
   const isHuman = actor === 'human';
   const allDone = agg.total > 0 && agg.done + agg.skipped === agg.total && agg.done > 0;
   const anyActive = agg.active > 0;
@@ -190,7 +190,7 @@ function StepNode({ name, actor, agg, sub }) {
     ? (anyActive ? 'border-pink-300 bg-pink-50/60 ring-1 ring-pink-100' : allDone ? 'border-green-200 bg-green-50/40' : 'border-pink-200 bg-pink-50/40')
     : (anyActive ? 'border-sky-300 bg-sky-50/70 ring-1 ring-sky-100' : allDone ? 'border-green-200 bg-green-50/40' : 'border-sky-200 bg-sky-50/50');
   return (
-    <div className={`w-[300px] border-2 rounded-xl px-3.5 py-2.5 ${tone}`}>
+    <div className={`border-2 rounded-xl px-3.5 py-2.5 ${compact ? 'w-full' : 'w-[300px]'} ${tone}`}>
       <div className="flex items-center gap-2">
         <span className={`text-[9px] px-1 py-0.5 rounded font-bold shrink-0 ${isHuman ? 'bg-pink-100 text-pink-600' : 'bg-sky-100 text-sky-600'}`}>
           {isHuman ? 'HUMAN' : 'SYS'}
@@ -205,40 +205,42 @@ function StepNode({ name, actor, agg, sub }) {
   );
 }
 
-function Arrow() {
+function Arrow({ small }) {
   return (
-    <div className="flex flex-col items-center select-none">
-      <div className="w-px h-4 bg-slate-300" />
-      <svg width="10" height="8" viewBox="0 0 10 8" className="text-slate-300"><path d="M0 0 L5 8 L10 0" fill="currentColor" /></svg>
+    <div className="flex flex-col items-center select-none my-1">
+      <div className={`w-px ${small ? 'h-3' : 'h-4'} bg-slate-300`} />
+      <svg width="10" height="8" viewBox="0 0 10 8" className="text-slate-300 -mt-px"><path d="M0 0 L5 8 L10 0" fill="currentColor" /></svg>
     </div>
   );
 }
 
-// An arrow carrying a condition; the human fallback branches to the right when the
-// condition is NO. `noCount` = how many patients took the human path.
-function ConditionFork({ expr, human, noCount }) {
+// A condition pill on the main flow; when its answer is NO some patients branch
+// to the human box shown in the right column (handled by the grid in the body).
+function ConditionPill({ expr }) {
   return (
-    <div className="flex flex-col items-center w-full select-none">
+    <div className="flex flex-col items-center select-none my-1">
       <div className="w-px h-3 bg-slate-300" />
-      <div className="relative flex items-start">
-        {/* main (YES) continues straight down */}
-        <div className="flex flex-col items-center">
-          <div className="text-[10px] font-mono px-2 py-0.5 rounded-full border bg-amber-50 border-amber-200 text-amber-700">
-            ◆ {expr}?
-          </div>
-          <div className="flex items-center gap-1 mt-1">
-            <span className="text-[10px] font-bold text-green-600">YES</span>
-            <svg width="10" height="8" viewBox="0 0 10 8" className="text-slate-300"><path d="M0 0 L5 8 L10 0" fill="currentColor" /></svg>
-          </div>
-        </div>
+      <div className="text-[10px] font-mono px-2 py-0.5 rounded-full border bg-amber-50 border-amber-200 text-amber-700 my-0.5">
+        ◆ {expr}?
+      </div>
+      <div className="flex items-center gap-1">
+        <span className="text-[10px] font-bold text-green-600">YES</span>
+        <svg width="10" height="8" viewBox="0 0 10 8" className="text-slate-300"><path d="M0 0 L5 8 L10 0" fill="currentColor" /></svg>
+      </div>
+    </div>
+  );
+}
 
-        {/* NO branch → human fallback box to the side */}
-        <div className="absolute left-full top-3 flex items-center" style={{ width: 230 }}>
-          <div className="h-px w-8 bg-rose-300" />
-          <span className="text-[10px] font-bold text-rose-500 px-1">NO</span>
-          <svg width="8" height="10" viewBox="0 0 8 10" className="text-rose-300"><path d="M0 0 L8 5 L0 10 Z" fill="currentColor" /></svg>
-          <StepNode name={human.name} actor="human" agg={human.agg} sub={`${noCount} fell to a person`} />
-        </div>
+// The "NO → human" connector that sits in the right column, vertically centred
+// against the condition pill in the main column.
+function NoBranch({ human, noCount }) {
+  return (
+    <div className="flex items-center h-full">
+      <span className="text-[10px] font-bold text-rose-500 mr-1 shrink-0">NO</span>
+      <div className="h-px w-5 bg-rose-300 shrink-0" />
+      <svg width="7" height="9" viewBox="0 0 7 9" className="text-rose-300 shrink-0"><path d="M0 0 L7 4.5 L0 9 Z" fill="currentColor" /></svg>
+      <div className="ml-1 flex-1">
+        <StepNode name={human.name} actor="human" agg={human.agg} sub={`${noCount} of ${human.agg.total} fell to a person`} compact />
       </div>
     </div>
   );
@@ -300,43 +302,61 @@ function BulkInstanceCard({ instance, users, onComplete, onDelete }) {
         <span className="text-slate-400">· counts = patients through that step</span>
       </div>
 
-      {/* ── ONE loop body with a loop-back arrow ── */}
+      {/* ── ONE loop body, two columns: main flow + human fallbacks ── */}
       <div className="bg-slate-50/40 px-6 py-6 overflow-x-auto">
-        <div className="relative min-w-[560px] flex flex-col items-center">
-          {/* loop-back arrow (curves up the right side, from END of body to top) */}
-          <svg className="absolute right-0 top-10 bottom-10 text-purple-300" width="56" height="100%" preserveAspectRatio="none" viewBox="0 0 56 100" style={{ height: 'calc(100% - 80px)' }}>
-            <path d="M28 100 C 54 100, 54 0, 28 0" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="5 4" />
-            <path d="M24 6 L28 0 L32 6 Z" fill="currentColor" />
-          </svg>
-          <div className="absolute right-[58px] top-1/2 -translate-y-1/2 rotate-90 origin-center">
-            <span className="text-[10px] font-bold text-purple-600 whitespace-nowrap flex items-center gap-1">
-              <RefreshCw size={10} /> repeat for each patient until last
-            </span>
-          </div>
-
+        <div className="w-fit mx-auto flex flex-col items-center">
           <div className="rounded-full px-6 py-1.5 text-sm font-bold border-2 border-violet-400 bg-violet-50 text-violet-700">START · bulk upload</div>
           <Arrow />
 
-          {/* loop frame */}
-          <div className="w-full max-w-[460px] border-2 border-dashed border-purple-300 rounded-2xl bg-purple-50/20 px-5 py-4 flex flex-col items-center">
-            <div className="flex items-center gap-1.5 text-[11px] font-bold text-purple-700 mb-2">
-              <RefreshCw size={12} /> FOR EACH PATIENT {allDone ? '· done' : `· iteration ${curIter} of ${total}`}
+          {/* loop frame: a flex row — [body grid] + [loop-back rail] */}
+          <div className="flex items-stretch gap-3">
+            <div className="border-2 border-dashed border-purple-300 rounded-2xl bg-purple-50/20 px-5 py-4">
+              <div className="flex items-center justify-center gap-1.5 text-[11px] font-bold text-purple-700 mb-3">
+                <RefreshCw size={12} /> FOR EACH PATIENT {allDone ? '· done' : `· iteration ${curIter} of ${total}`}
+              </div>
+
+              {/* 2-column grid: main column (320px) | human-fallback column (300px) */}
+              <div className="grid items-center gap-x-0" style={{ gridTemplateColumns: '320px 300px' }}>
+                {/* p1 */}
+                <div className="flex justify-center"><StepNode name="Auto-create patient if all fields exist" actor="system" agg={p1} /></div>
+                <div />
+                {/* condition + NO→human */}
+                <div className="flex justify-center"><ConditionPill expr="all patient fields exist" /></div>
+                <NoBranch human={{ name: 'Manually create patient (order-PDF ref)', agg: p2 }} noCount={p2.ran} />
+                {/* p3 */}
+                <div className="flex justify-center"><StepNode name="Check duplicates · create only if new" actor="system" agg={p3} /></div>
+                <div />
+
+                {/* arrow between phases */}
+                <div className="flex justify-center"><Arrow /></div>
+                <div />
+
+                {/* o1 */}
+                <div className="flex justify-center"><StepNode name="Create order on patient / admission / episode" actor="system" agg={o1} /></div>
+                <div />
+                {/* condition + NO→human */}
+                <div className="flex justify-center"><ConditionPill expr="admission & episode exist" /></div>
+                <NoBranch human={{ name: 'Create admission / episode / order (order-PDF ref)', agg: o2 }} noCount={o2.ran} />
+                {/* o3 */}
+                <div className="flex justify-center"><StepNode name="Check duplicates · create only if new" actor="system" agg={o3} /></div>
+                <div />
+              </div>
+
+              <div className="text-center text-[11px] font-medium text-purple-700 mt-3">
+                {allDone ? '✓ last patient & last order reached' : 'more patients? → repeat'}
+              </div>
             </div>
 
-            {/* patient phase */}
-            <StepNode name="Auto-create patient if all fields exist" actor="system" agg={p1} />
-            <ConditionFork expr="all patient fields exist" human={{ name: 'Manually create patient (order-PDF ref)', agg: p2 }} noCount={p2.ran} />
-            <StepNode name="Check duplicates · create only if new" actor="system" agg={p3} />
-
-            <Arrow />
-
-            {/* order phase */}
-            <StepNode name="Create order on patient / admission / episode" actor="system" agg={o1} />
-            <ConditionFork expr="admission & episode exist" human={{ name: 'Create admission / episode / order (PDF ref)', agg: o2 }} noCount={o2.ran} />
-            <StepNode name="Check duplicates · create only if new" actor="system" agg={o3} />
-
-            <div className="text-[11px] font-medium text-purple-700 mt-3">
-              {allDone ? '✓ last patient & last order reached' : 'more patients? → next iteration'}
+            {/* loop-back rail down the right side of the frame */}
+            <div className="flex flex-col items-center justify-center py-2">
+              <div className="flex-1 w-px bg-purple-300 border-l-2 border-dashed border-purple-300" />
+              <div className="rotate-180" style={{ writingMode: 'vertical-rl' }}>
+                <span className="text-[10px] font-bold text-purple-600 whitespace-nowrap flex items-center gap-1 py-2">
+                  <RefreshCw size={10} /> repeat for each patient until last
+                </span>
+              </div>
+              <div className="flex-1 w-px bg-purple-300 border-l-2 border-dashed border-purple-300" />
+              <svg width="12" height="9" viewBox="0 0 12 9" className="text-purple-400 -mt-1 rotate-180"><path d="M0 0 L6 9 L12 0 Z" fill="currentColor" /></svg>
             </div>
           </div>
 
