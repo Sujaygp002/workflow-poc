@@ -47,14 +47,20 @@ function ArrowDownTiny() {
 function StepBox({ node }) {
   const live = !!node.status;
   const skipped = node.status === 'skipped';
+  // actor coloring: system = sky/blue, human = pink. Falls back to default.
+  const actorTint = node.actor === 'human'
+    ? 'border-pink-300 bg-pink-50/50'
+    : node.actor === 'system'
+      ? 'border-sky-300 bg-sky-50/50'
+      : 'border-slate-200 bg-white';
   const borderCls = !live
-    ? 'border-slate-200 bg-white'
+    ? actorTint
     : skipped
       ? 'border-dashed border-slate-200 bg-slate-50 opacity-50'
       : node.status === 'completed'
         ? 'border-green-300 bg-green-50/40'
         : node.status === 'active'
-          ? 'border-violet-300 bg-violet-50/40 ring-2 ring-violet-100'
+          ? (node.actor === 'human' ? 'border-pink-400 bg-pink-50/50 ring-2 ring-pink-100' : 'border-violet-300 bg-violet-50/40 ring-2 ring-violet-100')
           : 'border-slate-200 bg-white opacity-70';
 
   return (
@@ -64,6 +70,11 @@ function StepBox({ node }) {
           {typeIcon[node.type]}
         </span>
         <span className={`font-semibold text-sm flex-1 truncate ${skipped ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{node.name}</span>
+        {node.actor && !live && (
+          <span className={`text-[9px] px-1 py-0.5 rounded font-bold shrink-0 ${node.actor === 'human' ? 'bg-pink-100 text-pink-600' : 'bg-sky-100 text-sky-600'}`}>
+            {node.actor === 'human' ? 'HUMAN' : 'SYS'}
+          </span>
+        )}
         {live && (skipped
           ? <span className="text-[10px] text-slate-400 shrink-0 italic">skipped</span>
           : subStepIcon(node.status))}
@@ -337,6 +348,7 @@ export function nodesFromWorkflow(wf) {
     id: s.id,
     name: s.name,
     type: s.type || 'task',
+    actor: s.actor || null,
     condition: s.condition,
     conditionExpr: s.conditionExpr,
     branches: s.branches || [],
@@ -360,6 +372,7 @@ export function nodesFromInstance(instance, users = []) {
     id: ti.id,
     name: ti.taskName,
     type: ti.type || 'task',
+    actor: ti.actor || null,
     condition: ti.condition,
     conditionExpr: ti.conditionExpr,
     branches: ti.branches || [],

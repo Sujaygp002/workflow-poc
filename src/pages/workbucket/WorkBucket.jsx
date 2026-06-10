@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { CheckCircle2, Clock, ChevronDown, ChevronUp, ArrowLeft, RefreshCw, Inbox, Eye, EyeOff } from 'lucide-react';
 import { getUsers, getMyWorkItems, getMyCompletedItems, completeActionInstance, getModule, setTaskFormData, getInstance, validateRecord } from '../../store';
+import RecordView from '../../components/RecordView';
 
 // Plausible valid sample per module (a button prefills it for the demo).
 const SAMPLES = {
@@ -115,8 +116,10 @@ function ActionCard({ item, onComplete }) {
 
   const isFill = item.taskKind === 'fill' || item.taskKind === 'fix';
   const isValidate = item.taskKind === 'validate';
+  const isReview = item.taskKind === 'review-record';
   const kindBadge = {
     fill: 'create / fill', validate: 'validate', map: 'map to SA', fix: 'fix data',
+    'review-record': 'review record',
   }[item.taskKind];
 
   // Resolve fill tasks from the live instance so we always have up-to-date formData.
@@ -210,7 +213,15 @@ function ActionCard({ item, onComplete }) {
               </div>
             )}
 
-            {!isFill && !isValidate && (
+            {isReview && (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Assembled record for {item.patientName}</p>
+                <RecordView patient={item.patientRecord} orders={item.allOrders} order={item.orderRecord} />
+                <p className="text-[11px] text-slate-400">The system already created/updated this record. Confirm it looks correct to finish this patient and move to the next.</p>
+              </div>
+            )}
+
+            {!isFill && !isValidate && !isReview && (
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Notes / Output</label>
                 <textarea
@@ -223,7 +234,7 @@ function ActionCard({ item, onComplete }) {
             <button onClick={handleComplete} disabled={loading || (isValidate && !allDecided)}
               className="flex items-center gap-2 px-4 py-2.5 bg-green-600 text-white rounded-xl hover:bg-green-700 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
               <CheckCircle2 size={16} />
-              {loading ? 'Saving...' : isFill ? 'Submit & Complete' : isValidate ? 'Submit Validation' : 'Mark Complete'}
+              {loading ? 'Saving...' : isFill ? 'Submit & Complete' : isValidate ? 'Submit Validation' : isReview ? 'Confirm Record' : 'Mark Complete'}
             </button>
             {isValidate && !allDecided && (
               <p className="text-xs text-rose-500">Set a verdict (Valid / Invalid) for each record before submitting.</p>

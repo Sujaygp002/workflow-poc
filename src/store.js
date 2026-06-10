@@ -13,7 +13,9 @@ const KEYS = {
   workflows: 'wf_workflows',
   instances: 'wf_instances',
   users: 'wf_users',
-  seeded: 'wf_seeded_v18',
+  seeded: 'wf_seeded_v19',
+  patientDb: 'wf_patient_db',   // persistent "database" of patients (existence check)
+  orderDb: 'wf_order_db',       // persistent "database" of orders
 };
 
 function load(key) {
@@ -135,6 +137,162 @@ export function validateRecord(moduleId, data) {
   return { ok: missing.length === 0, missing };
 }
 
+// ── Bulk-upload object model: Patient (nested) + Order ──────────────────────
+// A patient owns one→many Admissions; each Admission owns one→many Episodes.
+// An order references a patient by the natural key (patientName + dob + mrn)
+// and carries its own orderno key. The flat upload columns are folded into this
+// nested shape by `parseUploadRows` below.
+export const PATIENT_FIELDS = [
+  { key: 'patientName', label: 'Patient name', key_field: true },
+  { key: 'dob', label: 'DOB', key_field: true },
+  { key: 'mrn', label: 'MRN', key_field: true },
+  { key: 'patient_sex', label: 'Sex' },
+  { key: 'address', label: 'Address' },
+  { key: 'PgName', label: 'Physician Group' },
+  { key: 'Agencyname', label: 'Agency' },
+];
+export const ADMISSION_FIELDS = [
+  { key: 'SOC', label: 'SOC (admission start)' },
+  { key: 'EOC', label: 'EOC (admission end)' },
+];
+export const EPISODE_FIELDS = [
+  { key: 'SOE', label: 'SOE (episode start)' },
+  { key: 'EOE', label: 'EOE (episode end)' },
+  { key: 'Diagnosis1', label: 'Diagnosis 1' },
+  { key: 'Diagnosis2', label: 'Diagnosis 2' },
+  { key: 'Diagnosis3', label: 'Diagnosis 3' },
+  { key: 'Diagnosis4', label: 'Diagnosis 4' },
+  { key: 'Diagnosis5', label: 'Diagnosis 5' },
+  { key: 'Diagnosis6', label: 'Diagnosis 6' },
+];
+export const ORDER_FIELDS = [
+  { key: 'orderno', label: 'Order no', key_field: true },
+  { key: 'orderdate', label: 'Order date' },
+  { key: 'patientName', label: 'Patient name' },
+  { key: 'dob', label: 'DOB' },
+  { key: 'mrn', label: 'MRN' },
+  { key: 'documentType', label: 'Document type' },
+  { key: 'SOC', label: 'SOC' },
+  { key: 'EOC', label: 'EOC' },
+  { key: 'SOE', label: 'SOE' },
+  { key: 'EOE', label: 'EOE' },
+  { key: 'SignedDate', label: 'Signed date' },
+  { key: 'NPI', label: 'NPI' },
+];
+
+// Natural key for a patient (the existence-check key).
+export function patientKey(p) {
+  return [p.patientName, p.dob, p.mrn].map(x => String(x || '').trim().toLowerCase()).join('|');
+}
+
+// ── Data-access layer (the ONLY place that touches the "database") ──────────
+// Today this is localStorage; swap these five functions for Vercel Postgres / KV
+// calls later without touching the workflow engine or UI.
+function loadObj(key) {
+  try { return JSON.parse(localStorage.getItem(key)) || {}; } catch { return {}; }
+}
+function saveObj(key, obj) { localStorage.setItem(key, JSON.stringify(obj)); }
+
+export function patientExists(patient) {
+  const db = loadObj(KEYS.patientDb);
+  return !!db[patientKey(patient)];
+}
+export function getPatientRecord(patient) {
+  const db = loadObj(KEYS.patientDb);
+  return db[patientKey(patient)] || null;
+}
+export function orderExists(orderno) {
+  const db = loadObj(KEYS.orderDb);
+  return !!db[String(orderno || '').trim()];
+}
+// Insert or update a patient (merging admissions/episodes). Returns the stored record.
+export function upsertPatient(patient) {
+  const db = loadObj(KEYS.patientDb);
+  const k = patientKey(patient);
+  const existing = db[k];
+  if (existing) {
+    db[k] = { ...existing, ...patient, admissions: [...(existing.admissions || []), ...(patient.admissions || [])] };
+  } else {
+    db[k] = { ...patient };
+  }
+  saveObj(KEYS.patientDb, db);
+  return db[k];
+}
+export function upsertOrder(order) {
+  const db = loadObj(KEYS.orderDb);
+  db[String(order.orderno || '').trim()] = { ...order };
+  saveObj(KEYS.orderDb, db);
+  return db[String(order.orderno || '').trim()];
+}
+
+// Fold flat upload rows (one row = patient demo + admission + episode + order)
+// into the nested patient shape, grouping rows that share a patient key. Returns
+// [{ patient: {...nested}, order: {...} }] — one entry per row (per order).
+export function parseUploadRows(rows) {
+  const byPatient = {};
+  const result = [];
+  for (const r of rows) {
+    const pkey = patientKey(r);
+    const episode = {};
+    EPISODE_FIELDS.forEach(f => { if (r[f.key] != null) episode[f.key] = r[f.key]; });
+    const admission = { SOC: r.SOC, EOC: r.EOC, episodes: [episode] };
+
+    let patient = byPatient[pkey];
+    if (!patient) {
+      patient = {};
+      PATIENT_FIELDS.forEach(f => { patient[f.key] = r[f.key]; });
+      patient.admissions = [admission];
+      byPatient[pkey] = patient;
+    } else {
+      patient.admissions.push(admission);
+    }
+
+    const order = {};
+    ORDER_FIELDS.forEach(f => { order[f.key] = r[f.key]; });
+    result.push({ patient, order, patientKey: pkey });
+  }
+  return result;
+}
+
+// A sample upload batch (stands in for a parsed CSV/XLSX). Mix of patients that
+// already exist in the seeded DB (→ update path) and new ones (→ create path),
+// and orders likewise.
+export const SAMPLE_UPLOAD_ROWS = [
+  {
+    patientName: 'John Carter', dob: '1958-03-12', mrn: 'MRN1001', patient_sex: 'M',
+    address: '101 Lavaca St, Austin, TX 78701', PgName: 'Lakeside Family Practice', Agencyname: 'Boise Home Health',
+    SOC: '2026-01-05', EOC: '2026-03-05', SOE: '2026-01-05', EOE: '2026-02-04',
+    Diagnosis1: 'I50.9', Diagnosis2: 'E11.9', Diagnosis3: '', Diagnosis4: '', Diagnosis5: '', Diagnosis6: '',
+    orderno: 'ORD5001', orderdate: '2026-01-06', documentType: 'Plan of Care',
+    SignedDate: '2026-01-08', NPI: '1234567890',
+  },
+  {
+    patientName: 'Maria Gomez', dob: '1971-07-22', mrn: 'MRN1002', patient_sex: 'F',
+    address: '500 Capitol Blvd, Boise, ID 83702', PgName: 'Capitol Internal Medicine', Agencyname: 'Treasure Valley Hospice',
+    SOC: '2026-02-01', EOC: '2026-04-01', SOE: '2026-02-01', EOE: '2026-03-03',
+    Diagnosis1: 'J44.9', Diagnosis2: '', Diagnosis3: '', Diagnosis4: '', Diagnosis5: '', Diagnosis6: '',
+    orderno: 'ORD5002', orderdate: '2026-02-02', documentType: 'Recertification',
+    SignedDate: '2026-02-05', NPI: '9876543210',
+  },
+  {
+    // Same patient as row 1 (John Carter) → a second admission for the same patient.
+    patientName: 'John Carter', dob: '1958-03-12', mrn: 'MRN1001', patient_sex: 'M',
+    address: '101 Lavaca St, Austin, TX 78701', PgName: 'Lakeside Family Practice', Agencyname: 'Boise Home Health',
+    SOC: '2026-04-10', EOC: '2026-06-10', SOE: '2026-04-10', EOE: '2026-05-10',
+    Diagnosis1: 'I10', Diagnosis2: '', Diagnosis3: '', Diagnosis4: '', Diagnosis5: '', Diagnosis6: '',
+    orderno: 'ORD5003', orderdate: '2026-04-11', documentType: 'Plan of Care',
+    SignedDate: '2026-04-13', NPI: '1234567890',
+  },
+  {
+    patientName: 'David Lee', dob: '1965-11-30', mrn: 'MRN1003', patient_sex: 'M',
+    address: '742 Evergreen Terrace, Round Rock, TX 78664', PgName: 'Round Rock Cardiology', Agencyname: 'Lone Star Home Care',
+    SOC: '2026-03-15', EOC: '2026-05-15', SOE: '2026-03-15', EOE: '2026-04-14',
+    Diagnosis1: 'N18.3', Diagnosis2: 'I12.9', Diagnosis3: '', Diagnosis4: '', Diagnosis5: '', Diagnosis6: '',
+    orderno: 'ORD5004', orderdate: '2026-03-16', documentType: 'Plan of Care',
+    SignedDate: '2026-03-18', NPI: '5551234567',
+  },
+];
+
 // ── Predefined triggers ────────────────────────────────
 // A small, hardcoded set of triggers for the MVP. Each trigger corresponds to
 // a workflow (workflowId). Triggers whose workflowId has no matching workflow
@@ -146,7 +304,7 @@ export const TRIGGERS = [
   { id: 'trigger-4', name: 'Trigger 4', label: 'Episode Review',     description: 'A care episode is flagged for batch review.',      workflowId: 'wf4' },
   { id: 'trigger-5', name: 'Trigger 5', label: 'Expense Submitted',  description: 'An expense report is submitted for approval.',     workflowId: 'wf5' },
   { id: 'trigger-6', name: 'Trigger 6', label: 'Provider Onboarding', description: 'A new Physician Group + Agency need onboarding & SA mapping.', workflowId: 'wf6' },
-  { id: 'trigger-7', name: 'Trigger 7', label: 'Lab Result Ready',   description: 'A lab result is returned and needs routing.',      workflowId: null },
+  { id: 'trigger-7', name: 'Trigger 7', label: 'Bulk Upload Patient & Order', description: 'A CSV / XLSX of patients & orders is uploaded for ingestion.', workflowId: 'wf7' },
 ];
 
 export function getTriggers() {
@@ -424,11 +582,87 @@ function seedIfNeeded() {
         },
       ],
     },
+
+    {
+      // Bulk upload: a loop over every uploaded patient. The steps below are the
+      // LOOP BODY (run once per patient). System steps (blue) auto-run; the human
+      // step (pink) goes to a person to confirm. The live run expands the body
+      // once per patient (see launchBulkUpload).
+      id: 'wf7',
+      name: 'Bulk Upload Patient & Order',
+      description: 'Ingest an uploaded CSV/XLSX of patients & orders. For each patient (one at a time): check if the patient exists → create or update; check if the order exists → create or update; then a person reviews & confirms the assembled record.',
+      triggerId: 'trigger-7',
+      bulkUpload: true,
+      createdAt: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+      steps: [
+        {
+          id: 'wf7-s1', type: 'conditional', actor: 'system', name: 'Patient Exists?',
+          description: 'Look the patient up by name + DOB + MRN.',
+          PreReq: 'none',
+          condition: 'if/else', conditionExpr: 'patient (name+dob+mrn) in DB',
+          trueTarget: 'wf7-s2', falseTarget: 'wf7-s3',
+          branches: ['true → Update Patient', 'false → Create Patient'],
+        },
+        {
+          id: 'wf7-s2', type: 'task', actor: 'system', taskKind: 'update-patient',
+          name: 'Update Patient', description: 'Patient found — append the new admission & episode.',
+          PreReq: ['wf7-s1'],
+        },
+        {
+          id: 'wf7-s3', type: 'task', actor: 'system', taskKind: 'create-patient',
+          name: 'Create Patient', description: 'New patient — create with admission & episode.',
+          PreReq: ['wf7-s1'],
+        },
+        {
+          id: 'wf7-s4', type: 'conditional', actor: 'system', name: 'Order Exists?',
+          description: 'Look the order up by order no.',
+          PreReq: ['wf7-s2', 'wf7-s3'],
+          condition: 'if/else', conditionExpr: 'orderno in DB',
+          trueTarget: 'wf7-s5', falseTarget: 'wf7-s6',
+          branches: ['true → Update Order', 'false → Create Order'],
+        },
+        {
+          id: 'wf7-s5', type: 'task', actor: 'system', taskKind: 'update-order',
+          name: 'Update Order', description: 'Order found — update it.',
+          PreReq: ['wf7-s4'],
+        },
+        {
+          id: 'wf7-s6', type: 'task', actor: 'system', taskKind: 'create-order',
+          name: 'Create Order', description: 'New order — create and link to the patient.',
+          PreReq: ['wf7-s4'],
+        },
+        {
+          id: 'wf7-s7', type: 'task', actor: 'human', taskKind: 'review-record',
+          name: 'Review & Confirm Record',
+          description: 'A person reviews the assembled patient + admission + episode + order and confirms it.',
+          PreReq: ['wf7-s5', 'wf7-s6'],
+        },
+      ],
+    },
   ];
+
+  // Seed the persistent "database" so the existence checks have both outcomes.
+  // John Carter (MRN1001) and order ORD5002 already exist → update paths;
+  // everyone/everything else is new → create paths.
+  const patientDb = {
+    [patientKey({ patientName: 'John Carter', dob: '1958-03-12', mrn: 'MRN1001' })]: {
+      patientName: 'John Carter', dob: '1958-03-12', mrn: 'MRN1001', patient_sex: 'M',
+      address: '101 Lavaca St, Austin, TX 78701', PgName: 'Lakeside Family Practice', Agencyname: 'Boise Home Health',
+      admissions: [{ SOC: '2025-09-01', EOC: '2025-11-01', episodes: [{ SOE: '2025-09-01', EOE: '2025-10-01', Diagnosis1: 'I50.9' }] }],
+    },
+  };
+  const orderDb = {
+    'ORD5002': {
+      orderno: 'ORD5002', orderdate: '2025-12-01', patientName: 'Maria Gomez', dob: '1971-07-22', mrn: 'MRN1002',
+      documentType: 'Plan of Care', SignedDate: '2025-12-03', NPI: '9876543210',
+    },
+  };
 
   save(KEYS.users, users);
   save(KEYS.workflows, workflows);
   save(KEYS.instances, []);
+  saveObj(KEYS.patientDb, patientDb);
+  saveObj(KEYS.orderDb, orderDb);
   localStorage.setItem(KEYS.seeded, '1');
 }
 
@@ -573,6 +807,203 @@ export function launchWorkflow(workflowId) {
   return instance;
 }
 
+// ── Bulk upload launch ──────────────────────────────────
+// Parses the uploaded rows into patients, then builds ONE instance whose body
+// (the wf7 loop body) is expanded once per patient, run strictly one after the
+// other. System (blue) steps run automatically against the real DB — including
+// the patient/order existence branches; only the human (pink) review step per
+// patient is left for a person. `patientIndex` groups task instances per patient.
+export function launchBulkUpload(rows) {
+  const wf = load(KEYS.workflows).find(w => w.id === 'wf7');
+  if (!wf) return null;
+  const parsed = parseUploadRows(rows || []);
+  // Collapse to unique patients (a patient may span multiple rows/orders).
+  const patients = [];
+  const seen = {};
+  for (const entry of parsed) {
+    if (!seen[entry.patientKey]) {
+      seen[entry.patientKey] = { patient: entry.patient, orders: [] };
+      patients.push(seen[entry.patientKey]);
+    }
+    seen[entry.patientKey].orders.push(entry.order);
+  }
+
+  const users = load(KEYS.users);
+  const counterRef = { n: 0 };
+  const now = new Date();
+  const body = wf.steps;
+
+  const taskInstances = [];
+  let prevPatientReviewStepUid = null;
+
+  patients.forEach((pp, pIdx) => {
+    const { patient, orders } = pp;
+    const order = orders[0];                 // primary order for this patient
+    const exists = patientExists(patient);
+    const ordExists = orderExists(order?.orderno);
+
+    // unique per-patient step id so PreReq references stay within this patient
+    const sid = stepBase => `p${pIdx}-${stepBase}`;
+    const uidByStep = {};
+
+    const makeTi = (s, extra = {}) => {
+      const isHuman = s.actor === 'human';
+      const ti = {
+        id: uid(),
+        stepId: sid(s.id),
+        baseStepId: s.id,
+        patientIndex: pIdx,
+        patientName: patient.patientName,
+        actor: s.actor || 'system',
+        taskName: s.name,
+        description: s.description || '',
+        type: s.type || 'task',
+        taskKind: s.taskKind || null,
+        condition: s.condition || 'none',
+        conditionExpr: s.conditionExpr || '',
+        branches: s.branches || [],
+        trueTarget: s.trueTarget ? sid(s.trueTarget) : null,
+        falseTarget: s.falseTarget ? sid(s.falseTarget) : null,
+        cases: [],
+        chosenTarget: null,
+        PreReq: Array.isArray(s.PreReq) ? s.PreReq.map(sid) : 'none',
+        patientRecord: null,
+        orderRecord: null,
+        existsDecision: null,
+        status: 'pending',
+        assignedTo: null,
+        actionInstances: [{ id: uid(), actionName: s.name, assignedTo: null, status: 'blocked', completedAt: null, notes: '', order: 0 }],
+        ...extra,
+      };
+      // Humans get assigned; the human review also gates the next patient.
+      if (isHuman) {
+        const a = autoAssign(users, counterRef);
+        ti.assignedTo = a;
+        ti.actionInstances[0].assignedTo = a;
+      }
+      uidByStep[s.id] = ti;
+      taskInstances.push(ti);
+      return ti;
+    };
+
+    body.forEach(s => makeTi(s));
+
+    // Sequence patients: this patient's first conditional waits on the previous
+    // patient's human review (one patient at a time).
+    const first = uidByStep['wf7-s1'];
+    if (prevPatientReviewStepUid) {
+      first.PreReq = [prevPatientReviewStepUid];
+    } else {
+      first.PreReq = 'none';
+    }
+
+    // ── Pre-resolve the system branches & auto-run system steps ──
+    const condPatient = uidByStep['wf7-s1'];
+    const updPatient = uidByStep['wf7-s2'];
+    const crtPatient = uidByStep['wf7-s3'];
+    const condOrder = uidByStep['wf7-s4'];
+    const updOrder = uidByStep['wf7-s5'];
+    const crtOrder = uidByStep['wf7-s6'];
+    const review = uidByStep['wf7-s7'];
+
+    condPatient.existsDecision = exists;
+    condOrder.existsDecision = ordExists;
+
+    // Persist to the DB (the system actually creates/updates).
+    const storedPatient = upsertPatient(patient);
+    const storedOrder = order ? upsertOrder(order) : null;
+
+    const chosenPatient = exists ? updPatient : crtPatient;
+    const skippedPatient = exists ? crtPatient : updPatient;
+    const chosenOrder = ordExists ? updOrder : crtOrder;
+    const skippedOrder = ordExists ? crtOrder : updOrder;
+
+    chosenPatient.patientRecord = storedPatient;
+    chosenOrder.orderRecord = storedOrder;
+    review.patientRecord = storedPatient;
+    review.orderRecord = storedOrder;
+    review.allOrders = orders;
+
+    review.PreReq = [chosenOrder.stepId];   // review only follows the taken order branch
+
+    prevPatientReviewStepUid = review.stepId;
+  });
+
+  const instance = {
+    id: uid(),
+    workflowId: 'wf7',
+    workflowName: wf.name,
+    bulkUpload: true,
+    patientCount: patients.length,
+    launchedAt: now.toISOString(),
+    status: 'running',
+    taskInstances,
+  };
+
+  recomputeBulk(instance);
+
+  const list = load(KEYS.instances);
+  list.push(instance);
+  save(KEYS.instances, list);
+  return instance;
+}
+
+// Recompute for a bulk instance: system conditionals/tasks auto-resolve using
+// their pre-computed existsDecision; human steps stop and wait for a person.
+function recomputeBulk(inst) {
+  const byStep = {};
+  inst.taskInstances.forEach(t => { byStep[t.stepId] = t; });
+  const isSatisfied = id => {
+    const t = byStep[id];
+    return t && (t.status === 'completed' || t.status === 'skipped');
+  };
+  const skip = stepId => {
+    const t = byStep[stepId];
+    if (!t || t.status === 'skipped' || t.status === 'completed') return;
+    t.status = 'skipped';
+    t.actionInstances.forEach(a => { if (a.status !== 'completed') a.status = 'skipped'; });
+    inst.taskInstances.forEach(d => {
+      if (Array.isArray(d.PreReq) && d.PreReq.includes(stepId)) {
+        const allSkipped = d.PreReq.every(p => byStep[p] && byStep[p].status === 'skipped');
+        if (allSkipped) skip(d.stepId);
+      }
+    });
+  };
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const ti of inst.taskInstances) {
+      if (ti.status !== 'pending') continue;
+      const prereqs = Array.isArray(ti.PreReq) ? ti.PreReq : [];
+      if (!prereqs.every(isSatisfied)) continue;
+
+      if (ti.type === 'conditional') {
+        const chosen = ti.existsDecision ? ti.trueTarget : ti.falseTarget;
+        const other = ti.existsDecision ? ti.falseTarget : ti.trueTarget;
+        ti.chosenTarget = chosen;
+        ti.status = 'completed';
+        ti.actionInstances.forEach(a => { a.status = 'completed'; a.completedAt = new Date().toISOString(); });
+        if (other) skip(other);
+        changed = true;
+      } else if (ti.actor === 'system') {
+        // System task auto-completes immediately.
+        ti.status = 'completed';
+        ti.actionInstances.forEach(a => { a.status = 'completed'; a.completedAt = new Date().toISOString(); });
+        changed = true;
+      } else {
+        // Human task: activate and wait.
+        ti.status = 'active';
+        ti.actionInstances.forEach(a => { if (a.status === 'blocked') a.status = 'active'; });
+        changed = true;
+      }
+    }
+  }
+
+  const live = inst.taskInstances.filter(t => t.status !== 'skipped');
+  if (live.length && live.every(t => t.status === 'completed')) inst.status = 'completed';
+}
+
 // Decide a conditional that has just become ready. Returns the chosen target
 // stepId. Data-driven if/else (records valid) uses the validation result of the
 // prereq validate task; otherwise random.
@@ -714,7 +1145,10 @@ export function completeActionInstance(instanceId, taskInstanceId, actionInstanc
     reopenLoop(inst, ti);
   }
 
-  recomputeInstance(inst);
+  // Bulk-upload instances have their own per-patient recompute (auto-running
+  // system steps, unlocking the next patient after a human review).
+  if (inst.bulkUpload) recomputeBulk(inst);
+  else recomputeInstance(inst);
   save(KEYS.instances, list);
   return list;
 }
@@ -806,9 +1240,15 @@ export function getMyWorkItems(userId) {
             type: ti.type || 'task',
             taskKind: ti.taskKind || null,
             module: ti.module || null,
+            actor: ti.actor || null,
             formData: ti.formData || {},
             validation: ti.validation || null,
             mapping: ti.mapping || null,
+            // bulk-upload review payload (nested patient + orders)
+            patientRecord: ti.patientRecord || null,
+            orderRecord: ti.orderRecord || null,
+            allOrders: ti.allOrders || null,
+            patientName: ti.patientName || null,
             actionInstanceId: ai.id,
             actionName: ai.actionName,
             status: ai.status,

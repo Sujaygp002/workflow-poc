@@ -1,13 +1,28 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Zap, Play, AlertCircle, ArrowRight, CheckCircle2 } from 'lucide-react';
-import { getTriggers, getWorkflows, getWorkflowForTrigger, launchWorkflow } from '../../store';
+import { Zap, Play, AlertCircle, ArrowRight, CheckCircle2, Upload, FileSpreadsheet } from 'lucide-react';
+import { getTriggers, getWorkflows, getWorkflowForTrigger, launchWorkflow, launchBulkUpload, SAMPLE_UPLOAD_ROWS } from '../../store';
+
+// Very small CSV parser (header row + comma split). Good enough for the POC;
+// real XLSX parsing would swap in here.
+function parseCsv(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (!lines.length) return [];
+  const headers = lines[0].split(',').map(h => h.trim());
+  return lines.slice(1).map(line => {
+    const cells = line.split(',');
+    const row = {};
+    headers.forEach((h, i) => { row[h] = (cells[i] || '').trim(); });
+    return row;
+  });
+}
 
 export default function Triggers() {
   const navigate = useNavigate();
   const triggers = getTriggers();
   const [workflows] = useState(getWorkflows);
   const [fired, setFired] = useState(null);
+  const fileRef = useRef(null);
 
   function workflowFor(t) {
     if (!t.workflowId) return null;
@@ -22,6 +37,31 @@ export default function Triggers() {
       setFired(`${t.name} — ${wf.name}`);
       setTimeout(() => setFired(null), 3500);
     }
+  }
+
+  function fireBulk(rows, sourceLabel) {
+    const inst = launchBulkUpload(rows);
+    if (inst) {
+      setFired(`Bulk Upload — ${inst.patientCount} patient(s) from ${sourceLabel}`);
+      setTimeout(() => setFired(null), 4000);
+    }
+  }
+
+  function handleFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const rows = parseCsv(String(reader.result || ''));
+      if (rows.length === 0) {
+        // Fallback to sample if the file couldn't be parsed (e.g. real .xlsx binary).
+        fireBulk(SAMPLE_UPLOAD_ROWS, `${file.name} (using sample — parse failed)`);
+      } else {
+        fireBulk(rows, file.name);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
   }
 
   return (
@@ -72,7 +112,19 @@ export default function Triggers() {
                 </div>
               </div>
 
-              {wf ? (
+              {wf && wf.bulkUpload ? (
+                <div className="flex items-center gap-2 shrink-0">
+                  <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleFile} className="hidden" />
+                  <button onClick={() => fireBulk(SAMPLE_UPLOAD_ROWS, 'sample batch')}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-white border border-violet-200 text-violet-700 rounded-lg text-sm font-medium hover:bg-violet-50 transition-colors">
+                    <FileSpreadsheet size={14} /> Use sample
+                  </button>
+                  <button onClick={() => fileRef.current?.click()}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-violet-600 text-white rounded-lg text-sm font-semibold hover:bg-violet-700 transition-colors">
+                    <Upload size={14} /> Upload CSV/XLSX
+                  </button>
+                </div>
+              ) : wf ? (
                 <button onClick={() => handleFire(t)}
                   className="flex items-center gap-1.5 px-4 py-2 bg-violet-600 text-white rounded-lg text-sm font-semibold hover:bg-violet-700 transition-colors shrink-0">
                   <Play size={14} /> Fire
