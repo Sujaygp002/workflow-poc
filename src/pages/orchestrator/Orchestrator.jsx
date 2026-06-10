@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Activity, ChevronDown, ChevronUp, CheckCircle2, Clock, Circle, AlertCircle, RefreshCw, Lock, ArrowDown, GitBranch, User, Users as UsersIcon, Trash2 } from 'lucide-react';
+import { Activity, ChevronDown, ChevronUp, CheckCircle2, Clock, Circle, AlertCircle, RefreshCw, Lock, ArrowDown, GitBranch, Trash2 } from 'lucide-react';
 import Badge from '../../components/Badge';
 import WorkflowFlowChart, { nodesFromInstance } from '../../components/WorkflowFlowChart';
-import RecordView from '../../components/RecordView';
 import { getInstances, getUsers, instanceStage, completeActionInstance, deleteInstance } from '../../store';
 
 // Instance lifecycle header: unassigned → assigned → done
@@ -182,15 +181,26 @@ function aggStep(instance, baseStepId) {
   return { tis, total, done, active, skipped, ran };
 }
 
-function StepNode({ name, actor, agg, sub, compact }) {
+function StepNode({ name, actor, agg, sub, compact, current }) {
   const isHuman = actor === 'human';
   const allDone = agg.total > 0 && agg.done + agg.skipped === agg.total && agg.done > 0;
   const anyActive = agg.active > 0;
-  const tone = isHuman
-    ? (anyActive ? 'border-pink-300 bg-pink-50/60 ring-1 ring-pink-100' : allDone ? 'border-green-200 bg-green-50/40' : 'border-pink-200 bg-pink-50/40')
-    : (anyActive ? 'border-sky-300 bg-sky-50/70 ring-1 ring-sky-100' : allDone ? 'border-green-200 bg-green-50/40' : 'border-sky-200 bg-sky-50/50');
+  let tone = isHuman
+    ? (anyActive ? 'border-pink-300 bg-pink-50/60' : allDone ? 'border-green-200 bg-green-50/40' : 'border-pink-200 bg-pink-50/40')
+    : (anyActive ? 'border-sky-300 bg-sky-50/70' : allDone ? 'border-green-200 bg-green-50/40' : 'border-sky-200 bg-sky-50/50');
+  // "you are here" highlight overrides everything: amber glow + ring
+  if (current) tone = 'border-amber-400 bg-amber-50 ring-4 ring-amber-200/70 shadow-lg';
   return (
-    <div className={`border-2 rounded-xl px-3.5 py-2.5 ${compact ? 'w-full' : 'w-[300px]'} ${tone}`}>
+    <div className={`relative border-2 rounded-xl px-3.5 py-2.5 transition-all ${compact ? 'w-full' : 'w-[300px]'} ${tone}`}>
+      {current && (
+        <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500 text-white shadow flex items-center gap-1 whitespace-nowrap">
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-70" />
+            <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-white" />
+          </span>
+          YOU ARE HERE
+        </span>
+      )}
       <div className="flex items-center gap-2">
         <span className={`text-[9px] px-1 py-0.5 rounded font-bold shrink-0 ${isHuman ? 'bg-pink-100 text-pink-600' : 'bg-sky-100 text-sky-600'}`}>
           {isHuman ? 'HUMAN' : 'SYS'}
@@ -233,20 +243,20 @@ function ConditionPill({ expr }) {
 
 // The "NO → human" connector that sits in the right column, vertically centred
 // against the condition pill in the main column.
-function NoBranch({ human, noCount }) {
+function NoBranch({ human, noCount, current }) {
   return (
     <div className="flex items-center h-full">
       <span className="text-[10px] font-bold text-rose-500 mr-1 shrink-0">NO</span>
       <div className="h-px w-5 bg-rose-300 shrink-0" />
       <svg width="7" height="9" viewBox="0 0 7 9" className="text-rose-300 shrink-0"><path d="M0 0 L7 4.5 L0 9 Z" fill="currentColor" /></svg>
       <div className="ml-1 flex-1">
-        <StepNode name={human.name} actor="human" agg={human.agg} sub={`${noCount} of ${human.agg.total} fell to a person`} compact />
+        <StepNode name={human.name} actor="human" agg={human.agg} sub={`${noCount} of ${human.agg.total} fell to a person`} compact current={current} />
       </div>
     </div>
   );
 }
 
-function BulkInstanceCard({ instance, users, onComplete, onDelete }) {
+function BulkInstanceCard({ instance, onDelete }) {
   const patientIdxs = [...new Set(instance.taskInstances.map(t => t.patientIndex))].sort((a, b) => a - b);
   const total = patientIdxs.length;
   const byPatient = {};
@@ -267,8 +277,25 @@ function BulkInstanceCard({ instance, users, onComplete, onDelete }) {
   const o2 = aggStep(instance, 'wf7-o2');
   const o3 = aggStep(instance, 'wf7-o3');
 
-  // the active human task (if any) for the side panel
-  const activeHuman = instance.taskInstances.find(t => t.actor === 'human' && t.status === 'active');
+  // Where the run currently sits. Prefer an active task; otherwise the last
+  // task that has run (completed) in body order on the active patient.
+  const BODY_ORDER = ['wf7-p1', 'wf7-p2', 'wf7-p3', 'wf7-o1', 'wf7-o2', 'wf7-o3'];
+  const currentStep = (() => {
+    if (allDone) return null;
+    const active = instance.taskInstances.find(t => t.status === 'active');
+    if (active) return active;
+    // fall back to the furthest completed step on the in-progress patient
+    const activePi = patientIdxs.find(i => byPatient[i].some(t => t.status !== 'completed' && t.status !== 'skipped'))
+      ?? patientIdxs.find(i => byPatient[i].some(t => t.status === 'completed'));
+    if (activePi == null) return null;
+    const rows = byPatient[activePi];
+    for (let k = BODY_ORDER.length - 1; k >= 0; k--) {
+      const t = rows.find(r => r.baseStepId === BODY_ORDER[k] && r.status === 'completed');
+      if (t) return t;
+    }
+    return null;
+  })();
+  const currentBase = currentStep?.baseStepId || null;
 
   return (
     <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
@@ -318,13 +345,13 @@ function BulkInstanceCard({ instance, users, onComplete, onDelete }) {
               {/* 2-column grid: main column (320px) | human-fallback column (300px) */}
               <div className="grid items-center gap-x-0" style={{ gridTemplateColumns: '320px 300px' }}>
                 {/* p1 */}
-                <div className="flex justify-center"><StepNode name="Auto-create patient if all fields exist" actor="system" agg={p1} /></div>
+                <div className="flex justify-center"><StepNode name="Auto-create patient if all fields exist" actor="system" agg={p1} current={currentBase === 'wf7-p1'} /></div>
                 <div />
                 {/* condition + NO→human */}
                 <div className="flex justify-center"><ConditionPill expr="all patient fields exist" /></div>
-                <NoBranch human={{ name: 'Manually create patient (order-PDF ref)', agg: p2 }} noCount={p2.ran} />
+                <NoBranch human={{ name: 'Manually create patient (order-PDF ref)', agg: p2 }} noCount={p2.ran} current={currentBase === 'wf7-p2'} />
                 {/* p3 */}
-                <div className="flex justify-center"><StepNode name="Check duplicates · create only if new" actor="system" agg={p3} /></div>
+                <div className="flex justify-center"><StepNode name="Check duplicates · create only if new" actor="system" agg={p3} current={currentBase === 'wf7-p3'} /></div>
                 <div />
 
                 {/* arrow between phases */}
@@ -332,13 +359,13 @@ function BulkInstanceCard({ instance, users, onComplete, onDelete }) {
                 <div />
 
                 {/* o1 */}
-                <div className="flex justify-center"><StepNode name="Create order on patient / admission / episode" actor="system" agg={o1} /></div>
+                <div className="flex justify-center"><StepNode name="Create order on patient / admission / episode" actor="system" agg={o1} current={currentBase === 'wf7-o1'} /></div>
                 <div />
                 {/* condition + NO→human */}
                 <div className="flex justify-center"><ConditionPill expr="admission & episode exist" /></div>
-                <NoBranch human={{ name: 'Create admission / episode / order (order-PDF ref)', agg: o2 }} noCount={o2.ran} />
+                <NoBranch human={{ name: 'Create admission / episode / order (order-PDF ref)', agg: o2 }} noCount={o2.ran} current={currentBase === 'wf7-o2'} />
                 {/* o3 */}
-                <div className="flex justify-center"><StepNode name="Check duplicates · create only if new" actor="system" agg={o3} /></div>
+                <div className="flex justify-center"><StepNode name="Check duplicates · create only if new" actor="system" agg={o3} current={currentBase === 'wf7-o3'} /></div>
                 <div />
               </div>
 
@@ -367,20 +394,21 @@ function BulkInstanceCard({ instance, users, onComplete, onDelete }) {
         </div>
       </div>
 
-      {/* active human task: record + complete */}
-      {activeHuman && (
-        <div className="border-t border-slate-100 px-4 py-4 bg-pink-50/30 space-y-2">
-          <div className="flex items-center gap-2">
-            <User size={13} className="text-pink-500" />
-            <span className="text-sm font-semibold text-slate-700">{activeHuman.taskName}</span>
-            <span className="text-[11px] text-slate-400">— needs a person (missing fields in the upload)</span>
-          </div>
-          <RecordView patient={activeHuman.patientRecord} orders={activeHuman.allOrders} />
-          <button
-            onClick={() => onComplete({ instanceId: instance.id, taskInstanceId: activeHuman.id, actionInstanceId: activeHuman.actionInstances[0].id })}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-green-600 text-white hover:bg-green-700">
-            <CheckCircle2 size={14} /> Mark created & continue loop
-          </button>
+      {/* where the run is right now (no record / actions here — those live in the Work Bucket) */}
+      {!allDone && currentStep && (
+        <div className="border-t border-slate-100 px-4 py-3 bg-amber-50/40 flex items-center gap-2 text-sm">
+          <span className="relative flex h-2.5 w-2.5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-60" />
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" />
+          </span>
+          <span className="text-slate-500">Currently at:</span>
+          <span className="font-semibold text-slate-700">{currentStep.taskName}</span>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${currentStep.actor === 'human' ? 'bg-pink-100 text-pink-600' : 'bg-sky-100 text-sky-600'}`}>
+            {currentStep.actor === 'human' ? 'HUMAN' : 'SYS'}
+          </span>
+          {currentStep.actor === 'human' && (
+            <span className="text-[11px] text-slate-400">— waiting on a person in the Work Bucket</span>
+          )}
         </div>
       )}
     </div>
@@ -729,7 +757,7 @@ export default function Orchestrator() {
           ) : (
             <div className="space-y-3">
               {filtered.map(inst => inst.bulkUpload
-                ? <BulkInstanceCard key={inst.id} instance={inst} users={users} onComplete={handleComplete} onDelete={handleDelete} />
+                ? <BulkInstanceCard key={inst.id} instance={inst} onDelete={handleDelete} />
                 : <InstanceCard key={inst.id} instance={inst} users={users} onDelete={handleDelete} />)}
             </div>
           )}
