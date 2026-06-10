@@ -166,122 +166,107 @@ function StepBlock({ ti, tIdx, isLast, users }) {
   );
 }
 
-// ── Bulk upload: a visible loop over patients ──────────
-// System (blue) steps auto-run; the human (pink) review is the only person task.
-// A condition is NOT a step — it's a label on the arrow between two steps, showing
-// which branch (create vs update) was taken. The whole body sits inside a loop
-// frame that repeats until the last patient & last order are done.
+// ── Bulk upload: ONE loop body + a loop-back arrow ─────
+// The body is drawn once (not per patient). Each step shows aggregate progress
+// across all patients (e.g. 2/3). Human fallback steps hang off a condition on
+// the arrow. No patient names — it's a reusable template that loops.
 
-function StepCard({ ti }) {
-  const skipped = ti.status === 'skipped';
-  if (skipped) return null; // not-taken branch isn't shown; the taken one is the box
-  const isHuman = ti.actor === 'human';
-  const done = ti.status === 'completed';
-  const active = ti.status === 'active';
+// Aggregate a base step across all patients: counts by status.
+function aggStep(instance, baseStepId) {
+  const tis = instance.taskInstances.filter(t => t.baseStepId === baseStepId);
+  const total = tis.length;
+  const done = tis.filter(t => t.status === 'completed').length;
+  const active = tis.filter(t => t.status === 'active').length;
+  const skipped = tis.filter(t => t.status === 'skipped').length;
+  const ran = done + active;                 // how many patients actually took this step
+  return { tis, total, done, active, skipped, ran };
+}
+
+function StepNode({ name, actor, agg, sub }) {
+  const isHuman = actor === 'human';
+  const allDone = agg.total > 0 && agg.done + agg.skipped === agg.total && agg.done > 0;
+  const anyActive = agg.active > 0;
   const tone = isHuman
-    ? (active ? 'border-pink-300 bg-pink-50/60 ring-1 ring-pink-100' : done ? 'border-green-200 bg-green-50/40' : 'border-pink-100 bg-pink-50/30')
-    : (done ? 'border-green-200 bg-green-50/40' : 'border-sky-200 bg-sky-50/50');
+    ? (anyActive ? 'border-pink-300 bg-pink-50/60 ring-1 ring-pink-100' : allDone ? 'border-green-200 bg-green-50/40' : 'border-pink-200 bg-pink-50/40')
+    : (anyActive ? 'border-sky-300 bg-sky-50/70 ring-1 ring-sky-100' : allDone ? 'border-green-200 bg-green-50/40' : 'border-sky-200 bg-sky-50/50');
   return (
-    <div className={`w-[260px] border-2 rounded-xl px-3 py-2.5 ${tone}`}>
+    <div className={`w-[300px] border-2 rounded-xl px-3.5 py-2.5 ${tone}`}>
       <div className="flex items-center gap-2">
-        <span className={`text-[9px] px-1 py-0.5 rounded font-bold ${isHuman ? 'bg-pink-100 text-pink-600' : 'bg-sky-100 text-sky-600'}`}>
+        <span className={`text-[9px] px-1 py-0.5 rounded font-bold shrink-0 ${isHuman ? 'bg-pink-100 text-pink-600' : 'bg-sky-100 text-sky-600'}`}>
           {isHuman ? 'HUMAN' : 'SYS'}
         </span>
-        <span className="text-sm font-semibold text-slate-700 flex-1">{ti.taskName}</span>
-        {done ? <CheckCircle2 size={14} className="text-green-500" />
-          : active ? <Circle size={13} className="text-pink-400 fill-pink-100" />
-          : <Circle size={13} className="text-slate-300" />}
+        <span className="text-[13px] font-semibold text-slate-700 flex-1 leading-tight">{name}</span>
+        <span className={`text-[10px] font-bold tabular-nums shrink-0 ${allDone ? 'text-green-600' : anyActive ? 'text-pink-600' : 'text-slate-400'}`}>
+          {agg.ran}/{agg.total}
+        </span>
       </div>
+      {sub && <div className="text-[10px] text-slate-400 mt-0.5">{sub}</div>}
     </div>
   );
 }
 
-// A small arrow with the condition outcome written on it.
-function ConditionArrow({ cond }) {
-  // cond: { expr, decided (bool|null), takenLabel }
+function Arrow() {
   return (
-    <div className="flex flex-col items-center py-1 select-none">
+    <div className="flex flex-col items-center select-none">
+      <div className="w-px h-4 bg-slate-300" />
+      <svg width="10" height="8" viewBox="0 0 10 8" className="text-slate-300"><path d="M0 0 L5 8 L10 0" fill="currentColor" /></svg>
+    </div>
+  );
+}
+
+// An arrow carrying a condition; the human fallback branches to the right when the
+// condition is NO. `noCount` = how many patients took the human path.
+function ConditionFork({ expr, human, noCount }) {
+  return (
+    <div className="flex flex-col items-center w-full select-none">
       <div className="w-px h-3 bg-slate-300" />
-      {cond && (
-        <div className="text-[10px] font-mono px-2 py-0.5 rounded-full border bg-amber-50 border-amber-200 text-amber-700 my-0.5">
-          ◆ {cond.expr}
-          {cond.decided != null && (
-            <> → <b>{cond.decided ? 'TRUE' : 'FALSE'}</b> · {cond.takenLabel}</>
-          )}
+      <div className="relative flex items-start">
+        {/* main (YES) continues straight down */}
+        <div className="flex flex-col items-center">
+          <div className="text-[10px] font-mono px-2 py-0.5 rounded-full border bg-amber-50 border-amber-200 text-amber-700">
+            ◆ {expr}?
+          </div>
+          <div className="flex items-center gap-1 mt-1">
+            <span className="text-[10px] font-bold text-green-600">YES</span>
+            <svg width="10" height="8" viewBox="0 0 10 8" className="text-slate-300"><path d="M0 0 L5 8 L10 0" fill="currentColor" /></svg>
+          </div>
         </div>
-      )}
-      <svg width="10" height="8" viewBox="0 0 10 8" className="text-slate-300">
-        <path d="M0 0 L5 8 L10 0" fill="currentColor" />
-      </svg>
-    </div>
-  );
-}
 
-// One patient's pass through the loop body. A condition lives on the arrow; the
-// task it gates (whichever branch was taken) is the box below it.
-function PatientPass({ rows }) {
-  const byBase = {};
-  rows.forEach(r => { byBase[r.baseStepId] = r; });
-
-  const updPatient = byBase['wf7-s2'];
-  const crtPatient = byBase['wf7-s3'];
-  const updOrder   = byBase['wf7-s5'];
-  const crtOrder   = byBase['wf7-s6'];
-  const review     = byBase['wf7-s7'];
-
-  // the taken task for a branch = the one whose condition was met (not skipped)
-  const taken = (a, b) => (a && a.status !== 'skipped') ? a : b;
-  const patientStep = taken(updPatient, crtPatient);
-  const orderStep   = taken(updOrder, crtOrder);
-
-  // a decision is "made" once its branch task has resolved
-  const patientDecided = (updPatient?.status !== 'pending') || (crtPatient?.status !== 'pending');
-  const orderDecided   = (updOrder?.status !== 'pending') || (crtOrder?.status !== 'pending');
-
-  return (
-    <div className="flex flex-col items-center">
-      <ConditionArrow cond={{
-        expr: updPatient?.when?.expr || 'patient exists?',
-        decided: patientDecided ? !!patientStep?.decisionValue : null,
-        takenLabel: patientStep?.taskName,
-      }} />
-      {patientStep && <StepCard ti={patientStep} />}
-
-      <ConditionArrow cond={{
-        expr: updOrder?.when?.expr || 'order exists?',
-        decided: orderDecided ? !!orderStep?.decisionValue : null,
-        takenLabel: orderStep?.taskName,
-      }} />
-      {orderStep && <StepCard ti={orderStep} />}
-
-      <div className="flex flex-col items-center py-1">
-        <div className="w-px h-4 bg-slate-300" />
-        <svg width="10" height="8" viewBox="0 0 10 8" className="text-slate-300"><path d="M0 0 L5 8 L10 0" fill="currentColor" /></svg>
+        {/* NO branch → human fallback box to the side */}
+        <div className="absolute left-full top-3 flex items-center" style={{ width: 230 }}>
+          <div className="h-px w-8 bg-rose-300" />
+          <span className="text-[10px] font-bold text-rose-500 px-1">NO</span>
+          <svg width="8" height="10" viewBox="0 0 8 10" className="text-rose-300"><path d="M0 0 L8 5 L0 10 Z" fill="currentColor" /></svg>
+          <StepNode name={human.name} actor="human" agg={human.agg} sub={`${noCount} fell to a person`} />
+        </div>
       </div>
-      {review && <StepCard ti={review} />}
     </div>
   );
 }
 
 function BulkInstanceCard({ instance, users, onComplete, onDelete }) {
-  // group task instances by patient index, preserving body order
-  const byPatient = {};
-  instance.taskInstances.forEach(ti => {
-    (byPatient[ti.patientIndex] = byPatient[ti.patientIndex] || []).push({ ...ti, _instanceId: instance.id });
-  });
-  const patientIdxs = Object.keys(byPatient).map(Number).sort((a, b) => a - b);
+  const patientIdxs = [...new Set(instance.taskInstances.map(t => t.patientIndex))].sort((a, b) => a - b);
   const total = patientIdxs.length;
+  const byPatient = {};
+  patientIdxs.forEach(i => { byPatient[i] = instance.taskInstances.filter(t => t.patientIndex === i); });
 
   const live = instance.taskInstances.filter(t => t.status !== 'skipped');
   const doneTasks = live.filter(t => t.status === 'completed').length;
   const stage = instanceStage(instance);
   const donePatients = patientIdxs.filter(i => byPatient[i].filter(t => t.status !== 'skipped').every(t => t.status === 'completed')).length;
-  const activePatient = patientIdxs.find(i => byPatient[i].some(t => t.status === 'active' || (t.status !== 'completed' && t.status !== 'skipped')));
-
-  // the currently active human review (if any) for the record + confirm panel
-  const activeReview = instance.taskInstances.find(t => t.actor === 'human' && t.status === 'active');
-
+  const curIter = Math.min(donePatients + 1, total);
   const allDone = instance.status === 'completed';
+
+  // aggregate each base step
+  const p1 = aggStep(instance, 'wf7-p1');
+  const p2 = aggStep(instance, 'wf7-p2');
+  const p3 = aggStep(instance, 'wf7-p3');
+  const o1 = aggStep(instance, 'wf7-o1');
+  const o2 = aggStep(instance, 'wf7-o2');
+  const o3 = aggStep(instance, 'wf7-o3');
+
+  // the active human task (if any) for the side panel
+  const activeHuman = instance.taskInstances.find(t => t.actor === 'human' && t.status === 'active');
 
   return (
     <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
@@ -292,13 +277,12 @@ function BulkInstanceCard({ instance, users, onComplete, onDelete }) {
             <span className="font-semibold text-slate-800">{instance.workflowName}</span>
             <Badge label={instance.status} type={instance.status} />
             <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-100">
-              <UsersIcon size={10} /> {total} patient{total !== 1 ? 's' : ''} · one at a time
+              <RefreshCw size={10} /> loop · {donePatients}/{total} patients done
             </span>
           </div>
           <div className="flex items-center gap-3 mt-1 text-xs text-slate-400">
             <span className="flex items-center gap-1"><Clock size={10} /> {new Date(instance.launchedAt).toLocaleString()}</span>
             <span>{doneTasks}/{live.length} steps</span>
-            <span>· {donePatients}/{total} patients done</span>
           </div>
           <StageHeader stage={stage} />
         </div>
@@ -309,88 +293,73 @@ function BulkInstanceCard({ instance, users, onComplete, onDelete }) {
       </div>
 
       {/* legend */}
-      <div className="border-t border-slate-100 bg-slate-50/40 px-4 pt-3 flex items-center gap-3 text-[11px] text-slate-500">
+      <div className="border-t border-slate-100 bg-slate-50/40 px-4 pt-3 flex items-center gap-3 text-[11px] text-slate-500 flex-wrap">
         <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-sky-200 border border-sky-300" /> system (auto)</span>
-        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-pink-200 border border-pink-300" /> human (review)</span>
-        <span className="inline-flex items-center gap-1"><span className="text-amber-500">◆</span> condition on arrow</span>
+        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-pink-200 border border-pink-300" /> human</span>
+        <span className="inline-flex items-center gap-1"><span className="text-amber-500">◆</span> condition</span>
+        <span className="text-slate-400">· counts = patients through that step</span>
       </div>
 
-      {/* the visible LOOP: START → (for each patient) body → loop back → END */}
-      <div className="bg-slate-50/40 px-4 py-5 overflow-x-auto">
-        <div className="flex flex-col items-center min-w-fit">
-          <div className="rounded-full px-6 py-1.5 text-sm font-bold border-2 border-violet-400 bg-violet-50 text-violet-700">START</div>
+      {/* ── ONE loop body with a loop-back arrow ── */}
+      <div className="bg-slate-50/40 px-6 py-6 overflow-x-auto">
+        <div className="relative min-w-[560px] flex flex-col items-center">
+          {/* loop-back arrow (curves up the right side, from END of body to top) */}
+          <svg className="absolute right-0 top-10 bottom-10 text-purple-300" width="56" height="100%" preserveAspectRatio="none" viewBox="0 0 56 100" style={{ height: 'calc(100% - 80px)' }}>
+            <path d="M28 100 C 54 100, 54 0, 28 0" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="5 4" />
+            <path d="M24 6 L28 0 L32 6 Z" fill="currentColor" />
+          </svg>
+          <div className="absolute right-[58px] top-1/2 -translate-y-1/2 rotate-90 origin-center">
+            <span className="text-[10px] font-bold text-purple-600 whitespace-nowrap flex items-center gap-1">
+              <RefreshCw size={10} /> repeat for each patient until last
+            </span>
+          </div>
+
+          <div className="rounded-full px-6 py-1.5 text-sm font-bold border-2 border-violet-400 bg-violet-50 text-violet-700">START · bulk upload</div>
+          <Arrow />
 
           {/* loop frame */}
-          <div className="mt-3 w-full max-w-md border-2 border-dashed border-purple-300 rounded-2xl bg-purple-50/30 px-4 py-3">
-            <div className="flex items-center justify-center gap-1.5 text-[11px] font-bold text-purple-700 mb-1">
-              <RefreshCw size={12} /> LOOP · for each patient ({Math.min(donePatients + (activePatient != null ? 1 : 0), total)} of {total})
+          <div className="w-full max-w-[460px] border-2 border-dashed border-purple-300 rounded-2xl bg-purple-50/20 px-5 py-4 flex flex-col items-center">
+            <div className="flex items-center gap-1.5 text-[11px] font-bold text-purple-700 mb-2">
+              <RefreshCw size={12} /> FOR EACH PATIENT {allDone ? '· done' : `· iteration ${curIter} of ${total}`}
             </div>
 
-            {patientIdxs.map((pIdx, i) => {
-              const rows = byPatient[pIdx];
-              const pname = rows[0]?.patientName || `Patient ${pIdx + 1}`;
-              const pActive = rows.some(t => t.status === 'active');
-              const pDone = rows.filter(t => t.status !== 'skipped').every(t => t.status === 'completed');
-              const pStarted = rows.some(t => t.status !== 'pending');
-              const isLast = i === patientIdxs.length - 1;
-              return (
-                <div key={pIdx}>
-                  {/* iteration header */}
-                  <div className="flex items-center justify-center gap-2 my-2">
-                    <span className={`w-6 h-6 rounded-full text-xs font-bold flex items-center justify-center ${
-                      pDone ? 'bg-green-200 text-green-700' : pActive ? 'bg-pink-200 text-pink-700' : 'bg-slate-200 text-slate-500'}`}>{pIdx + 1}</span>
-                    <span className="text-sm font-semibold text-slate-700">{pname}</span>
-                    {pDone && <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-semibold">done</span>}
-                    {pActive && <span className="text-[10px] px-2 py-0.5 rounded-full bg-pink-100 text-pink-700 font-semibold">in progress</span>}
-                    {!pStarted && <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-semibold">waiting</span>}
-                  </div>
+            {/* patient phase */}
+            <StepNode name="Auto-create patient if all fields exist" actor="system" agg={p1} />
+            <ConditionFork expr="all patient fields exist" human={{ name: 'Manually create patient (order-PDF ref)', agg: p2 }} noCount={p2.ran} />
+            <StepNode name="Check duplicates · create only if new" actor="system" agg={p3} />
 
-                  {/* only draw the body once it's started; collapsed for waiting ones */}
-                  {pStarted ? (
-                    <div className={pActive || pDone ? '' : 'opacity-60'}>
-                      <PatientPass rows={rows} />
-                    </div>
-                  ) : (
-                    <div className="text-center text-[11px] text-slate-400 italic pb-1">…queued, runs after patient {pIdx}</div>
-                  )}
+            <Arrow />
 
-                  {/* loop-back arrow between iterations */}
-                  {!isLast && (
-                    <div className="flex items-center justify-center gap-2 my-2 text-[11px] text-purple-600">
-                      <RefreshCw size={11} /> more patients? → next iteration
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            {/* order phase */}
+            <StepNode name="Create order on patient / admission / episode" actor="system" agg={o1} />
+            <ConditionFork expr="admission & episode exist" human={{ name: 'Create admission / episode / order (PDF ref)', agg: o2 }} noCount={o2.ran} />
+            <StepNode name="Check duplicates · create only if new" actor="system" agg={o3} />
 
-            <div className="flex items-center justify-center gap-2 mt-2 text-[11px] font-medium text-purple-700">
-              {allDone ? '✓ last patient & last order reached — exit loop' : 'repeat until last patient & last order'}
+            <div className="text-[11px] font-medium text-purple-700 mt-3">
+              {allDone ? '✓ last patient & last order reached' : 'more patients? → next iteration'}
             </div>
           </div>
 
-          <div className="mt-3 flex flex-col items-center">
-            <div className="w-px h-4 bg-slate-300" />
-            <svg width="10" height="8" viewBox="0 0 10 8" className="text-slate-300"><path d="M0 0 L5 8 L10 0" fill="currentColor" /></svg>
-          </div>
+          <Arrow />
           <div className={`rounded-full px-6 py-1.5 text-sm font-bold border-2 ${allDone ? 'border-green-400 bg-green-50 text-green-700' : 'border-slate-300 bg-white text-slate-400'}`}>
-            END {allDone && '· all patients done'}
+            END {allDone && '· all patients & orders done'}
           </div>
         </div>
       </div>
 
-      {/* the active human review: record + confirm */}
-      {activeReview && (
+      {/* active human task: record + complete */}
+      {activeHuman && (
         <div className="border-t border-slate-100 px-4 py-4 bg-pink-50/30 space-y-2">
           <div className="flex items-center gap-2">
             <User size={13} className="text-pink-500" />
-            <span className="text-sm font-semibold text-slate-700">Review & confirm — {activeReview.patientName}</span>
+            <span className="text-sm font-semibold text-slate-700">{activeHuman.taskName}</span>
+            <span className="text-[11px] text-slate-400">— needs a person (missing fields in the upload)</span>
           </div>
-          <RecordView patient={activeReview.patientRecord} orders={activeReview.allOrders} />
+          <RecordView patient={activeHuman.patientRecord} orders={activeHuman.allOrders} />
           <button
-            onClick={() => onComplete({ instanceId: instance.id, taskInstanceId: activeReview.id, actionInstanceId: activeReview.actionInstances[0].id })}
+            onClick={() => onComplete({ instanceId: instance.id, taskInstanceId: activeHuman.id, actionInstanceId: activeHuman.actionInstances[0].id })}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-green-600 text-white hover:bg-green-700">
-            <CheckCircle2 size={14} /> Confirm record & continue loop
+            <CheckCircle2 size={14} /> Mark created & continue loop
           </button>
         </div>
       )}

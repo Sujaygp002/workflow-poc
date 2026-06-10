@@ -13,7 +13,7 @@ const KEYS = {
   workflows: 'wf_workflows',
   instances: 'wf_instances',
   users: 'wf_users',
-  seeded: 'wf_seeded_v20',
+  seeded: 'wf_seeded_v21',
   patientDb: 'wf_patient_db',   // persistent "database" of patients (existence check)
   orderDb: 'wf_order_db',       // persistent "database" of orders
 };
@@ -185,6 +185,21 @@ export function patientKey(p) {
   return [p.patientName, p.dob, p.mrn].map(x => String(x || '').trim().toLowerCase()).join('|');
 }
 
+// Do all required patient fields exist in the uploaded record? (drives the
+// "auto-create vs manual create from PDF" decision). Required = the key fields
+// plus sex/address; PG/Agency optional.
+const REQUIRED_PATIENT_FIELDS = ['patientName', 'dob', 'mrn', 'patient_sex', 'address'];
+export function patientFieldsComplete(p) {
+  return REQUIRED_PATIENT_FIELDS.every(k => String((p || {})[k] || '').trim() !== '');
+}
+
+// Can the order's admission/episode target be resolved from the row? (drives the
+// "auto-create order vs manual create admission/episode/order from PDF" decision).
+export function orderTargetResolvable(order) {
+  const o = order || {};
+  return ['SOC', 'EOC', 'SOE', 'EOE'].every(k => String(o[k] || '').trim() !== '');
+}
+
 // ── Data-access layer (the ONLY place that touches the "database") ──────────
 // Today this is localStorage; swap these five functions for Vercel Postgres / KV
 // calls later without touching the workflow engine or UI.
@@ -267,7 +282,8 @@ export const SAMPLE_UPLOAD_ROWS = [
     SignedDate: '2026-01-08', NPI: '1234567890',
   },
   {
-    patientName: 'Maria Gomez', dob: '1971-07-22', mrn: 'MRN1002', patient_sex: 'F',
+    // Missing patient_sex → all-fields check fails → manual create patient (PDF ref).
+    patientName: 'Maria Gomez', dob: '1971-07-22', mrn: 'MRN1002', patient_sex: '',
     address: '500 Capitol Blvd, Boise, ID 83702', PgName: 'Capitol Internal Medicine', Agencyname: 'Treasure Valley Hospice',
     SOC: '2026-02-01', EOC: '2026-04-01', SOE: '2026-02-01', EOE: '2026-03-03',
     Diagnosis1: 'J44.9', Diagnosis2: '', Diagnosis3: '', Diagnosis4: '', Diagnosis5: '', Diagnosis6: '',
@@ -284,9 +300,11 @@ export const SAMPLE_UPLOAD_ROWS = [
     SignedDate: '2026-04-13', NPI: '1234567890',
   },
   {
+    // Patient complete, but missing episode dates (SOE/EOE) → order target can't
+    // be resolved → manual create admission/episode/order (PDF ref).
     patientName: 'David Lee', dob: '1965-11-30', mrn: 'MRN1003', patient_sex: 'M',
     address: '742 Evergreen Terrace, Round Rock, TX 78664', PgName: 'Round Rock Cardiology', Agencyname: 'Lone Star Home Care',
-    SOC: '2026-03-15', EOC: '2026-05-15', SOE: '2026-03-15', EOE: '2026-04-14',
+    SOC: '2026-03-15', EOC: '2026-05-15', SOE: '', EOE: '',
     Diagnosis1: 'N18.3', Diagnosis2: 'I12.9', Diagnosis3: '', Diagnosis4: '', Diagnosis5: '', Diagnosis6: '',
     orderno: 'ORD5004', orderdate: '2026-03-16', documentType: 'Plan of Care',
     SignedDate: '2026-03-18', NPI: '5551234567',
@@ -590,45 +608,56 @@ function seedIfNeeded() {
       // once per patient (see launchBulkUpload).
       id: 'wf7',
       name: 'Bulk Upload Patient & Order',
-      description: 'Ingest an uploaded CSV/XLSX of patients & orders, looping over every patient one at a time until the last patient & last order. A condition (does the patient/order already exist?) picks create vs update — the condition is an attribute on the task, not its own step. A person reviews & confirms each assembled record.',
+      description: 'Trigger: a patient/order data bulk upload (CSV/XLSX). The system auto-creates patients when all fields exist; missing-field rows fall to a person to create manually from the order-PDF reference. Duplicates are skipped. Then orders are created against the right patient/admission/episode, again with a manual PDF-ref fallback. The whole body loops over every patient until the last patient & last order.',
       triggerId: 'trigger-7',
       bulkUpload: true,
       // The loop is explicit: run the body for-each patient, until last patient & order.
       loop: { over: 'patient', until: 'last patient & last order' },
       createdAt: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
-      // Loop BODY. A condition is NOT a step — it lives on the task as `when`:
-      //   { decision, expr, equals }  → the task runs only when decision === equals.
-      // Two tasks share a decision (one for true, one for false) = the branch.
+      // Body matches the design diagram. A condition is NOT a step — it lives on
+      // the task as `when: { decision, expr, equals }`; the task runs only when
+      // the per-patient decision === equals. `lane` groups steps into the two
+      // phases (patient phase, order phase) for layout.
       steps: [
+        // ── Patient phase ──────────────────────────────
         {
-          id: 'wf7-s2', type: 'task', actor: 'system', taskKind: 'update-patient',
-          name: 'Update Patient', description: 'Patient found — append the new admission & episode.',
+          id: 'wf7-p1', type: 'task', actor: 'system', lane: 'patient', taskKind: 'auto-create-patient',
+          name: 'Auto-create Patient',
+          description: 'From the upload listing, automatically create the patient when all required fields exist.',
           PreReq: 'none',
-          when: { decision: 'patientExists', expr: 'patient (name+dob+mrn) in DB', equals: true },
         },
         {
-          id: 'wf7-s3', type: 'task', actor: 'system', taskKind: 'create-patient',
-          name: 'Create Patient', description: 'New patient — create with admission & episode.',
-          PreReq: 'none',
-          when: { decision: 'patientExists', expr: 'patient (name+dob+mrn) in DB', equals: false },
+          id: 'wf7-p2', type: 'task', actor: 'human', lane: 'patient', taskKind: 'manual-create-patient',
+          name: 'Manually create Patient (PDF ref)',
+          description: 'Some required fields are missing — a person creates the patient using the order-PDF reference.',
+          PreReq: ['wf7-p1'],
+          when: { decision: 'allPatientFields', expr: 'all patient fields exist', equals: false },
         },
         {
-          id: 'wf7-s5', type: 'task', actor: 'system', taskKind: 'update-order',
-          name: 'Update Order', description: 'Order found — update it.',
-          PreReq: ['wf7-s2', 'wf7-s3'],
-          when: { decision: 'orderExists', expr: 'orderno in DB', equals: true },
+          id: 'wf7-p3', type: 'task', actor: 'system', lane: 'patient', taskKind: 'dedupe-patient',
+          name: 'Check duplicates · create only if new',
+          description: 'Check for an existing patient; create only if it does not already exist.',
+          PreReq: ['wf7-p1', 'wf7-p2'],
+        },
+        // ── Order phase ────────────────────────────────
+        {
+          id: 'wf7-o1', type: 'task', actor: 'system', lane: 'order', taskKind: 'auto-create-order',
+          name: 'Create Order on patient / admission / episode',
+          description: 'From the order listing, find the matching patient, admission & episode and create the order there.',
+          PreReq: ['wf7-p3'],
         },
         {
-          id: 'wf7-s6', type: 'task', actor: 'system', taskKind: 'create-order',
-          name: 'Create Order', description: 'New order — create and link to the patient.',
-          PreReq: ['wf7-s2', 'wf7-s3'],
-          when: { decision: 'orderExists', expr: 'orderno in DB', equals: false },
+          id: 'wf7-o2', type: 'task', actor: 'human', lane: 'order', taskKind: 'manual-create-order',
+          name: 'Create Admission / Episode / Order (PDF ref)',
+          description: 'The admission/episode/order could not be resolved — a person creates them using the order-PDF reference.',
+          PreReq: ['wf7-o1'],
+          when: { decision: 'orderTargetResolved', expr: 'admission & episode exist', equals: false },
         },
         {
-          id: 'wf7-s7', type: 'task', actor: 'human', taskKind: 'review-record',
-          name: 'Review & Confirm Record',
-          description: 'A person reviews the assembled patient + admission + episode + order and confirms it.',
-          PreReq: ['wf7-s5', 'wf7-s6'],
+          id: 'wf7-o3', type: 'task', actor: 'system', lane: 'order', taskKind: 'dedupe-order',
+          name: 'Check duplicates · create only if new',
+          description: 'Check for an existing order; create only if it does not already exist.',
+          PreReq: ['wf7-o1', 'wf7-o2'],
         },
       ],
     },
@@ -841,8 +870,8 @@ export function launchBulkUpload(rows) {
 
     // Per-patient condition outcomes (the "conditions", not steps).
     const decisions = {
-      patientExists: patientExists(patient),
-      orderExists: orderExists(order?.orderno),
+      allPatientFields: patientFieldsComplete(patient),
+      orderTargetResolved: orderTargetResolvable(order),
     };
 
     // The system actually creates/updates in the DB now.
@@ -865,6 +894,7 @@ export function launchBulkUpload(rows) {
         patientIndex: pIdx,
         patientName: patient.patientName,
         actor: s.actor || 'system',
+        lane: s.lane || null,          // 'patient' | 'order' phase
         taskName: s.name,
         description: s.description || '',
         type: 'task',
@@ -892,13 +922,13 @@ export function launchBulkUpload(rows) {
 
     body.forEach(s => makeTi(s));
 
-    // Sequence patients: this patient's first tasks wait on the previous
-    // patient's human review (one patient at a time, until the last).
+    // Sequence patients: this patient's first task waits on the previous
+    // patient's final step (one patient at a time, until the last).
     if (prevPatientReviewStepUid) {
-      ['wf7-s2', 'wf7-s3'].forEach(b => { uidByStep[b].PreReq = [prevPatientReviewStepUid]; });
+      uidByStep['wf7-p1'].PreReq = [prevPatientReviewStepUid];
     }
 
-    prevPatientReviewStepUid = uidByStep['wf7-s7'].stepId;
+    prevPatientReviewStepUid = uidByStep['wf7-o3'].stepId;
   });
 
   const instance = {

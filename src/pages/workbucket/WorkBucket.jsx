@@ -116,10 +116,13 @@ function ActionCard({ item, onComplete }) {
 
   const isFill = item.taskKind === 'fill' || item.taskKind === 'fix';
   const isValidate = item.taskKind === 'validate';
-  const isReview = item.taskKind === 'review-record';
+  const isReview = item.taskKind === 'review-record'
+    || item.taskKind === 'manual-create-patient' || item.taskKind === 'manual-create-order';
   const kindBadge = {
     fill: 'create / fill', validate: 'validate', map: 'map to SA', fix: 'fix data',
     'review-record': 'review record',
+    'manual-create-patient': 'create patient (PDF ref)',
+    'manual-create-order': 'create admission/episode/order (PDF ref)',
   }[item.taskKind];
 
   // Resolve fill tasks from the live instance so we always have up-to-date formData.
@@ -215,9 +218,15 @@ function ActionCard({ item, onComplete }) {
 
             {isReview && (
               <div className="space-y-2">
-                <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Assembled record for {item.patientName}</p>
+                <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Record from the upload</p>
                 <RecordView patient={item.patientRecord} orders={item.allOrders} order={item.orderRecord} />
-                <p className="text-[11px] text-slate-400">The system already created/updated this record. Confirm it looks correct to finish this patient and move to the next.</p>
+                <p className="text-[11px] text-slate-400">
+                  {item.taskKind === 'manual-create-patient'
+                    ? 'Some patient fields were missing in the upload. Create the patient using the order-PDF reference, then mark it created to continue the loop.'
+                    : item.taskKind === 'manual-create-order'
+                    ? 'The admission/episode could not be auto-resolved. Create the admission/episode/order from the order-PDF reference, then mark it created.'
+                    : 'Confirm this record looks correct to finish this patient and continue.'}
+                </p>
               </div>
             )}
 
@@ -234,7 +243,9 @@ function ActionCard({ item, onComplete }) {
             <button onClick={handleComplete} disabled={loading || (isValidate && !allDecided)}
               className="flex items-center gap-2 px-4 py-2.5 bg-green-600 text-white rounded-xl hover:bg-green-700 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
               <CheckCircle2 size={16} />
-              {loading ? 'Saving...' : isFill ? 'Submit & Complete' : isValidate ? 'Submit Validation' : isReview ? 'Confirm Record' : 'Mark Complete'}
+              {loading ? 'Saving...' : isFill ? 'Submit & Complete' : isValidate ? 'Submit Validation'
+                : (item.taskKind === 'manual-create-patient' || item.taskKind === 'manual-create-order') ? 'Mark created & continue'
+                : isReview ? 'Confirm Record' : 'Mark Complete'}
             </button>
             {isValidate && !allDecided && (
               <p className="text-xs text-rose-500">Set a verdict (Valid / Invalid) for each record before submitting.</p>
