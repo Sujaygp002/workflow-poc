@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Activity, ChevronDown, ChevronUp, CheckCircle2, Clock, Circle, AlertCircle, RefreshCw, Lock, ArrowDown, GitBranch, User, Cpu, Users as UsersIcon } from 'lucide-react';
+import { Activity, ChevronDown, ChevronUp, CheckCircle2, Clock, Circle, AlertCircle, RefreshCw, Lock, ArrowDown, GitBranch, User, Users as UsersIcon, Trash2 } from 'lucide-react';
 import Badge from '../../components/Badge';
 import WorkflowFlowChart, { nodesFromInstance } from '../../components/WorkflowFlowChart';
 import RecordView from '../../components/RecordView';
-import { getInstances, getUsers, instanceStage, completeActionInstance } from '../../store';
+import { getInstances, getUsers, instanceStage, completeActionInstance, deleteInstance } from '../../store';
 
 // Instance lifecycle header: unassigned → assigned → done
 function StageHeader({ stage }) {
@@ -166,80 +166,11 @@ function StepBlock({ ti, tIdx, isLast, users }) {
   );
 }
 
-// ── Bulk upload: per-patient lanes ─────────────────────
+// ── Bulk upload: per-patient flow charts ───────────────
 // System (blue) steps auto-run; the human (pink) review is the only person task.
-// The loop body is shown once per uploaded patient, top to bottom.
+// Each uploaded patient runs the loop body, shown as its own START→…→END chart.
 
-function actorChip(actor) {
-  return actor === 'human'
-    ? <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full font-semibold bg-pink-100 text-pink-700"><User size={9} /> human</span>
-    : <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full font-semibold bg-sky-100 text-sky-700"><Cpu size={9} /> system</span>;
-}
-
-function bulkStatusIcon(status) {
-  if (status === 'completed') return <CheckCircle2 size={14} className="text-green-500" />;
-  if (status === 'active')    return <Circle size={14} className="text-pink-400 fill-pink-100" />;
-  if (status === 'skipped')   return <span className="text-[10px] text-slate-400 italic">skipped</span>;
-  return <Circle size={13} className="text-slate-300" />;
-}
-
-// One step row in a patient lane. Conditionals show the chosen branch inline.
-function BulkStepRow({ ti, users, onComplete }) {
-  const skipped = ti.status === 'skipped';
-  const isHuman = ti.actor === 'human';
-  const user = users.find(u => u.id === ti.assignedTo);
-  const isCond = ti.type === 'conditional';
-
-  const tone = skipped
-    ? 'border-dashed border-slate-200 bg-slate-50 opacity-60'
-    : isHuman
-      ? (ti.status === 'active' ? 'border-pink-300 bg-pink-50/50 ring-1 ring-pink-100' : 'border-pink-100 bg-pink-50/20')
-      : 'border-sky-100 bg-sky-50/30';
-
-  return (
-    <div className={`border rounded-lg ${tone}`}>
-      <div className="flex items-center gap-2 px-3 py-2">
-        {actorChip(ti.actor)}
-        {isCond && <span className="text-amber-500 text-xs">◆</span>}
-        <span className={`text-sm flex-1 ${skipped ? 'text-slate-400 line-through' : 'text-slate-700 font-medium'}`}>{ti.taskName}</span>
-        {isHuman && !skipped && user && (
-          <span className="flex items-center gap-1 text-[11px] text-slate-500">
-            <span className="w-4 h-4 rounded-full bg-pink-200 text-pink-700 text-[9px] font-bold flex items-center justify-center">{user.name[0]}</span>
-            {user.name}
-          </span>
-        )}
-        {bulkStatusIcon(ti.status)}
-      </div>
-
-      {/* conditional outcome */}
-      {isCond && ti.status === 'completed' && (
-        <div className="px-3 pb-2 -mt-0.5">
-          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-100">
-            {ti.conditionExpr} → <b>{ti.existsDecision ? 'TRUE' : 'FALSE'}</b> ({ti.existsDecision ? ti.branches?.[0]?.split('→')[1]?.trim() : ti.branches?.[1]?.split('→')[1]?.trim()})
-          </span>
-        </div>
-      )}
-
-      {/* human review: show the assembled record + confirm */}
-      {isHuman && ti.status === 'active' && (
-        <div className="px-3 pb-3 space-y-2">
-          <RecordView patient={ti.patientRecord} orders={ti.allOrders} />
-          <button
-            onClick={() => onComplete({ instanceId: ti._instanceId, taskInstanceId: ti.id, actionInstanceId: ti.actionInstances[0].id })}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-600 text-white hover:bg-green-700">
-            <CheckCircle2 size={13} /> Confirm record
-          </button>
-        </div>
-      )}
-      {isHuman && ti.status === 'completed' && (
-        <div className="px-3 pb-2 -mt-0.5 text-[11px] text-green-600">✓ record confirmed</div>
-      )}
-    </div>
-  );
-}
-
-function BulkInstanceCard({ instance, users, onComplete }) {
-  const [open, setOpen] = useState(true);
+function BulkInstanceCard({ instance, users, onComplete, onDelete }) {
   // group task instances by patient index, preserving body order
   const byPatient = {};
   instance.taskInstances.forEach(ti => {
@@ -251,6 +182,13 @@ function BulkInstanceCard({ instance, users, onComplete }) {
   const doneTasks = live.filter(t => t.status === 'completed').length;
   const stage = instanceStage(instance);
   const activePatient = patientIdxs.find(i => byPatient[i].some(t => t.status === 'active' || (t.status !== 'completed' && t.status !== 'skipped')));
+
+  // default the visible patient to whoever is currently active
+  const [selected, setSelected] = useState(activePatient != null ? activePatient : patientIdxs[0]);
+  const rows = byPatient[selected] || [];
+  const laneDone = rows.filter(t => t.status !== 'skipped').every(t => t.status === 'completed');
+  // the human review for the visible patient (its record + confirm button)
+  const review = rows.find(t => t.actor === 'human');
 
   return (
     <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
@@ -271,48 +209,77 @@ function BulkInstanceCard({ instance, users, onComplete }) {
           </div>
           <StageHeader stage={stage} />
         </div>
-        <button onClick={() => setOpen(o => !o)}
-          className="shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium bg-slate-100 text-slate-600 hover:bg-slate-200 flex items-center gap-1">
-          {open ? <ChevronUp size={12} /> : <ChevronDown size={12} />} {open ? 'Hide' : 'Show'} patients
+        <button onClick={() => onDelete(instance)} title="Delete this run"
+          className="shrink-0 p-2 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors">
+          <Trash2 size={15} />
         </button>
       </div>
 
-      {open && (
-        <div className="border-t border-slate-100 bg-slate-50/40 p-4 space-y-3">
-          {/* legend */}
-          <div className="flex items-center gap-3 text-[11px] text-slate-500">
-            <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-sky-200 border border-sky-300" /> system (auto)</span>
-            <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-pink-200 border border-pink-300" /> human (review)</span>
-          </div>
+      {/* patient selector (one chart at a time, like a single workflow) */}
+      <div className="border-t border-slate-100 bg-slate-50/40 px-4 pt-3">
+        <div className="flex items-center gap-2 flex-wrap">
           {patientIdxs.map(pIdx => {
-            const rows = byPatient[pIdx];
-            const pname = rows[0]?.patientName || `Patient ${pIdx + 1}`;
-            const laneActive = rows.some(t => t.status === 'active');
-            const laneDone = rows.filter(t => t.status !== 'skipped').every(t => t.status === 'completed');
+            const r = byPatient[pIdx];
+            const pname = r[0]?.patientName || `Patient ${pIdx + 1}`;
+            const active = r.some(t => t.status === 'active');
+            const done = r.filter(t => t.status !== 'skipped').every(t => t.status === 'completed');
+            const isSel = pIdx === selected;
             return (
-              <div key={pIdx} className={`rounded-xl border p-3 ${laneActive ? 'border-pink-200 bg-pink-50/20' : laneDone ? 'border-green-100 bg-green-50/20' : 'border-slate-200 bg-white'}`}>
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="w-6 h-6 rounded-full bg-violet-200 text-violet-700 text-xs font-bold flex items-center justify-center">{pIdx + 1}</span>
-                  <span className="font-semibold text-sm text-slate-800">{pname}</span>
-                  {laneActive && <span className="text-[10px] px-2 py-0.5 rounded-full bg-pink-100 text-pink-700 font-semibold">in progress</span>}
-                  {laneDone && <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-semibold">done</span>}
-                  {!laneActive && !laneDone && <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-semibold">waiting</span>}
-                </div>
-                <div className="space-y-1.5">
-                  {rows.map(ti => (
-                    <BulkStepRow key={ti.id} ti={ti} users={users} onComplete={onComplete} />
-                  ))}
-                </div>
-              </div>
+              <button key={pIdx} onClick={() => setSelected(pIdx)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                  isSel ? 'bg-white border-violet-300 text-violet-700 shadow-sm'
+                  : 'bg-white/60 border-slate-200 text-slate-500 hover:border-violet-200'}`}>
+                <span className={`w-4 h-4 rounded-full text-[9px] font-bold flex items-center justify-center ${
+                  done ? 'bg-green-200 text-green-700' : active ? 'bg-pink-200 text-pink-700' : 'bg-slate-200 text-slate-500'}`}>
+                  {pIdx + 1}
+                </span>
+                {pname}
+                {active && <span className="w-1.5 h-1.5 rounded-full bg-pink-400" />}
+                {done && <CheckCircle2 size={11} className="text-green-500" />}
+              </button>
             );
           })}
+        </div>
+        {/* legend */}
+        <div className="flex items-center gap-3 text-[11px] text-slate-500 mt-2">
+          <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-sky-200 border border-sky-300" /> system (auto)</span>
+          <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-pink-200 border border-pink-300" /> human (review)</span>
+        </div>
+      </div>
+
+      {/* the selected patient's run as a flow chart (START → diamonds → END) */}
+      <div className="border-t border-slate-100 bg-slate-50/40">
+        <WorkflowFlowChart
+          nodes={nodesFromInstance(instance, users, rows)}
+          endDone={laneDone}
+        />
+      </div>
+
+      {/* the human review for this patient: record + confirm */}
+      {review && review.status === 'active' && (
+        <div className="border-t border-slate-100 px-4 py-4 bg-pink-50/30 space-y-2">
+          <div className="flex items-center gap-2">
+            <User size={13} className="text-pink-500" />
+            <span className="text-sm font-semibold text-slate-700">Review & confirm — {review.patientName}</span>
+          </div>
+          <RecordView patient={review.patientRecord} orders={review.allOrders} />
+          <button
+            onClick={() => onComplete({ instanceId: instance.id, taskInstanceId: review.id, actionInstanceId: review.actionInstances[0].id })}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-green-600 text-white hover:bg-green-700">
+            <CheckCircle2 size={14} /> Confirm record
+          </button>
+        </div>
+      )}
+      {review && review.status === 'completed' && (
+        <div className="border-t border-slate-100 px-4 py-2.5 bg-green-50/30 text-xs text-green-700 flex items-center gap-1.5">
+          <CheckCircle2 size={13} /> {review.patientName}: record confirmed
         </div>
       )}
     </div>
   );
 }
 
-function InstanceCard({ instance, users }) {
+function InstanceCard({ instance, users, onDelete }) {
   const [view, setView] = useState('flow'); // 'flow' | 'detail' | 'collapsed'
 
   // Skipped (not-taken branch) steps are excluded from progress counts.
@@ -342,14 +309,20 @@ function InstanceCard({ instance, users }) {
         </div>
 
         {/* view toggle — clicking the active button collapses */}
-        <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5 shrink-0">
-          <button onClick={() => setView(v => v === 'flow' ? 'collapsed' : 'flow')}
-            className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1 ${view === 'flow' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>
-            <GitBranch size={11} /> Flow
-          </button>
-          <button onClick={() => setView(v => v === 'detail' ? 'collapsed' : 'detail')}
-            className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1 ${view === 'detail' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>
-            {view === 'detail' ? <ChevronUp size={11} /> : <ChevronDown size={11} />} Detail
+        <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
+            <button onClick={() => setView(v => v === 'flow' ? 'collapsed' : 'flow')}
+              className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1 ${view === 'flow' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>
+              <GitBranch size={11} /> Flow
+            </button>
+            <button onClick={() => setView(v => v === 'detail' ? 'collapsed' : 'detail')}
+              className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1 ${view === 'detail' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>
+              {view === 'detail' ? <ChevronUp size={11} /> : <ChevronDown size={11} />} Detail
+            </button>
+          </div>
+          <button onClick={() => onDelete(instance)} title="Delete this run"
+            className="p-2 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors">
+            <Trash2 size={15} />
           </button>
         </div>
       </div>
@@ -564,6 +537,12 @@ export default function Orchestrator() {
     refresh();
   }
 
+  function handleDelete(instance) {
+    if (!window.confirm(`Delete this run of "${instance.workflowName}"? This cannot be undone.`)) return;
+    deleteInstance(instance.id);
+    refresh();
+  }
+
   useEffect(() => { refresh(); }, []);
 
   const running = instances.filter(i => i.status === 'running');
@@ -642,8 +621,8 @@ export default function Orchestrator() {
           ) : (
             <div className="space-y-3">
               {filtered.map(inst => inst.bulkUpload
-                ? <BulkInstanceCard key={inst.id} instance={inst} users={users} onComplete={handleComplete} />
-                : <InstanceCard key={inst.id} instance={inst} users={users} />)}
+                ? <BulkInstanceCard key={inst.id} instance={inst} users={users} onComplete={handleComplete} onDelete={handleDelete} />
+                : <InstanceCard key={inst.id} instance={inst} users={users} onDelete={handleDelete} />)}
             </div>
           )}
         </>

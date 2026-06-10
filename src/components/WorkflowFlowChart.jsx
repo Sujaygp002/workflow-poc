@@ -361,8 +361,8 @@ export function nodesFromWorkflow(wf) {
   }));
 }
 
-export function nodesFromInstance(instance, users = []) {
-  const tis = instance.taskInstances || [];
+export function nodesFromInstance(instance, users = [], taskInstancesOverride = null) {
+  const tis = taskInstancesOverride || instance.taskInstances || [];
   // Map the definition stepId → this run's generated node id, so PreReq
   // (which references stepIds) resolves to instance node ids for layout.
   const stepIdToNodeId = {};

@@ -712,6 +712,12 @@ export function deleteWorkflow(id) {
 export function getInstances() { return load(KEYS.instances); }
 export function getInstance(id) { return load(KEYS.instances).find(i => i.id === id) || null; }
 
+// Delete a launched run (and everything in it).
+export function deleteInstance(id) {
+  save(KEYS.instances, load(KEYS.instances).filter(i => i.id !== id));
+  return load(KEYS.instances);
+}
+
 // ── Execution helpers ──────────────────────────────────
 //
 // Execution is prerequisite + branch aware:
