@@ -1,4 +1,5 @@
 import { GoogleGenAI, Type } from '@google/genai';
+import { GEMINI_API_KEY, GEMINI_MODEL } from './config.js';
 
 const extractionSchema = {
   type: Type.OBJECT,
@@ -59,7 +60,7 @@ const extractionSchema = {
 };
 
 export async function extractMissingDataFromPdf({ pdfBuffer, missingFields, currentPayload }) {
-  if (!process.env.GEMINI_API_KEY) {
+  if (!GEMINI_API_KEY) {
     return {
       ok: false,
       skipped: true,
@@ -76,8 +77,8 @@ export async function extractMissingDataFromPdf({ pdfBuffer, missingFields, curr
     };
   }
 
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+  const model = GEMINI_MODEL;
   const response = await ai.models.generateContent({
     model,
     contents: [

@@ -13,6 +13,7 @@ import {
   writePatientBundle,
 } from './repositories.js';
 import { extractMissingDataFromPdf } from './gemini.js';
+import { GEMINI_MODEL } from './config.js';
 import { cleanString, hasValue, normalizeNpi, safeJson } from './normalizers.js';
 
 const REQUIRED_FIELDS = [
@@ -306,7 +307,7 @@ export const taskRegistry = {
       await insertAiExtraction({
         itemId: item.id,
         documentId: pdf?.document?.id,
-        model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+        model: GEMINI_MODEL,
         status: 'failed',
         inputSummary: { missing },
         outputData: {},
