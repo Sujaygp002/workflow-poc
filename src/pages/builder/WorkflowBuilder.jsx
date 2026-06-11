@@ -571,7 +571,9 @@ export default function WorkflowBuilder() {
 
     const remap = ref => keyToId[ref] || ref;
 
-    const cleanSteps = withIds.map(({ _id, ...s }) => {
+    const cleanSteps = withIds.map((stepWithId) => {
+      const s = { ...stepWithId };
+      delete s._id;
       const out = { ...s };
       if (Array.isArray(s.PreReq)) {
         const mapped = s.PreReq.map(remap);

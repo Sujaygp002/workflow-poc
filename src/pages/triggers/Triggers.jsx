@@ -2,6 +2,7 @@ import { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Zap, Play, AlertCircle, ArrowRight, CheckCircle2, Upload, FileSpreadsheet } from 'lucide-react';
 import { getTriggers, getWorkflows, getWorkflowForTrigger, launchWorkflow, launchBulkUpload, SAMPLE_UPLOAD_ROWS } from '../../store';
+import { startBulkUploadRun } from '../../lib/workflowApi';
 
 // Very small CSV parser (header row + comma split). Good enough for the POC;
 // real XLSX parsing would swap in here.
@@ -22,6 +23,8 @@ export default function Triggers() {
   const triggers = getTriggers();
   const [workflows] = useState(getWorkflows);
   const [fired, setFired] = useState(null);
+  const [error, setError] = useState(null);
+  const [uploading, setUploading] = useState(false);
   const fileRef = useRef(null);
 
   function workflowFor(t) {
@@ -47,18 +50,34 @@ export default function Triggers() {
     }
   }
 
-  function handleFile(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  async function handleFile(e) {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    const workbook = files.find(file => file.name.toLowerCase().endsWith('.xlsx'));
+    const pdfs = files.filter(file => file.name.toLowerCase().endsWith('.pdf'));
+    setError(null);
+
+    if (workbook) {
+      setUploading(true);
+      try {
+        const result = await startBulkUploadRun({ workbook, pdfs, sourceLabel: workbook.name });
+        setFired(`Bulk Upload — ${result.run.total_items} row(s) from ${workbook.name}`);
+        setTimeout(() => setFired(null), 4000);
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setUploading(false);
+      }
+      e.target.value = '';
+      return;
+    }
+
+    const file = files[0];
     const reader = new FileReader();
     reader.onload = () => {
       const rows = parseCsv(String(reader.result || ''));
-      if (rows.length === 0) {
-        // Fallback to sample if the file couldn't be parsed (e.g. real .xlsx binary).
-        fireBulk(SAMPLE_UPLOAD_ROWS, `${file.name} (using sample — parse failed)`);
-      } else {
-        fireBulk(rows, file.name);
-      }
+      if (rows.length === 0) fireBulk(SAMPLE_UPLOAD_ROWS, `${file.name} (using sample — parse failed)`);
+      else fireBulk(rows, file.name);
     };
     reader.readAsText(file);
     e.target.value = '';
@@ -79,6 +98,11 @@ export default function Triggers() {
       {fired && (
         <div className="my-4 px-4 py-3 bg-green-50 border border-green-200 rounded-xl text-green-700 text-sm font-medium flex items-center gap-2">
           <Play size={14} /> «{fired}» fired! See the Orchestrator for the live run.
+        </div>
+      )}
+      {error && (
+        <div className="my-4 px-4 py-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-sm font-medium flex items-center gap-2">
+          <AlertCircle size={14} /> {error}
         </div>
       )}
 
@@ -114,14 +138,14 @@ export default function Triggers() {
 
               {wf && wf.bulkUpload ? (
                 <div className="flex items-center gap-2 shrink-0">
-                  <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleFile} className="hidden" />
+                  <input ref={fileRef} type="file" accept=".csv,.xlsx,.pdf" multiple onChange={handleFile} className="hidden" />
                   <button onClick={() => fireBulk(SAMPLE_UPLOAD_ROWS, 'sample batch')}
                     className="flex items-center gap-1.5 px-3 py-2 bg-white border border-violet-200 text-violet-700 rounded-lg text-sm font-medium hover:bg-violet-50 transition-colors">
                     <FileSpreadsheet size={14} /> Use sample
                   </button>
-                  <button onClick={() => fileRef.current?.click()}
-                    className="flex items-center gap-1.5 px-4 py-2 bg-violet-600 text-white rounded-lg text-sm font-semibold hover:bg-violet-700 transition-colors">
-                    <Upload size={14} /> Upload CSV/XLSX
+                  <button onClick={() => fileRef.current?.click()} disabled={uploading}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-violet-600 text-white rounded-lg text-sm font-semibold hover:bg-violet-700 transition-colors disabled:opacity-60">
+                    <Upload size={14} /> {uploading ? 'Uploading...' : 'Upload Excel/PDFs'}
                   </button>
                 </div>
               ) : wf ? (

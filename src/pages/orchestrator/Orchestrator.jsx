@@ -3,6 +3,7 @@ import { Activity, ChevronDown, ChevronUp, CheckCircle2, Clock, Circle, AlertCir
 import Badge from '../../components/Badge';
 import WorkflowFlowChart, { nodesFromInstance } from '../../components/WorkflowFlowChart';
 import { getInstances, getUsers, instanceStage, completeActionInstance, deleteInstance } from '../../store';
+import { completeDbWorkItem, dbRunToInstance, fetchWorkflowRuns } from '../../lib/workflowApi';
 
 // Instance lifecycle header: unassigned → assigned → done
 function StageHeader({ stage }) {
@@ -521,6 +522,7 @@ function PeoplePanel({ instances, users, onComplete }) {
         instanceId: inst.id,
         taskInstanceId: ti.id,
         actionInstanceId: ai?.id,
+        dbBacked: inst.dbBacked || false,
         workflowName: inst.workflowName,
         taskName: ti.taskName,
         description: ti.description,
@@ -658,19 +660,32 @@ function ActiveTasksPanel({ instances, users }) {
 export default function Orchestrator() {
   const [instances, setInstances] = useState([]);
   const [users, setUsers] = useState([]);
+  const [dbError, setDbError] = useState(null);
   const [filter, setFilter] = useState('all');
   const [tab, setTab] = useState('instances');
   const [showActiveTasks, setShowActiveTasks] = useState(false);
 
-  function refresh() {
-    setInstances(getInstances());
+  async function refresh() {
+    const localInstances = getInstances();
     setUsers(getUsers());
+    try {
+      const dbRuns = await fetchWorkflowRuns();
+      setInstances([...dbRuns.map(dbRunToInstance), ...localInstances]);
+      setDbError(null);
+    } catch (err) {
+      setInstances(localInstances);
+      setDbError(err.message);
+    }
   }
 
-  function handleComplete(item) {
+  async function handleComplete(item) {
     if (!item.actionInstanceId) return;
-    completeActionInstance(item.instanceId, item.taskInstanceId, item.actionInstanceId, '');
-    refresh();
+    if (item.dbBacked) {
+      await completeDbWorkItem({ runId: item.instanceId, taskRunId: item.actionInstanceId });
+    } else {
+      completeActionInstance(item.instanceId, item.taskInstanceId, item.actionInstanceId, '');
+    }
+    await refresh();
   }
 
   function handleDelete(instance) {
@@ -720,6 +735,12 @@ export default function Orchestrator() {
         <StatCard label="In Progress" value={totalActiveActions} sub={`${totalDoneActions} done`} color="violet" />
       </div>
 
+      {dbError && (
+        <div className="mb-4 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-sm">
+          DB workflow API unavailable: {dbError}. Showing local POC runs only.
+        </div>
+      )}
+
       {showActiveTasks && (
         <div className="mb-6 bg-slate-50/60 border border-slate-100 rounded-2xl p-4">
           <div className="flex items-center justify-between mb-3">
@@ -756,7 +777,7 @@ export default function Orchestrator() {
             </div>
           ) : (
             <div className="space-y-3">
-              {filtered.map(inst => inst.bulkUpload
+              {filtered.map(inst => inst.bulkUpload && !inst.dbBacked
                 ? <BulkInstanceCard key={inst.id} instance={inst} onDelete={handleDelete} />
                 : <InstanceCard key={inst.id} instance={inst} users={users} onDelete={handleDelete} />)}
             </div>

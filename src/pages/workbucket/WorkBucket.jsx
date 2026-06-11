@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { CheckCircle2, Clock, ChevronDown, ChevronUp, ArrowLeft, RefreshCw, Inbox, Eye, EyeOff } from 'lucide-react';
 import { getUsers, getMyWorkItems, getMyCompletedItems, completeActionInstance, getModule, setTaskFormData, getInstance, validateRecord } from '../../store';
 import RecordView from '../../components/RecordView';
+import { completeDbWorkItem, dbWorkItemToAction, fetchWorkItems } from '../../lib/workflowApi';
 
 // Plausible valid sample per module (a button prefills it for the demo).
 const SAMPLES = {
@@ -117,7 +118,9 @@ function ActionCard({ item, onComplete }) {
   const isFill = item.taskKind === 'fill' || item.taskKind === 'fix';
   const isValidate = item.taskKind === 'validate';
   const isReview = item.taskKind === 'review-record'
-    || item.taskKind === 'manual-create-patient' || item.taskKind === 'manual-create-order';
+    || item.taskKind === 'manual-create-patient'
+    || item.taskKind === 'manual-create-order'
+    || item.taskKind === 'human.reviewRecord';
   const kindBadge = {
     fill: 'create / fill', validate: 'validate', map: 'map to SA', fix: 'fix data',
     'review-record': 'review record',
@@ -154,7 +157,7 @@ function ActionCard({ item, onComplete }) {
       setTaskFormData(item.instanceId, item.taskInstanceId, form);
     }
     await new Promise(r => setTimeout(r, 200));
-    onComplete(item, notes, isValidate ? verdicts : undefined);
+    await onComplete(item, notes, isValidate ? verdicts : undefined);
   }
 
   return (
@@ -219,7 +222,31 @@ function ActionCard({ item, onComplete }) {
             {isReview && (
               <div className="space-y-2">
                 <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Record from the upload</p>
-                <RecordView patient={item.patientRecord} orders={item.allOrders} order={item.orderRecord} />
+                {item.dbBacked ? (
+                  <div className="rounded-xl border border-violet-100 bg-white p-3 space-y-2 text-xs">
+                    <div>
+                      <div className="font-bold uppercase tracking-wide text-violet-500 mb-1">patient</div>
+                      <div className="grid grid-cols-2 gap-1 text-slate-600">
+                        <span>Name: {item.dbPayload?.patient?.patient_info?.name || '—'}</span>
+                        <span>DOB: {item.dbPayload?.patient?.patient_info?.DOB || '—'}</span>
+                        <span>MRN: {item.dbPayload?.patient?.admission_details?.MRN || '—'}</span>
+                        <span>Sex: {item.dbPayload?.patient?.patient_info?.sex || '—'}</span>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="font-bold uppercase tracking-wide text-rose-500 mb-1">order</div>
+                      <div className="grid grid-cols-2 gap-1 text-slate-600">
+                        <span>Order: {item.dbPayload?.order?.order_info?.order_number || '—'}</span>
+                        <span>Type: {item.dbPayload?.order?.order_info?.order_type || '—'}</span>
+                        <span>NPI: {item.dbPayload?.references?.practitioner?.NPI || '—'}</span>
+                        <span>PG: {item.dbPayload?.references?.PG?.name || '—'}</span>
+                        <span>HHAH: {item.dbPayload?.references?.HHAH?.name || '—'}</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <RecordView patient={item.patientRecord} orders={item.allOrders} order={item.orderRecord} />
+                )}
                 <p className="text-[11px] text-slate-400">
                   {item.taskKind === 'manual-create-patient'
                     ? 'Some patient fields were missing in the upload. Create the patient using the order-PDF reference, then mark it created to continue the loop.'
@@ -231,7 +258,14 @@ function ActionCard({ item, onComplete }) {
             )}
 
             {!isFill && !isValidate && !isReview && (
-              <div>
+              <div className="space-y-3">
+                {item.dbBacked && (
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600 space-y-1">
+                    <div><span className="font-semibold text-slate-700">NPI:</span> {item.dbPayload?.references?.practitioner?.NPI || '—'}</div>
+                    <div><span className="font-semibold text-slate-700">PG:</span> {item.dbPayload?.references?.PG?.name || '—'}</div>
+                    <div><span className="font-semibold text-slate-700">HHAH:</span> {item.dbPayload?.references?.HHAH?.name || '—'}</div>
+                  </div>
+                )}
                 <label className="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wide">Notes / Output</label>
                 <textarea
                   className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 resize-none bg-white"
@@ -289,10 +323,20 @@ export default function WorkBucket() {
 
   const [pending, setPending] = useState([]);
   const [completed, setCompleted] = useState([]);
+  const [dbError, setDbError] = useState(null);
 
   const refresh = useCallback(() => {
-    setPending(getMyWorkItems(userId));
-    setCompleted(getMyCompletedItems(userId));
+    const localPending = getMyWorkItems(userId);
+    const localCompleted = getMyCompletedItems(userId);
+    setPending(localPending);
+    setCompleted(localCompleted);
+    fetchWorkItems(userId)
+      .then(data => {
+        setPending([...localPending, ...(data.pending || []).map(dbWorkItemToAction)]);
+        setCompleted([...(data.completed || []).map(dbWorkItemToAction), ...localCompleted]);
+        setDbError(null);
+      })
+      .catch(err => setDbError(err.message));
   }, [userId]);
 
   useEffect(() => {
@@ -315,8 +359,12 @@ export default function WorkBucket() {
     );
   }
 
-  function handleComplete(item, notes, validationOverrides) {
-    completeActionInstance(item.instanceId, item.taskInstanceId, item.actionInstanceId, notes, validationOverrides);
+  async function handleComplete(item, notes, validationOverrides) {
+    if (item.dbBacked) {
+      await completeDbWorkItem({ runId: item.instanceId, taskRunId: item.actionInstanceId, notes });
+    } else {
+      completeActionInstance(item.instanceId, item.taskInstanceId, item.actionInstanceId, notes, validationOverrides);
+    }
     refresh();
   }
 
@@ -343,6 +391,11 @@ export default function WorkBucket() {
       </header>
 
       <main className="max-w-xl mx-auto px-4 py-6 space-y-6">
+        {dbError && (
+          <div className="px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-xs">
+            DB work bucket unavailable: {dbError}. Showing local POC tasks only.
+          </div>
+        )}
         <section>
           <div className="flex items-center gap-2 mb-3">
             <span className="w-2 h-2 rounded-full bg-amber-400" />
