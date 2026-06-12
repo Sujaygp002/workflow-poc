@@ -67,7 +67,7 @@
 - `/worker` and `/worker/bucket/:userId` use the dummy users but show DB-assigned tasks only.
 - Worker task cards show matched order PDF side-by-side with the record.
 - Missing fields are highlighted and can be entered before completing the human task.
-- wf7 now has manual fallback tasks for missing SOC and missing SOE/EOE before admission/episode matching.
+- wf7 now treats Admission and Episode as explicit objects and has manual fallback tasks for missing SOC and missing SOE/EOE before admission object/episode object matching.
 - `/hhh-login` is a standalone route without the builder sidebar and is not shown inside FlowPOC navigation.
 - `/hhh-login` includes patient and order browsing after upload; order detail opens the matched PDF instead of JSON.
 

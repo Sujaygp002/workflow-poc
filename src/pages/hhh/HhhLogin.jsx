@@ -73,7 +73,7 @@ function PatientFlow({ tree }) {
             {(tree.admissions || []).map((admission) => (
               <div key={admission.id} className="flex items-start gap-3">
                 <div className="w-56 rounded-2xl border-2 border-emerald-300 bg-emerald-50 p-3">
-                  <div className="text-[10px] font-bold text-emerald-700 uppercase">Admission</div>
+                  <div className="text-[10px] font-bold text-emerald-700 uppercase">Admission Object</div>
                   <div className="text-sm font-bold text-slate-800 mt-1">
                     {formatDate(admission.soc)} to {formatDate(admission.eoc)}
                   </div>
@@ -93,7 +93,7 @@ function PatientFlow({ tree }) {
                           className={`w-56 text-left rounded-2xl border-2 p-3 transition-colors ${isOpen ? 'border-amber-400 bg-amber-50' : 'border-amber-200 bg-white hover:bg-amber-50'}`}
                         >
                           <div className="flex items-center justify-between gap-1">
-                            <div className="text-[10px] font-bold text-amber-700 uppercase">Episode</div>
+                            <div className="text-[10px] font-bold text-amber-700 uppercase">Episode Object</div>
                           </div>
                           <div className="text-sm font-bold text-slate-800 mt-1">
                             {formatDate(episode.soe)} to {formatDate(episode.eoe)}

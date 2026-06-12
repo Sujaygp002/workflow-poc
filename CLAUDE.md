@@ -62,6 +62,10 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-12** — Renamed Admission/Episode display language to **Admission Object** and
+  **Episode Object** across wf7 step names/descriptions, object lifecycle summaries, worker
+  lifecycle strips, and the HHH patient flow.
+
 - **2026-06-12** — Added explicit date fallbacks and eligibility visibility. wf7 now checks
   admission dates (`wf7-s24`) and episode dates (`wf7-s26`) before patient/admission writes;
   missing SOC routes to **Manually Add Admission Dates** (`wf7-s25`) and missing SOE/EOE

@@ -534,8 +534,8 @@ function aggregateObjects(instance) {
     Patient: { created: 0, updated: 0, review: 0 },
     'Physician Group': { found: 0, created: 0, review: 0 },
     Practitioner: { found: 0, created: 0 },
-    Admission: { found: 0, created: 0 },
-    Episode: { found: 0, created: 0 },
+    'Admission Object': { found: 0, created: 0 },
+    'Episode Object': { found: 0, created: 0 },
     Order: { created: 0, updated: 0 },
   };
   for (const d of Object.values(byPatient)) {
@@ -545,8 +545,8 @@ function aggregateObjects(instance) {
     else if (d.patient_write_success || d.patient_retry_success) objs.Patient.created += 1;
     if (d.needs_manual_review) objs.Patient.review += 1;
     if (d.practitioner_exists) objs.Practitioner.found += 1;
-    if (d.admission_created) objs.Admission.created += 1; else if (d.admission_exists || d.admission_ready) objs.Admission.found += 1;
-    if (d.episode_created) objs.Episode.created += 1; else if (d.episode_exists || d.episode_ready) objs.Episode.found += 1;
+    if (d.admission_created) objs['Admission Object'].created += 1; else if (d.admission_exists || d.admission_ready) objs['Admission Object'].found += 1;
+    if (d.episode_created) objs['Episode Object'].created += 1; else if (d.episode_exists || d.episode_ready) objs['Episode Object'].found += 1;
     if (d.order_write_success && d.order_exists) objs.Order.updated += 1;
     else if (d.order_write_success || d.order_retry_success) objs.Order.created += 1;
   }
@@ -715,9 +715,9 @@ function DbBulkInstanceCard({ instance, onDelete }) {
                 <Arrow small />
                 {row('wf7-s12')}
                 <Arrow small />
-                {row('wf7-s24', 'wf7-s25', 'manual dates if SOC missing')}
+                {row('wf7-s24', 'wf7-s25', 'manual object dates if SOC missing')}
                 <Arrow small />
-                {row('wf7-s26', 'wf7-s27', 'manual dates if SOE/EOE missing')}
+                {row('wf7-s26', 'wf7-s27', 'manual object dates if SOE/EOE missing')}
                 <Arrow small />
                 {row('wf7-s14', 'wf7-s13', 'create or update patient')}
                 <Arrow small />

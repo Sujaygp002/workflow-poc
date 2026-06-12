@@ -106,8 +106,8 @@ function lifecycleFromDecisions(d = {}) {
       : d.patient_exists ? 'found' : d.patient_not_exists ? 'missing' : 'pending',
     'Physician Group': d.pg_missing_blocks_patient ? 'in-review' : ref(d.pg_exists, d.pg_not_exists),
     Practitioner: ref(d.practitioner_exists, d.practitioner_not_exists),
-    Admission: d.admission_created ? 'created' : d.admission_exists ? 'found' : d.admission_ready ? 'created' : 'pending',
-    Episode: d.episode_created ? 'created' : d.episode_exists ? 'found' : d.episode_ready ? 'created' : 'pending',
+    'Admission Object': d.admission_created ? 'created' : d.admission_exists ? 'found' : d.admission_ready ? 'created' : 'pending',
+    'Episode Object': d.episode_created ? 'created' : d.episode_exists ? 'found' : d.episode_ready ? 'created' : 'pending',
     Order: (d.order_write_success || d.order_retry_success) ? (d.order_exists ? 'updated' : 'created')
       : d.order_exists ? 'found' : d.order_not_exists ? 'missing' : 'pending',
   };
