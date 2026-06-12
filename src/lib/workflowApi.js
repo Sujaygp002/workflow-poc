@@ -21,6 +21,15 @@ export async function fetchWorkflowRuns() {
   return body.runs || [];
 }
 
+export async function deleteWorkflowRun(runId) {
+  const res = await fetch(`/api/workflow-runs/${encodeURIComponent(runId)}`, {
+    method: 'DELETE',
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Unable to delete workflow run');
+  return body;
+}
+
 export async function fetchWorkflowDefinitions() {
   const res = await fetch('/api/workflows');
   const body = await res.json().catch(() => ({}));

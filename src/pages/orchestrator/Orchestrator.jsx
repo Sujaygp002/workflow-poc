@@ -3,7 +3,7 @@ import { Activity, ChevronDown, ChevronUp, CheckCircle2, Clock, Circle, AlertCir
 import Badge from '../../components/Badge';
 import WorkflowFlowChart, { nodesFromInstance } from '../../components/WorkflowFlowChart';
 import { getUsers, instanceStage } from '../../store';
-import { completeDbWorkItem, dbRunToInstance, fetchWorkflowRuns } from '../../lib/workflowApi';
+import { completeDbWorkItem, dbRunToInstance, deleteWorkflowRun, fetchWorkflowRuns } from '../../lib/workflowApi';
 
 // Instance lifecycle header: unassigned → assigned → done
 function StageHeader({ stage }) {
@@ -503,7 +503,7 @@ function BulkInstanceCard({ instance, onDelete }) {
   );
 }
 
-function DbBulkInstanceCard({ instance }) {
+function DbBulkInstanceCard({ instance, onDelete }) {
   const patientIdxs = [...new Set(instance.taskInstances.map(t => t.patientIndex))].sort((a, b) => a - b);
   const total = patientIdxs.length;
   const live = instance.taskInstances.filter(t => t.status !== 'skipped');
@@ -590,6 +590,12 @@ function DbBulkInstanceCard({ instance }) {
           </div>
           <StageHeader stage={instanceStage(instance)} />
         </div>
+        {onDelete && (
+          <button onClick={() => onDelete(instance)} title="Delete this run"
+            className="shrink-0 p-2 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors">
+            <Trash2 size={15} />
+          </button>
+        )}
       </div>
 
       <div className="border-t border-slate-100 bg-slate-50/40 px-4 pt-3 flex items-center gap-3 text-[11px] text-slate-500 flex-wrap">
@@ -926,6 +932,19 @@ export default function Orchestrator() {
     await refresh();
   }
 
+  async function handleDelete(instance) {
+    if (!instance?.id) return;
+    if (!window.confirm(`Delete this workflow run?\n\nThis removes the run and its task history. Created patient/order records are kept.`)) return;
+    // optimistic remove, then reconcile from the server
+    setInstances(prev => prev.filter(i => i.id !== instance.id));
+    try {
+      await deleteWorkflowRun(instance.id);
+    } catch (err) {
+      setDbError(err.message);
+    }
+    await refresh();
+  }
+
   useEffect(() => { refresh(); }, []);
 
   const running = instances.filter(i => i.status === 'running');
@@ -1010,10 +1029,10 @@ export default function Orchestrator() {
           ) : (
             <div className="space-y-3">
               {filtered.map(inst => inst.bulkUpload && !inst.dbBacked
-                ? <BulkInstanceCard key={inst.id} instance={inst} onDelete={() => {}} />
+                ? <BulkInstanceCard key={inst.id} instance={inst} onDelete={handleDelete} />
                 : inst.dbBacked && inst.workflowId === 'wf7'
-                  ? <DbBulkInstanceCard key={inst.id} instance={inst} />
-                  : <InstanceCard key={inst.id} instance={inst} users={users} onDelete={() => {}} />)}
+                  ? <DbBulkInstanceCard key={inst.id} instance={inst} onDelete={handleDelete} />
+                  : <InstanceCard key={inst.id} instance={inst} users={users} onDelete={handleDelete} />)}
             </div>
           )}
         </>

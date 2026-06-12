@@ -139,6 +139,20 @@ export async function getRunWithDefinition(runId) {
   return rows[0] || null;
 }
 
+// Delete a run and everything scoped to it (items, task runs, uploaded docs,
+// AI extractions) via ON DELETE CASCADE. Created domain records (patients,
+// orders, practitioners, etc.) are intentionally kept. Returns true if a row
+// was removed.
+export async function deleteWorkflowRun(runId) {
+  const sql = getSql();
+  const rows = await sql`
+    DELETE FROM workflow_runs
+    WHERE id = ${runId}
+    RETURNING id
+  `;
+  return rows.length > 0;
+}
+
 export async function getRunItems(runId) {
   const sql = getSql();
   return sql`

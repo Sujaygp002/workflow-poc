@@ -62,6 +62,11 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-12** — Restored delete for workflow runs end-to-end. Added `DELETE
+  /api/workflow-runs/[id]` (handler + `deleteWorkflowRun` repo fn — cascades to items/
+  task runs, keeps created domain records), `deleteWorkflowRun` client in `workflowApi.js`,
+  a Trash button on `DbBulkInstanceCard`, and wired the previously no-op `onDelete` stubs
+  in `Orchestrator.jsx` to a real `handleDelete` (confirm + optimistic remove + refresh).
 - **2026-06-12** — Orchestrator DB bulk view (`DbBulkInstanceCard`): replaced the inline
   condition chip with real if/else **decision diamonds**. Added `DecisionDiamond` and
   `NoArm` components; reworked `row()` so a SYS step forks via a diamond (YES continues
