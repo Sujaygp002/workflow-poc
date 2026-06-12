@@ -62,6 +62,8 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-12** — Added explicit **Create / Confirm Admission** (wf7-s22) and **Create / Confirm Episode** (wf7-s23) steps between patient write and order, so Admission and Episode appear as distinct workflow + lifecycle objects (flow: Patient → Admission → Episode → Order). New `admission.confirm`/`episode.confirm` tasks + `admission_ready`/`episode_ready` decisions (the bundle still writes them atomically; these confirm/surface them). Re-seeded wf7 (21 steps).
+
 - **2026-06-12** — Removed the **Check HHAH** step (wf7-s10) and `refs.checkHhahByName` too. HHAH always comes from the login context, so neither check nor create is needed in the workflow. Rewired wf7-s12 preReq to the PG check/review; updated the Orchestrator row. Re-seeded wf7 (now 19 steps).
 
 - **2026-06-12** — Removed the "Create HHAH" human task (wf7-s11) and `human.createHhah`. HHAH is always present via the HHAH login context, so it never needs manual creation. Kept Check HHAH; rewired wf7-s12 preReq; cleaned WorkBucket/Triggers/Orchestrator refs. Re-seeded wf7.

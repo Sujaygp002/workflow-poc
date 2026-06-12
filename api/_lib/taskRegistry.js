@@ -139,8 +139,8 @@ async function runPatientWrite(item, retry) {
   try {
     const bundle = await writePatientBundle(item);
     const decisions = setDecisions(item, retry
-      ? { patient_retry_success: true, patient_retry_fail: false, patient_write_fail: false }
-      : { patient_write_success: true, patient_write_fail: false });
+      ? { patient_retry_success: true, patient_retry_fail: false, patient_write_fail: false, admission_ready: !!bundle.admission?.id, episode_ready: !!bundle.episode?.id }
+      : { patient_write_success: true, patient_write_fail: false, admission_ready: !!bundle.admission?.id, episode_ready: !!bundle.episode?.id });
     await updateItem(item.id, {
       decisions,
       extractionPayload: {
@@ -359,6 +359,29 @@ export const taskRegistry = {
   'patient.create': async ({ item }) => runPatientWrite(item, false),
   'patient.retryWrite': async ({ item }) => runPatientWrite(item, true),
 
+  // Admission and Episode are written as part of the patient bundle; these steps
+  // confirm them so they appear as distinct objects in the workflow + lifecycle.
+  'admission.confirm': async ({ item }) => {
+    const admissionId = item.extraction_payload?.patientBundle?.admissionId || null;
+    const decisions = setDecisions(item, { admission_ready: !!admissionId });
+    await updateItem(item.id, { decisions });
+    return { ok: !!admissionId, output: { admissionId, soc: item.patient_payload?.admission_details?.SOC } };
+  },
+
+  'episode.confirm': async ({ item }) => {
+    const episodeId = item.extraction_payload?.patientBundle?.episodeId || null;
+    const decisions = setDecisions(item, { episode_ready: !!episodeId });
+    await updateItem(item.id, { decisions });
+    return {
+      ok: !!episodeId,
+      output: {
+        episodeId,
+        soe: item.patient_payload?.admission_details?.SOE,
+        eoe: item.patient_payload?.admission_details?.EOE,
+      },
+    };
+  },
+
   'order.update': async ({ item }) => runOrderWrite(item, false),
   'order.create': async ({ item }) => runOrderWrite(item, false),
   'order.retryWrite': async ({ item }) => runOrderWrite(item, true),
@@ -464,8 +487,8 @@ export function objectLifecycle(item) {
     physicianGroup: d.pg_missing_blocks_patient ? 'in-review' : ref(d.pg_exists, d.pg_not_exists),
     practitioner: ref(d.practitioner_exists, d.practitioner_not_exists),
     hhah: ref(d.hhah_exists, d.hhah_not_exists),
-    admission: d.patient_write_success || d.patient_retry_success ? 'created' : 'pending',
-    episode: d.patient_write_success || d.patient_retry_success ? 'created' : 'pending',
+    admission: d.admission_ready ? 'created' : 'pending',
+    episode: d.episode_ready ? 'created' : 'pending',
     order: d.order_write_success || d.order_retry_success ? (d.order_exists ? 'updated' : 'created')
       : d.order_exists ? 'found' : d.order_not_exists ? 'missing' : 'pending',
   };

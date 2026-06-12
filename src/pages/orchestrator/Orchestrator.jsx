@@ -650,6 +650,10 @@ function DbBulkInstanceCard({ instance, onDelete }) {
                 <Arrow small />
                 {row('wf7-s15', 'wf7-s16', 'retry or human fix')}
                 <Arrow small />
+                {row('wf7-s22')}
+                <Arrow small />
+                {row('wf7-s23')}
+                <Arrow small />
                 {row('wf7-s18', 'wf7-s17', 'create or update order')}
                 <Arrow small />
                 {row('wf7-s19', 'wf7-s20', 'retry or human fix')}
