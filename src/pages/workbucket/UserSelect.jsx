@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Inbox } from 'lucide-react';
-import { getUsers, getMyWorkItems, getMyCompletedItems } from '../../store';
+import { getUsers } from '../../store';
+import { fetchWorkItems } from '../../lib/workflowApi';
 
 const AVATAR_COLORS = [
   'bg-violet-200 text-violet-700',
@@ -14,10 +15,23 @@ export default function UserSelect() {
   const navigate = useNavigate();
   const location = useLocation();
   const [users, setUsers] = useState(getUsers);
-  const [, setTick] = useState(0);
+  const [counts, setCounts] = useState({});
 
   useEffect(() => {
-    const refresh = () => { setUsers(getUsers()); setTick(t => t + 1); };
+    async function refresh() {
+      const nextUsers = getUsers();
+      setUsers(nextUsers);
+      const entries = await Promise.all(nextUsers.map(async (user) => {
+        try {
+          const data = await fetchWorkItems(user.id);
+          return [user.id, { pending: (data.pending || []).length, done: (data.completed || []).length }];
+        } catch {
+          return [user.id, { pending: 0, done: 0 }];
+        }
+      }));
+      setCounts(Object.fromEntries(entries));
+    }
+    refresh();
     window.addEventListener('focus', refresh);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
     return () => window.removeEventListener('focus', refresh);
@@ -36,8 +50,8 @@ export default function UserSelect() {
 
         <div className="space-y-3">
           {users.map((user, i) => {
-            const pending = getMyWorkItems(user.id).length;
-            const done = getMyCompletedItems(user.id).length;
+            const pending = counts[user.id]?.pending || 0;
+            const done = counts[user.id]?.done || 0;
             const total = pending + done;
             const pct = total === 0 ? 0 : Math.round((done / total) * 100);
             return (

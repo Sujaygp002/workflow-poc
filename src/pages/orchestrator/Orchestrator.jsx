@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Activity, ChevronDown, ChevronUp, CheckCircle2, Clock, Circle, AlertCircle, RefreshCw, Lock, ArrowDown, GitBranch, Trash2 } from 'lucide-react';
 import Badge from '../../components/Badge';
 import WorkflowFlowChart, { nodesFromInstance } from '../../components/WorkflowFlowChart';
-import { getInstances, getUsers, instanceStage, completeActionInstance, deleteInstance } from '../../store';
+import { getUsers, instanceStage } from '../../store';
 import { completeDbWorkItem, dbRunToInstance, fetchWorkflowRuns } from '../../lib/workflowApi';
 
 // Instance lifecycle header: unassigned → assigned → done
@@ -179,6 +179,16 @@ function aggStep(instance, baseStepId) {
   const active = tis.filter(t => t.status === 'active').length;
   const skipped = tis.filter(t => t.status === 'skipped').length;
   const ran = done + active;                 // how many patients actually took this step
+  return { tis, total, done, active, skipped, ran };
+}
+
+function aggDbStep(instance, stepId) {
+  const tis = instance.taskInstances.filter(t => t.stepId === stepId);
+  const total = tis.length;
+  const done = tis.filter(t => t.status === 'completed').length;
+  const active = tis.filter(t => t.status === 'active').length;
+  const skipped = tis.filter(t => t.status === 'skipped').length;
+  const ran = done + active;
   return { tis, total, done, active, skipped, ran };
 }
 
@@ -410,6 +420,124 @@ function BulkInstanceCard({ instance, onDelete }) {
           {currentStep.actor === 'human' && (
             <span className="text-[11px] text-slate-400">— waiting on a person in the Work Bucket</span>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DbBulkInstanceCard({ instance }) {
+  const patientIdxs = [...new Set(instance.taskInstances.map(t => t.patientIndex))].sort((a, b) => a - b);
+  const total = patientIdxs.length;
+  const live = instance.taskInstances.filter(t => t.status !== 'skipped');
+  const doneTasks = live.filter(t => t.status === 'completed').length;
+  const active = instance.taskInstances.find(t => t.status === 'active');
+  const allDone = instance.status === 'completed';
+  const donePatients = patientIdxs.filter((idx) => {
+    const tasks = instance.taskInstances.filter(t => t.patientIndex === idx && t.status !== 'skipped');
+    return tasks.length > 0 && tasks.every(t => t.status === 'completed');
+  }).length;
+
+  const row = (leftId, rightId = null, label = null) => (
+    <div className="grid items-center gap-x-4" style={{ gridTemplateColumns: '320px 320px' }}>
+      <div className="flex justify-center">
+        <StepNode
+          name={instance.taskInstances.find(t => t.stepId === leftId)?.taskName || leftId}
+          actor={instance.taskInstances.find(t => t.stepId === leftId)?.actor || 'system'}
+          agg={aggDbStep(instance, leftId)}
+          current={active?.stepId === leftId}
+        />
+      </div>
+      <div className="flex justify-center">
+        {rightId ? (
+          <StepNode
+            name={instance.taskInstances.find(t => t.stepId === rightId)?.taskName || rightId}
+            actor={instance.taskInstances.find(t => t.stepId === rightId)?.actor || 'human'}
+            agg={aggDbStep(instance, rightId)}
+            sub={label}
+            current={active?.stepId === rightId}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="flex items-start gap-3 p-4">
+        <div className="mt-0.5">{statusIcon(instance.status)}</div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-slate-800">{instance.workflowName}</span>
+            <Badge label={instance.status} type={instance.status} />
+            <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-100">
+              <RefreshCw size={10} /> loop · {donePatients}/{total} rows done
+            </span>
+          </div>
+          <div className="flex items-center gap-3 mt-1 text-xs text-slate-400">
+            <span className="flex items-center gap-1"><Clock size={10} /> {new Date(instance.launchedAt).toLocaleString()}</span>
+            <span>{doneTasks}/{live.length} live steps</span>
+          </div>
+          <StageHeader stage={instanceStage(instance)} />
+        </div>
+      </div>
+
+      <div className="border-t border-slate-100 bg-slate-50/40 px-4 pt-3 flex items-center gap-3 text-[11px] text-slate-500 flex-wrap">
+        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-sky-200 border border-sky-300" /> system / AI</span>
+        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-pink-200 border border-pink-300" /> human</span>
+        <span>counts show workflow rows through each step</span>
+      </div>
+
+      <div className="bg-slate-50/40 px-6 py-6 overflow-x-auto">
+        <div className="w-fit mx-auto flex flex-col items-center">
+          <div className="rounded-full px-6 py-1.5 text-sm font-bold border-2 border-violet-400 bg-violet-50 text-violet-700">START · Excel + order PDFs</div>
+          <Arrow />
+          <div className="border-2 border-dashed border-purple-300 rounded-2xl bg-purple-50/20 px-5 py-4">
+            <div className="flex items-center justify-center gap-1.5 text-[11px] font-bold text-purple-700 mb-4">
+              <RefreshCw size={12} /> FOR EACH PATIENT / ORDER ROW UNTIL LAST ROW
+            </div>
+            <div className="space-y-2">
+              {row('wf7-s1')}
+              <Arrow small />
+              {row('wf7-s2')}
+              <Arrow small />
+              {row('wf7-s3', 'wf7-s5', 'missing data fallback')}
+              <Arrow small />
+              {row('wf7-s6', 'wf7-s7', 'create if NPI missing')}
+              <Arrow small />
+              {row('wf7-s8', 'wf7-s9', 'create if PG missing')}
+              <Arrow small />
+              {row('wf7-s10', 'wf7-s11', 'create if HHAH missing')}
+              <Arrow small />
+              {row('wf7-s12')}
+              <Arrow small />
+              {row('wf7-s14', 'wf7-s13', 'create or update patient')}
+              <Arrow small />
+              {row('wf7-s15', 'wf7-s16', 'retry or human fix')}
+              <Arrow small />
+              {row('wf7-s18', 'wf7-s17', 'create or update order')}
+              <Arrow small />
+              {row('wf7-s19', 'wf7-s20', 'retry or human fix')}
+              <Arrow small />
+              {row('wf7-s21')}
+            </div>
+          </div>
+          <Arrow />
+          <div className={`rounded-full px-6 py-1.5 text-sm font-bold border-2 ${allDone ? 'border-green-400 bg-green-50 text-green-700' : 'border-slate-300 bg-white text-slate-400'}`}>
+            END {allDone && '· all rows reviewed'}
+          </div>
+        </div>
+      </div>
+
+      {!allDone && active && (
+        <div className="border-t border-slate-100 px-4 py-3 bg-amber-50/40 flex items-center gap-2 text-sm">
+          <span className="relative flex h-2.5 w-2.5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-60" />
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" />
+          </span>
+          <span className="text-slate-500">Currently at:</span>
+          <span className="font-semibold text-slate-700">{active.taskName}</span>
+          {active.assignedTo && <span className="text-[11px] text-slate-400">assigned to {active.assignedTo}</span>}
         </div>
       )}
     </div>
@@ -666,14 +794,13 @@ export default function Orchestrator() {
   const [showActiveTasks, setShowActiveTasks] = useState(false);
 
   async function refresh() {
-    const localInstances = getInstances();
     setUsers(getUsers());
     try {
       const dbRuns = await fetchWorkflowRuns();
-      setInstances([...dbRuns.map(dbRunToInstance), ...localInstances]);
+      setInstances(dbRuns.map(dbRunToInstance));
       setDbError(null);
     } catch (err) {
-      setInstances(localInstances);
+      setInstances([]);
       setDbError(err.message);
     }
   }
@@ -682,16 +809,8 @@ export default function Orchestrator() {
     if (!item.actionInstanceId) return;
     if (item.dbBacked) {
       await completeDbWorkItem({ runId: item.instanceId, taskRunId: item.actionInstanceId });
-    } else {
-      completeActionInstance(item.instanceId, item.taskInstanceId, item.actionInstanceId, '');
     }
     await refresh();
-  }
-
-  function handleDelete(instance) {
-    if (!window.confirm(`Delete this run of "${instance.workflowName}"? This cannot be undone.`)) return;
-    deleteInstance(instance.id);
-    refresh();
   }
 
   useEffect(() => { refresh(); }, []);
@@ -778,8 +897,10 @@ export default function Orchestrator() {
           ) : (
             <div className="space-y-3">
               {filtered.map(inst => inst.bulkUpload && !inst.dbBacked
-                ? <BulkInstanceCard key={inst.id} instance={inst} onDelete={handleDelete} />
-                : <InstanceCard key={inst.id} instance={inst} users={users} onDelete={handleDelete} />)}
+                ? <BulkInstanceCard key={inst.id} instance={inst} onDelete={() => {}} />
+                : inst.dbBacked && inst.workflowId === 'wf7'
+                  ? <DbBulkInstanceCard key={inst.id} instance={inst} />
+                  : <InstanceCard key={inst.id} instance={inst} users={users} onDelete={() => {}} />)}
             </div>
           )}
         </>

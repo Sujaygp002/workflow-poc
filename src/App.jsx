@@ -1,11 +1,9 @@
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
-import { Building2, GitBranch, Inbox, Settings, Activity, Zap } from 'lucide-react';
+import { Building2, GitBranch, Inbox, Activity } from 'lucide-react';
 import WorkflowList from './pages/builder/WorkflowList';
-import WorkflowBuilder from './pages/builder/WorkflowBuilder';
 import WorkBucket from './pages/workbucket/WorkBucket';
 import UserSelect from './pages/workbucket/UserSelect';
 import Orchestrator from './pages/orchestrator/Orchestrator';
-import Triggers from './pages/triggers/Triggers';
 import HhhLogin from './pages/hhh/HhhLogin';
 
 function Sidebar() {
@@ -31,26 +29,19 @@ function Sidebar() {
       </div>
 
       <nav className="flex-1 p-3 space-y-1">
-        <div className="text-xs font-semibold text-slate-400 px-3 py-1 uppercase tracking-wider">Builder</div>
-        {navItem('/triggers', <Zap size={16} />, 'Triggers', true)}
-        {navItem('/builder/workflows', <GitBranch size={16} />, 'Workflows', true)}
-
-        <div className="text-xs font-semibold text-slate-400 px-3 py-1 mt-4 uppercase tracking-wider">Execution</div>
-        {navItem('/orchestrator', <Activity size={16} />, 'Orchestrator', true)}
-        {navItem('/worker', <Inbox size={16} />, 'Work Bucket', true)}
+        <div className="text-xs font-semibold text-slate-400 px-3 py-1 uppercase tracking-wider">HHH Workflow</div>
         {navItem('/hhh-login', <Building2 size={16} />, 'HHH Login', true)}
+        {navItem('/builder/workflows', <GitBranch size={16} />, 'Workflow', true)}
+        {navItem('/orchestrator', <Activity size={16} />, 'Orchestrator', true)}
+        {navItem('/worker', <Inbox size={16} />, 'Work Buckets', true)}
       </nav>
 
       <div className="p-3 border-t border-slate-100 space-y-1">
-        <a href={import.meta.env.BASE_URL === '/' ? '/worker' : `${import.meta.env.BASE_URL}worker.html`} target="_blank" rel="noreferrer"
+        <a href="/worker" target="_blank" rel="noreferrer"
           className="flex items-center gap-2 px-3 py-2 text-xs text-violet-600 hover:bg-violet-50 rounded-lg font-medium transition-colors">
           <Inbox size={13} />
-          <span>Open Worker UI ↗</span>
+          <span>Open Worker UI</span>
         </a>
-        <div className="flex items-center gap-2 px-3 py-2 text-xs text-slate-400">
-          <Settings size={13} />
-          <span>POC — localStorage</span>
-        </div>
       </div>
     </aside>
   );
@@ -73,10 +64,10 @@ function AppShell() {
       {!standalone && <Sidebar />}
       <main className="flex-1 min-w-0 overflow-y-auto">
         <Routes>
-          <Route path="/" element={<Navigate to="/triggers" replace />} />
-          <Route path="/triggers" element={<Triggers />} />
+          <Route path="/" element={<Navigate to="/hhh-login" replace />} />
+          <Route path="/triggers" element={<Navigate to="/hhh-login" replace />} />
           <Route path="/builder/workflows" element={<WorkflowList />} />
-          <Route path="/builder/create" element={<WorkflowBuilder />} />
+          <Route path="/builder/create" element={<Navigate to="/builder/workflows" replace />} />
           <Route path="/orchestrator" element={<Orchestrator />} />
           <Route path="/worker" element={<UserSelect />} />
           <Route path="/worker/bucket/:userId" element={<WorkBucket />} />

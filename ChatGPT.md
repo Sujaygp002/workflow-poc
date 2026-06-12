@@ -50,9 +50,11 @@
 
 ## Frontend Changes
 
-- `/builder/workflows` now pulls DB workflow definitions and renders them next to local dummy workflows.
-- `/orchestrator` continues to show DB workflow runs and active human assignments.
-- `/worker` and `/worker/bucket/:userId` continue to be the dummy user work routes.
+- `/builder/workflows` now pulls only DB workflow definitions and no longer shows local dummy workflows.
+- `/orchestrator` now shows only DB workflow runs and renders wf7 as one aggregate loop body instead of one repeated flow per patient/order row.
+- `/worker` and `/worker/bucket/:userId` use the dummy users but show DB-assigned tasks only.
+- Worker task cards show matched order PDF side-by-side with the record.
+- Missing fields are highlighted and can be entered before completing the human task.
 - `/hhh-login` is a standalone route without the builder sidebar.
 
 ## Notes

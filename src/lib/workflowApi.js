@@ -147,6 +147,11 @@ export function dbWorkItemToAction(item) {
       references: item.reference_payload,
       extraction: item.extraction_payload,
       decisions: item.decisions,
+      missingFields: item.output?.missingFields || [],
+      pdf: {
+        fileName: item.pdf_file_name,
+        url: item.pdf_blob_url,
+      },
     },
   };
 }

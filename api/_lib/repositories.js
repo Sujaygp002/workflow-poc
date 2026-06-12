@@ -207,10 +207,20 @@ export async function listActiveWorkItems(userId) {
       i.order_payload,
       i.reference_payload,
       i.extraction_payload,
-      i.decisions
+      i.decisions,
+      d.file_name AS pdf_file_name,
+      d.blob_url AS pdf_blob_url
     FROM workflow_task_runs t
     JOIN workflow_runs r ON r.id = t.run_id
     JOIN workflow_items i ON i.id = t.item_id
+    LEFT JOIN LATERAL (
+      SELECT file_name, blob_url
+      FROM uploaded_documents
+      WHERE run_id = r.id
+        AND lower(regexp_replace(file_name, '\\.pdf$', '', 'i')) = lower(i.order_key)
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) d ON true
     WHERE t.assigned_to = ${userId}
       AND t.status = 'active'
     ORDER BY r.created_at, i.item_index, t.created_at
