@@ -192,15 +192,35 @@ function aggDbStep(instance, stepId) {
   return { tis, total, done, active, skipped, ran };
 }
 
+// Small actor pill (HUMAN / AI / SYS) used in the "currently at" footer.
+function ActorBadge({ actor }) {
+  const cls = actor === 'human' ? 'bg-pink-100 text-pink-600'
+    : actor === 'ai' ? 'bg-violet-100 text-violet-600'
+    : 'bg-sky-100 text-sky-600';
+  const label = actor === 'human' ? 'HUMAN' : actor === 'ai' ? 'AI' : 'SYS';
+  return <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${cls}`}>{label}</span>;
+}
+
 function StepNode({ name, actor, agg, sub, compact, current }) {
   const isHuman = actor === 'human';
+  const isAi = actor === 'ai';
   const allDone = agg.total > 0 && agg.done + agg.skipped === agg.total && agg.done > 0;
   const anyActive = agg.active > 0;
-  let tone = isHuman
-    ? (anyActive ? 'border-pink-300 bg-pink-50/60' : allDone ? 'border-green-200 bg-green-50/40' : 'border-pink-200 bg-pink-50/40')
-    : (anyActive ? 'border-sky-300 bg-sky-50/70' : allDone ? 'border-green-200 bg-green-50/40' : 'border-sky-200 bg-sky-50/50');
+  // tone by actor: human = pink, AI = violet, system = sky. Done = green.
+  let tone;
+  if (allDone) {
+    tone = 'border-green-200 bg-green-50/40';
+  } else if (isHuman) {
+    tone = anyActive ? 'border-pink-300 bg-pink-50/60' : 'border-pink-200 bg-pink-50/40';
+  } else if (isAi) {
+    tone = anyActive ? 'border-violet-300 bg-violet-50/70' : 'border-violet-200 bg-violet-50/50';
+  } else {
+    tone = anyActive ? 'border-sky-300 bg-sky-50/70' : 'border-sky-200 bg-sky-50/50';
+  }
   // "you are here" highlight overrides everything: amber glow + ring
   if (current) tone = 'border-amber-400 bg-amber-50 ring-4 ring-amber-200/70 shadow-lg';
+  const badgeCls = isHuman ? 'bg-pink-100 text-pink-600' : isAi ? 'bg-violet-100 text-violet-600' : 'bg-sky-100 text-sky-600';
+  const badgeLabel = isHuman ? 'HUMAN' : isAi ? 'AI' : 'SYS';
   return (
     <div className={`relative border-2 rounded-xl px-3.5 py-2.5 transition-all ${compact ? 'w-full' : 'w-[300px]'} ${tone}`}>
       {current && (
@@ -213,8 +233,8 @@ function StepNode({ name, actor, agg, sub, compact, current }) {
         </span>
       )}
       <div className="flex items-center gap-2">
-        <span className={`text-[9px] px-1 py-0.5 rounded font-bold shrink-0 ${isHuman ? 'bg-pink-100 text-pink-600' : 'bg-sky-100 text-sky-600'}`}>
-          {isHuman ? 'HUMAN' : 'SYS'}
+        <span className={`text-[9px] px-1 py-0.5 rounded font-bold shrink-0 ${badgeCls}`}>
+          {badgeLabel}
         </span>
         <span className="text-[13px] font-semibold text-slate-700 flex-1 leading-tight">{name}</span>
         <span className={`text-[10px] font-bold tabular-nums shrink-0 ${allDone ? 'text-green-600' : anyActive ? 'text-pink-600' : 'text-slate-400'}`}>
@@ -491,9 +511,7 @@ function BulkInstanceCard({ instance, onDelete }) {
           </span>
           <span className="text-slate-500">Currently at:</span>
           <span className="font-semibold text-slate-700">{currentStep.taskName}</span>
-          <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${currentStep.actor === 'human' ? 'bg-pink-100 text-pink-600' : 'bg-sky-100 text-sky-600'}`}>
-            {currentStep.actor === 'human' ? 'HUMAN' : 'SYS'}
-          </span>
+          <ActorBadge actor={currentStep.actor} />
           {currentStep.actor === 'human' && (
             <span className="text-[11px] text-slate-400">— waiting on a person in the Work Bucket</span>
           )}
@@ -599,7 +617,8 @@ function DbBulkInstanceCard({ instance, onDelete }) {
       </div>
 
       <div className="border-t border-slate-100 bg-slate-50/40 px-4 pt-3 flex items-center gap-3 text-[11px] text-slate-500 flex-wrap">
-        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-sky-200 border border-sky-300" /> system / AI</span>
+        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-sky-200 border border-sky-300" /> system</span>
+        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-violet-200 border border-violet-300" /> AI</span>
         <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-pink-200 border border-pink-300" /> human</span>
         <span>counts show workflow rows through each step</span>
       </div>

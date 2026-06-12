@@ -62,6 +62,15 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-12** — Render the AI extraction step as **AI** (not SYS). Added AI as a
+  first-class actor in `StepNode` (violet tone + "AI" badge) and `WorkflowFlowChart`'s
+  `StepBox`; added an `ActorBadge` helper for the "currently at" footer; split the legend
+  into system / AI / human. The `wf7-s3` step already carried `actor:'ai'` in the DB —
+  the renderers were collapsing it into SYS.
+- **2026-06-12** — Added `docs/data-model.md`: the actual DB schema as the source of
+  truth, with the corrected entity relationships and a list of class/object-diagram
+  mismatches (Practice, Archived Admission, Patient UNIT, Insurance/Ancillaries don't
+  exist in the DB).
 - **2026-06-12** — Restored delete for workflow runs end-to-end. Added `DELETE
   /api/workflow-runs/[id]` (handler + `deleteWorkflowRun` repo fn — cascades to items/
   task runs, keeps created domain records), `deleteWorkflowRun` client in `workflowApi.js`,

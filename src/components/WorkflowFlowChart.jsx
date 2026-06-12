@@ -65,12 +65,14 @@ function ConditionDecision({ label }) {
 function StepBox({ node }) {
   const live = !!node.status;
   const skipped = node.status === 'skipped';
-  // actor coloring: system = sky/blue, human = pink. Falls back to default.
+  // actor coloring: system = sky/blue, AI = violet, human = pink. Falls back to default.
   const actorTint = node.actor === 'human'
     ? 'border-pink-300 bg-pink-50/50'
-    : node.actor === 'system'
-      ? 'border-sky-300 bg-sky-50/50'
-      : 'border-slate-200 bg-white';
+    : node.actor === 'ai'
+      ? 'border-violet-300 bg-violet-50/50'
+      : node.actor === 'system'
+        ? 'border-sky-300 bg-sky-50/50'
+        : 'border-slate-200 bg-white';
   const borderCls = !live
     ? actorTint
     : skipped
@@ -89,8 +91,8 @@ function StepBox({ node }) {
         </span>
         <span className={`font-semibold text-sm flex-1 truncate ${skipped ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{node.name}</span>
         {node.actor && !live && (
-          <span className={`text-[9px] px-1 py-0.5 rounded font-bold shrink-0 ${node.actor === 'human' ? 'bg-pink-100 text-pink-600' : 'bg-sky-100 text-sky-600'}`}>
-            {node.actor === 'human' ? 'HUMAN' : 'SYS'}
+          <span className={`text-[9px] px-1 py-0.5 rounded font-bold shrink-0 ${node.actor === 'human' ? 'bg-pink-100 text-pink-600' : node.actor === 'ai' ? 'bg-violet-100 text-violet-600' : 'bg-sky-100 text-sky-600'}`}>
+            {node.actor === 'human' ? 'HUMAN' : node.actor === 'ai' ? 'AI' : 'SYS'}
           </span>
         )}
         {live && (skipped
