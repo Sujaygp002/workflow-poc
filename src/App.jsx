@@ -1,10 +1,13 @@
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
-import { Building2, GitBranch, Inbox, Activity } from 'lucide-react';
+import { Activity, ClipboardList, Database, GitBranch, Inbox, Zap } from 'lucide-react';
 import WorkflowList from './pages/builder/WorkflowList';
 import WorkBucket from './pages/workbucket/WorkBucket';
 import UserSelect from './pages/workbucket/UserSelect';
 import Orchestrator from './pages/orchestrator/Orchestrator';
 import HhhLogin from './pages/hhh/HhhLogin';
+import Triggers from './pages/triggers/Triggers';
+import ReferenceData from './pages/reference/ReferenceData';
+import Orders from './pages/orders/Orders';
 
 function Sidebar() {
   const navItem = (to, icon, label, end) => (
@@ -30,9 +33,11 @@ function Sidebar() {
 
       <nav className="flex-1 p-3 space-y-1">
         <div className="text-xs font-semibold text-slate-400 px-3 py-1 uppercase tracking-wider">HHH Workflow</div>
-        {navItem('/hhh-login', <Building2 size={16} />, 'HHH Login', true)}
+        {navItem('/triggers', <Zap size={16} />, 'Trigger', true)}
         {navItem('/builder/workflows', <GitBranch size={16} />, 'Workflow', true)}
         {navItem('/orchestrator', <Activity size={16} />, 'Orchestrator', true)}
+        {navItem('/orders', <ClipboardList size={16} />, 'Orders', true)}
+        {navItem('/reference-data', <Database size={16} />, 'Reference Data', true)}
         {navItem('/worker', <Inbox size={16} />, 'Work Buckets', true)}
       </nav>
 
@@ -64,11 +69,13 @@ function AppShell() {
       {!standalone && <Sidebar />}
       <main className="flex-1 min-w-0 overflow-y-auto">
         <Routes>
-          <Route path="/" element={<Navigate to="/hhh-login" replace />} />
-          <Route path="/triggers" element={<Navigate to="/hhh-login" replace />} />
+          <Route path="/" element={<Navigate to="/triggers" replace />} />
+          <Route path="/triggers" element={<Triggers />} />
           <Route path="/builder/workflows" element={<WorkflowList />} />
           <Route path="/builder/create" element={<Navigate to="/builder/workflows" replace />} />
           <Route path="/orchestrator" element={<Orchestrator />} />
+          <Route path="/orders" element={<Orders />} />
+          <Route path="/reference-data" element={<ReferenceData />} />
           <Route path="/worker" element={<UserSelect />} />
           <Route path="/worker/bucket/:userId" element={<WorkBucket />} />
           <Route path="/hhh-login" element={<HhhLogin />} />

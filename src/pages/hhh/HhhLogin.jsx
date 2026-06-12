@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Activity, ArrowLeft, Building2, CheckCircle2, ChevronRight, FileArchive, FileSpreadsheet, GitBranch, Loader2, Lock, RefreshCw, Upload, UserRound } from 'lucide-react';
-import { fetchPatientTree, fetchPatients, startBulkUploadRun } from '../../lib/workflowApi';
+import { fetchOrders, fetchPatientTree, fetchPatients, startBulkUploadRun } from '../../lib/workflowApi';
 
 function formatDate(value) {
   if (!value) return 'Missing';
@@ -159,9 +159,12 @@ export default function HhhLogin() {
   const [workbook, setWorkbook] = useState(null);
   const [zip, setZip] = useState(null);
   const [patients, setPatients] = useState([]);
+  const [orders, setOrders] = useState([]);
   const [selectedPatient, setSelectedPatient] = useState(null);
+  const [selectedOrder, setSelectedOrder] = useState(null);
   const [selectedTree, setSelectedTree] = useState(null);
   const [loadingPatients, setLoadingPatients] = useState(false);
+  const [viewMode, setViewMode] = useState('patients');
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -169,7 +172,9 @@ export default function HhhLogin() {
   async function refreshPatients() {
     setLoadingPatients(true);
     try {
-      setPatients(await fetchPatients());
+      const [nextPatients, nextOrders] = await Promise.all([fetchPatients(), fetchOrders()]);
+      setPatients(nextPatients);
+      setOrders(nextOrders);
       setError('');
     } catch (err) {
       setError(err.message);
@@ -184,6 +189,8 @@ export default function HhhLogin() {
 
   async function openPatient(patient) {
     setSelectedPatient(patient);
+    setSelectedOrder(null);
+    setViewMode('patients');
     setSelectedTree(null);
     try {
       setSelectedTree(await fetchPatientTree(patient.id));
@@ -260,7 +267,7 @@ export default function HhhLogin() {
           <Metric label="Patients" value={patients.length} />
           <Metric label="Admissions" value={totals.admissions} />
           <Metric label="Episodes" value={totals.episodes} />
-          <Metric label="Orders" value={totals.orders} />
+          <Metric label="Orders" value={orders.length || totals.orders} />
         </div>
 
         <section className="rounded-2xl border border-slate-200 bg-white p-5">
@@ -301,20 +308,28 @@ export default function HhhLogin() {
           <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
             <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
               <div>
-                <h2 className="font-bold text-slate-900">View Patients</h2>
-                <p className="text-xs text-slate-500">Open a patient to inspect admissions, episodes, and orders.</p>
+                <h2 className="font-bold text-slate-900">{viewMode === 'patients' ? 'View Patients' : 'View Orders'}</h2>
+                <p className="text-xs text-slate-500">{viewMode === 'patients' ? 'Open a patient to inspect admissions, episodes, and orders.' : 'Open an order to inspect patient and reference links.'}</p>
               </div>
               <button onClick={refreshPatients} className="p-2 rounded-lg text-slate-400 hover:bg-slate-50 hover:text-slate-700">
                 <RefreshCw size={16} className={loadingPatients ? 'animate-spin' : ''} />
               </button>
             </div>
+            <div className="px-3 py-2 border-b border-slate-100 flex gap-1 bg-slate-50">
+              <button onClick={() => setViewMode('patients')} className={`flex-1 rounded-lg px-3 py-1.5 text-sm font-semibold ${viewMode === 'patients' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}>
+                Patients
+              </button>
+              <button onClick={() => setViewMode('orders')} className={`flex-1 rounded-lg px-3 py-1.5 text-sm font-semibold ${viewMode === 'orders' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}>
+                Orders
+              </button>
+            </div>
             <div className="max-h-[640px] overflow-y-auto p-3 space-y-2">
-              {patients.length === 0 ? (
+              {viewMode === 'patients' && patients.length === 0 ? (
                 <div className="py-12 text-center text-sm text-slate-400">
                   <GitBranch size={30} className="mx-auto mb-2 opacity-40" />
                   No patients yet.
                 </div>
-              ) : patients.map((patient) => (
+              ) : viewMode === 'patients' ? patients.map((patient) => (
                 <button
                   key={patient.id}
                   onClick={() => openPatient(patient)}
@@ -329,16 +344,66 @@ export default function HhhLogin() {
                     <span className="ml-auto font-bold text-sky-700">Open patient</span>
                   </div>
                 </button>
+              )) : orders.length === 0 ? (
+                <div className="py-12 text-center text-sm text-slate-400">
+                  <GitBranch size={30} className="mx-auto mb-2 opacity-40" />
+                  No orders yet.
+                </div>
+              ) : orders.map((order) => (
+                <button
+                  key={order.id}
+                  onClick={() => {
+                    setSelectedOrder(order);
+                    setSelectedPatient(null);
+                    setSelectedTree(null);
+                  }}
+                  className={`w-full text-left rounded-xl border p-3 transition-colors ${selectedOrder?.id === order.id ? 'border-violet-300 bg-violet-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+                >
+                  <div className="font-bold text-slate-800">{order.order_number}</div>
+                  <div className="text-xs text-slate-500 mt-0.5">{order.patient_name || 'No patient'} | {order.order_type || 'No type'}</div>
+                  <div className="flex gap-2 mt-2 text-[11px] text-slate-500">
+                    <span>{formatDate(order.order_date)}</span>
+                    <span className="ml-auto font-bold text-violet-700">Open order</span>
+                  </div>
+                </button>
               ))}
             </div>
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-4 min-h-[520px]">
-            {!selectedPatient ? (
+            {selectedOrder ? (
+              <div className="space-y-4">
+                <button onClick={() => setSelectedOrder(null)} className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800">
+                  <ArrowLeft size={15} /> Back to order list
+                </button>
+                <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
+                  <div className="text-xs font-bold uppercase tracking-wide text-violet-700">Order</div>
+                  <h2 className="text-2xl font-bold text-slate-900 mt-1">{selectedOrder.order_number}</h2>
+                  <p className="text-sm text-slate-600 mt-1">{selectedOrder.order_type || 'No type'} | {formatDate(selectedOrder.order_date)}</p>
+                </div>
+                <div className="grid md:grid-cols-2 gap-3 text-sm">
+                  <div className="rounded-xl border border-slate-200 p-3">
+                    <div className="text-xs font-bold uppercase tracking-wide text-slate-400 mb-2">Patient</div>
+                    <div className="font-bold text-slate-800">{selectedOrder.patient_name || 'No patient linked'}</div>
+                    <div className="text-slate-500 text-xs mt-1">MRN {selectedOrder.patient_mrn || 'Missing'}</div>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 p-3">
+                    <div className="text-xs font-bold uppercase tracking-wide text-slate-400 mb-2">References</div>
+                    <div className="text-slate-700">PG: {selectedOrder.pg_name || 'Missing'}</div>
+                    <div className="text-slate-700">HHAH: {selectedOrder.agency_name || 'Missing'}</div>
+                    <div className="text-slate-700">NPI: {selectedOrder.billing_provider_npi || 'Missing'}</div>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 p-3 md:col-span-2">
+                    <div className="text-xs font-bold uppercase tracking-wide text-slate-400 mb-2">Order Details</div>
+                    <pre className="text-xs text-slate-600 whitespace-pre-wrap">{JSON.stringify(selectedOrder.order_admission_details || {}, null, 2)}</pre>
+                  </div>
+                </div>
+              </div>
+            ) : !selectedPatient ? (
               <div className="h-full min-h-[460px] flex items-center justify-center text-center text-slate-400">
                 <div>
                   <GitBranch size={42} className="mx-auto mb-3 opacity-40" />
-                  <p className="font-medium">Select a patient to open the flow chart.</p>
+                  <p className="font-medium">Select a patient or order to open details.</p>
                 </div>
               </div>
             ) : !selectedTree ? (

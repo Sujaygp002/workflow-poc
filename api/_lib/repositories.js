@@ -667,3 +667,85 @@ export async function getPatientTree(patientId) {
     ordersWithoutEpisode,
   };
 }
+
+export async function listOrders() {
+  const sql = getSql();
+  return sql`
+    SELECT
+      o.*,
+      p.name AS patient_name,
+      p.mrn AS patient_mrn,
+      h.name AS agency_name,
+      pg.name AS pg_name,
+      pr.physician_name AS billing_provider_name,
+      pr.npi_digits AS billing_provider_npi
+    FROM orders o
+    LEFT JOIN patients p ON p.id = o.patient_id
+    LEFT JOIN home_health_agencies h ON h.id = o.agency_id
+    LEFT JOIN physician_groups pg ON pg.id = o.pg_id
+    LEFT JOIN practitioners pr ON pr.id = o.billing_provider_id
+    ORDER BY o.updated_at DESC, o.order_date DESC NULLS LAST
+    LIMIT 250
+  `;
+}
+
+export async function listReferenceData() {
+  const sql = getSql();
+  const [practitioners, physicianGroups, hhahs] = await Promise.all([
+    sql`
+      SELECT id, npi_digits, physician_name, speciality, contact_info, history, raw_data, updated_at
+      FROM practitioners
+      ORDER BY updated_at DESC, physician_name
+      LIMIT 250
+    `,
+    sql`
+      SELECT id, name, npi, type, contact_info, raw_data, updated_at
+      FROM physician_groups
+      ORDER BY updated_at DESC, name
+      LIMIT 250
+    `,
+    sql`
+      SELECT id, name, npi, type, type_of_service, contact_info, raw_data, updated_at
+      FROM home_health_agencies
+      ORDER BY updated_at DESC, name
+      LIMIT 250
+    `,
+  ]);
+  return { practitioners, physicianGroups, hhahs };
+}
+
+export async function mapPgToPractitioner({ pgId, practitionerId }) {
+  const sql = getSql();
+  const pgRows = await sql`SELECT * FROM physician_groups WHERE id = ${pgId} LIMIT 1`;
+  const practitionerRows = await sql`SELECT * FROM practitioners WHERE id = ${practitionerId} LIMIT 1`;
+  const pg = pgRows[0];
+  const practitioner = practitionerRows[0];
+  if (!pg || !practitioner) throw new Error('PG or practitioner not found');
+
+  const pgContact = pg.contact_info || {};
+  const existingPhysicianIds = Array.isArray(pgContact.physician_ids) ? pgContact.physician_ids : [];
+  const physicianIds = Array.from(new Set([...existingPhysicianIds, practitioner.id]));
+  const practitionerHistory = practitioner.history || {};
+  const rawPgNames = practitionerHistory.PG_names || practitionerHistory.pg_names || [];
+  const pgNames = Array.isArray(rawPgNames) ? rawPgNames : [];
+  const nextPgNames = pgNames.some((entry) => entry.id === pg.id)
+    ? pgNames
+    : [...pgNames, { id: pg.id, name: pg.name }];
+
+  const updatedPg = await sql`
+    UPDATE physician_groups
+    SET contact_info = ${await jsonParam({ ...pgContact, physician_ids: physicianIds })}::jsonb,
+        updated_at = now()
+    WHERE id = ${pg.id}
+    RETURNING *
+  `;
+  const updatedPractitioner = await sql`
+    UPDATE practitioners
+    SET history = ${await jsonParam({ ...practitionerHistory, PG_names: nextPgNames })}::jsonb,
+        updated_at = now()
+    WHERE id = ${practitioner.id}
+    RETURNING *
+  `;
+
+  return { pg: updatedPg[0], practitioner: updatedPractitioner[0] };
+}

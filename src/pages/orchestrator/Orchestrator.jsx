@@ -252,6 +252,37 @@ function ConditionPill({ expr }) {
   );
 }
 
+function ConditionDiamond({ expr }) {
+  if (!expr) return null;
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 font-mono text-[10px] text-amber-700">
+      <span className="inline-block h-2.5 w-2.5 rotate-45 border border-amber-500 bg-white shrink-0" />
+      {expr}
+    </span>
+  );
+}
+
+function LoopArrow() {
+  return (
+    <svg
+      className="pointer-events-none absolute right-4 top-16 h-[calc(100%-5rem)] w-24 text-purple-300"
+      viewBox="0 0 96 520"
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      <path
+        d="M25 10 C86 120 86 400 25 510"
+        stroke="currentColor"
+        strokeWidth="4"
+        strokeDasharray="12 10"
+        fill="none"
+        strokeLinecap="round"
+      />
+      <path d="M25 510 L42 486 L50 518 Z" fill="currentColor" />
+    </svg>
+  );
+}
+
 // The "NO → human" connector that sits in the right column, vertically centred
 // against the condition pill in the main column.
 function NoBranch({ human, noCount, current }) {
@@ -438,29 +469,34 @@ function DbBulkInstanceCard({ instance }) {
     return tasks.length > 0 && tasks.every(t => t.status === 'completed');
   }).length;
 
-  const row = (leftId, rightId = null, label = null) => (
+  const row = (leftId, rightId = null, label = null) => {
+    const leftTask = instance.taskInstances.find(t => t.stepId === leftId);
+    const rightTask = rightId ? instance.taskInstances.find(t => t.stepId === rightId) : null;
+    return (
     <div className="grid items-center gap-x-4" style={{ gridTemplateColumns: '320px 320px' }}>
       <div className="flex justify-center">
         <StepNode
-          name={instance.taskInstances.find(t => t.stepId === leftId)?.taskName || leftId}
-          actor={instance.taskInstances.find(t => t.stepId === leftId)?.actor || 'system'}
+          name={leftTask?.taskName || leftId}
+          actor={leftTask?.actor || 'system'}
           agg={aggDbStep(instance, leftId)}
+          sub={<ConditionDiamond expr={leftTask?.conditionExpr} />}
           current={active?.stepId === leftId}
         />
       </div>
       <div className="flex justify-center">
         {rightId ? (
           <StepNode
-            name={instance.taskInstances.find(t => t.stepId === rightId)?.taskName || rightId}
-            actor={instance.taskInstances.find(t => t.stepId === rightId)?.actor || 'human'}
+            name={rightTask?.taskName || rightId}
+            actor={rightTask?.actor || 'human'}
             agg={aggDbStep(instance, rightId)}
-            sub={label}
+            sub={rightTask?.conditionExpr ? <ConditionDiamond expr={rightTask.conditionExpr} /> : label}
             current={active?.stepId === rightId}
           />
         ) : null}
       </div>
     </div>
   );
+  };
 
   return (
     <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
@@ -492,7 +528,8 @@ function DbBulkInstanceCard({ instance }) {
         <div className="w-fit mx-auto flex flex-col items-center">
           <div className="rounded-full px-6 py-1.5 text-sm font-bold border-2 border-violet-400 bg-violet-50 text-violet-700">START · Excel + order PDFs</div>
           <Arrow />
-          <div className="border-2 border-dashed border-purple-300 rounded-2xl bg-purple-50/20 px-5 py-4">
+          <div className="relative border-2 border-dashed border-purple-300 rounded-2xl bg-purple-50/20 px-5 py-4 pr-32">
+            <LoopArrow />
             <div className="flex items-center justify-center gap-1.5 text-[11px] font-bold text-purple-700 mb-4">
               <RefreshCw size={12} /> FOR EACH PATIENT / ORDER ROW UNTIL LAST ROW
             </div>

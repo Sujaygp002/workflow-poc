@@ -33,6 +33,12 @@
 
 ## New API Routes
 
+- `GET /api/orders`
+  - Returns uploaded/created orders with patient, HHAH, PG, and practitioner links.
+- `GET /api/reference-data`
+  - Returns practitioners, physician groups, and HHAH records.
+- `POST /api/reference-data/map-pg-practitioner`
+  - Maps a physician group to a practitioner by updating the DB JSON link fields.
 - `POST /api/workflows/bulk-upload/start`
   - Starts the DB-backed wf7 workflow from Excel and optional ZIP/PDF uploads.
 - `GET /api/workflows`
@@ -50,12 +56,17 @@
 
 ## Frontend Changes
 
+- `/triggers` is back in FlowPOC and starts the DB-backed bulk upload trigger.
 - `/builder/workflows` now pulls only DB workflow definitions and no longer shows local dummy workflows.
 - `/orchestrator` now shows only DB workflow runs and renders wf7 as one aggregate loop body instead of one repeated flow per patient/order row.
+- `/orchestrator` and `/builder/workflows` show condition markers as diamond chips; the wf7 loop is shown with a large curved repeat arrow.
+- `/orders` shows order records and their patient/reference/status/admission details.
+- `/reference-data` shows practitioners, physician groups, HHAH records, and supports mapping PG to practitioner.
 - `/worker` and `/worker/bucket/:userId` use the dummy users but show DB-assigned tasks only.
 - Worker task cards show matched order PDF side-by-side with the record.
 - Missing fields are highlighted and can be entered before completing the human task.
-- `/hhh-login` is a standalone route without the builder sidebar.
+- `/hhh-login` is a standalone route without the builder sidebar and is not shown inside FlowPOC navigation.
+- `/hhh-login` includes patient and order browsing after upload.
 
 ## Notes
 

@@ -35,10 +35,35 @@ export async function fetchPatients() {
   return body.patients || [];
 }
 
+export async function fetchOrders() {
+  const res = await fetch('/api/orders');
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Unable to load orders');
+  return body.orders || [];
+}
+
 export async function fetchPatientTree(patientId) {
   const res = await fetch(`/api/patients/${encodeURIComponent(patientId)}`);
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || 'Unable to load patient');
+  return body;
+}
+
+export async function fetchReferenceData() {
+  const res = await fetch('/api/reference-data');
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Unable to load reference data');
+  return body;
+}
+
+export async function mapPgToPractitioner({ pgId, practitionerId }) {
+  const res = await fetch('/api/reference-data/map-pg-practitioner', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pgId, practitionerId }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Unable to map PG to practitioner');
   return body;
 }
 

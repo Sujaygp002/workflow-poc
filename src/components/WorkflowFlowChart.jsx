@@ -89,6 +89,12 @@ function StepBox({ node }) {
           ◆ when {node.when.expr} = {String(node.when.equals).toUpperCase()}
         </div>
       )}
+      {node.conditionExpr && node.type !== 'conditional' && !node.when && (
+        <div className="px-3 py-1 bg-amber-50/60 border-t border-amber-100 text-[10px] font-mono text-amber-700 flex items-center gap-1.5">
+          <span className="inline-block h-2.5 w-2.5 rotate-45 border border-amber-500 bg-white shrink-0" />
+          <span className="truncate">when {node.conditionExpr}</span>
+        </div>
+      )}
       {live && !skipped && node.assignee && (
         <div className="px-3 py-1.5 border-t border-slate-100 flex items-center gap-1.5 bg-white/60">
           <span className="w-4 h-4 rounded-full bg-violet-200 text-violet-700 text-[9px] font-bold flex items-center justify-center shrink-0">
