@@ -433,6 +433,63 @@ export async function createHhahFromPayload(referencePayload) {
   return rows[0];
 }
 
+// Upsert the stable Patient Unit (identity/insurance/family) — the reusable base
+// layer. Returns the unit row.
+export async function writePatientUnit(patient) {
+  const sql = getSql();
+  const rows = await sql`
+    INSERT INTO patient_units (
+      normalized_patient_key, name, dob, mrn, sex,
+      personal_information, insurance_details, raw_data, updated_at
+    )
+    VALUES (
+      ${patientKey(patient)},
+      ${patient.patient_info?.name},
+      ${parseDate(patient.patient_info?.DOB)},
+      ${patient.admission_details?.MRN},
+      ${blankToNull(patient.patient_info?.sex)},
+      ${await jsonParam(patient.personal_information || {})}::jsonb,
+      ${await jsonParam(patient.insurance_details || {})}::jsonb,
+      ${await jsonParam(patient)}::jsonb,
+      now()
+    )
+    ON CONFLICT (normalized_patient_key)
+    DO UPDATE SET
+      name = EXCLUDED.name,
+      dob = EXCLUDED.dob,
+      mrn = EXCLUDED.mrn,
+      sex = COALESCE(EXCLUDED.sex, patient_units.sex),
+      personal_information = patient_units.personal_information || EXCLUDED.personal_information,
+      insurance_details = patient_units.insurance_details || EXCLUDED.insurance_details,
+      raw_data = patient_units.raw_data || EXCLUDED.raw_data,
+      updated_at = now()
+    RETURNING *
+  `;
+  return rows[0];
+}
+
+// Direct Patient <-> Physician Group link (0..* both sides), independent of admission.
+export async function linkPatientToPg(patientId, pgId, role = null) {
+  if (!patientId || !pgId) return;
+  const sql = getSql();
+  await sql`
+    INSERT INTO patient_physician_groups (patient_id, pg_id, role)
+    VALUES (${patientId}, ${pgId}, ${role})
+    ON CONFLICT (patient_id, pg_id) DO NOTHING
+  `;
+}
+
+// Direct Patient <-> Practitioner link (0..many).
+export async function linkPatientToPractitioner(patientId, practitionerId, relationship = null) {
+  if (!patientId || !practitionerId) return;
+  const sql = getSql();
+  await sql`
+    INSERT INTO patient_practitioners (patient_id, practitioner_id, relationship)
+    VALUES (${patientId}, ${practitionerId}, ${relationship})
+    ON CONFLICT (patient_id, practitioner_id) DO NOTHING
+  `;
+}
+
 export async function writePatientBundle(item) {
   const patient = item.patient_payload;
   const reference = item.reference_payload;
@@ -441,13 +498,17 @@ export async function writePatientBundle(item) {
   const existingPractitioner = await findPractitionerByNpi(reference?.practitioner?.NPI);
   const sql = getSql();
 
+  // Stable base layer first, so the patient record can point at its unit.
+  const unit = await writePatientUnit(patient);
+
   const patientRows = await sql`
     INSERT INTO patients (
-      normalized_patient_key, name, dob, mrn, sex, age,
+      normalized_patient_key, unit_id, name, dob, mrn, sex, age,
       personal_information, insurance_details, admission_details, raw_data, updated_at
     )
     VALUES (
       ${patientKey(patient)},
+      ${unit?.id || null},
       ${patient.patient_info?.name},
       ${parseDate(patient.patient_info?.DOB)},
       ${patient.admission_details?.MRN},
@@ -461,6 +522,7 @@ export async function writePatientBundle(item) {
     )
     ON CONFLICT (normalized_patient_key)
     DO UPDATE SET
+      unit_id = COALESCE(patients.unit_id, EXCLUDED.unit_id),
       name = EXCLUDED.name,
       dob = EXCLUDED.dob,
       mrn = EXCLUDED.mrn,
@@ -474,6 +536,10 @@ export async function writePatientBundle(item) {
     RETURNING *
   `;
   const storedPatient = patientRows[0];
+
+  // Direct patient↔PG and patient↔practitioner links (not via admission).
+  await linkPatientToPg(storedPatient.id, existingPg?.id || null);
+  await linkPatientToPractitioner(storedPatient.id, existingPractitioner?.id || null);
 
   const admissionRows = await sql`
     INSERT INTO patient_admissions (
@@ -533,14 +599,17 @@ export async function writeOrderBundle(item, patientBundle) {
   const episode = patientBundle?.episode || null;
   const sql = getSql();
 
+  const documentType = blankToNull(order.order_info?.document_type || order.order_info?.order_type);
+
   const rows = await sql`
     INSERT INTO orders (
-      order_number, order_type, order_date, patient_id, admission_id, episode_id,
+      order_number, order_type, document_type, order_date, patient_id, admission_id, episode_id,
       agency_id, pg_id, billing_provider_id, order_status, order_admission_details, raw_data, updated_at
     )
     VALUES (
       ${order.order_info?.order_number},
       ${blankToNull(order.order_info?.order_type)},
+      ${documentType},
       ${parseDate(order.order_info?.order_date)},
       ${patient?.id || null},
       ${admission?.id || null},
@@ -556,6 +625,7 @@ export async function writeOrderBundle(item, patientBundle) {
     ON CONFLICT (order_number)
     DO UPDATE SET
       order_type = COALESCE(EXCLUDED.order_type, orders.order_type),
+      document_type = COALESCE(EXCLUDED.document_type, orders.document_type),
       order_date = COALESCE(EXCLUDED.order_date, orders.order_date),
       patient_id = COALESCE(EXCLUDED.patient_id, orders.patient_id),
       admission_id = COALESCE(EXCLUDED.admission_id, orders.admission_id),
@@ -569,7 +639,43 @@ export async function writeOrderBundle(item, patientBundle) {
       updated_at = now()
     RETURNING *
   `;
-  return rows[0];
+  const storedOrder = rows[0];
+
+  // Order's billing provider is also a direct patient↔practitioner link.
+  await linkPatientToPractitioner(patient?.id || null, practitioner?.id || null, 'billing_provider');
+  await linkPatientToPg(patient?.id || null, pg?.id || null);
+
+  return storedOrder;
+}
+
+// ── Episode status (computed, never stored) ──────────────
+// eligible = episode has a 485 + an active F2F (within 6 months of the F2F
+//            order's order_date), even if unsigned.
+// billable = all of the episode's orders (incl. 485) are signed.
+function isSigned(order) {
+  const s = order.order_status || {};
+  return !!(s.signed === true || s.order_signed_date || s.signedDate || order.signed_date);
+}
+
+function docTypeOf(order) {
+  return String(order.document_type || order.order_type || '').toLowerCase();
+}
+
+export function computeEpisodeStatus(orders = []) {
+  if (!orders.length) return 'none';
+  const has485 = orders.some(o => docTypeOf(o).includes('485'));
+  const f2f = orders.find(o => docTypeOf(o).includes('f2f') || docTypeOf(o).includes('face'));
+  let f2fActive = false;
+  if (f2f && f2f.order_date) {
+    const ageMs = Date.now() - new Date(f2f.order_date).getTime();
+    f2fActive = ageMs >= 0 && ageMs <= 1000 * 60 * 60 * 24 * 183; // ~6 months
+  }
+  const eligible = has485 && f2fActive;
+  const allSigned = orders.every(isSigned);
+  const billable = has485 && allSigned;
+  if (billable) return 'billable';
+  if (eligible) return 'eligible';
+  return 'started';
 }
 
 export async function insertAiExtraction({ itemId, documentId, model, status, inputSummary, outputData, errorMessage }) {
@@ -592,7 +698,7 @@ export async function insertAiExtraction({ itemId, documentId, model, status, in
 
 export async function listPatients() {
   const sql = getSql();
-  return sql`
+  const rows = await sql`
     SELECT
       p.id,
       p.name,
@@ -611,6 +717,32 @@ export async function listPatients() {
     ORDER BY p.updated_at DESC, p.name
     LIMIT 200
   `;
+
+  // Latest-episode status per patient (computed). One small query for the set.
+  const ids = rows.map(r => r.id);
+  if (!ids.length) return rows;
+  const latestEpisodes = await sql`
+    SELECT DISTINCT ON (a.patient_id) a.patient_id, e.id AS episode_id
+    FROM patient_episodes e
+    JOIN patient_admissions a ON a.id = e.admission_id
+    WHERE a.patient_id = ANY(${ids})
+    ORDER BY a.patient_id, e.soe DESC NULLS LAST, e.created_at DESC
+  `;
+  const episodeIds = latestEpisodes.map(r => r.episode_id);
+  const episodeOrders = episodeIds.length
+    ? await sql`SELECT episode_id, order_type, document_type, order_date, order_status FROM orders WHERE episode_id = ANY(${episodeIds})`
+    : [];
+  const ordersByEpisode = new Map();
+  for (const o of episodeOrders) {
+    const list = ordersByEpisode.get(o.episode_id) || [];
+    list.push(o);
+    ordersByEpisode.set(o.episode_id, list);
+  }
+  const statusByPatient = new Map();
+  for (const le of latestEpisodes) {
+    statusByPatient.set(le.patient_id, computeEpisodeStatus(ordersByEpisode.get(le.episode_id) || []));
+  }
+  return rows.map(r => ({ ...r, latest_episode_status: statusByPatient.get(r.id) || 'none' }));
 }
 
 export async function getPatientTree(patientId) {
@@ -664,15 +796,21 @@ export async function getPatientTree(patientId) {
 
   const episodesByAdmission = new Map();
   for (const episode of episodes) {
-    const entry = { ...episode, orders: orders.filter((order) => order.episode_id === episode.id) };
+    const episodeOrders = orders.filter((order) => order.episode_id === episode.id);
+    const entry = { ...episode, orders: episodeOrders, status: computeEpisodeStatus(episodeOrders) };
     const list = episodesByAdmission.get(episode.admission_id) || [];
     list.push(entry);
     episodesByAdmission.set(episode.admission_id, list);
   }
 
+  // Latest episode = last by soe order; surface its computed status on the patient.
+  const latestEpisode = episodes.length
+    ? { ...episodes[episodes.length - 1], status: computeEpisodeStatus(orders.filter(o => o.episode_id === episodes[episodes.length - 1].id)) }
+    : null;
+
   const ordersWithoutEpisode = orders.filter((order) => !order.episode_id);
   return {
-    patient,
+    patient: { ...patient, latest_episode_status: latestEpisode?.status || 'none' },
     admissions: admissions.map((admission) => ({
       ...admission,
       episodes: episodesByAdmission.get(admission.id) || [],

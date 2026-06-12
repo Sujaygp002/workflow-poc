@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="640" viewBox="0 0 980 640" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L9,3 L0,6 Z" fill="#475569"/>
+    </marker>
+    <style>
+      .ent { fill:#ffffff; stroke:#334155; stroke-width:1.5; rx:8; }
+      .ent-title { fill:#0f172a; font-size:14px; font-weight:700; }
+      .ent-sub { fill:#64748b; font-size:10px; }
+      .ref { fill:#f1f5f9; stroke:#94a3b8; stroke-width:1.5; }
+      .ref-title { fill:#334155; font-size:13px; font-weight:700; }
+      .edge { stroke:#475569; stroke-width:1.5; fill:none; }
+      .edge-order { stroke:#a855f7; stroke-width:1.4; fill:none; stroke-dasharray:5 4; }
+      .card { fill:#475569; font-size:10px; font-weight:600; }
+      .card-o { fill:#9333ea; font-size:10px; font-weight:600; }
+      .lbl { fill:#334155; font-size:11px; }
+      .header { fill:#0f172a; font-size:16px; font-weight:700; }
+      .note { fill:#64748b; font-size:10px; }
+    </style>
+  </defs>
+
+  <text x="30" y="34" class="header">HHH Intake — Data Model (verified against db/migrations + repositories.js)</text>
+
+  <!-- ===== Core chain: Patient -> Admission -> Episode ===== -->
+  <!-- Patient -->
+  <rect class="ent" x="40" y="80" width="150" height="64" rx="8"/>
+  <text x="115" y="108" text-anchor="middle" class="ent-title">Patient</text>
+  <text x="115" y="126" text-anchor="middle" class="ent-sub">patients</text>
+  <text x="115" y="139" text-anchor="middle" class="ent-sub">key, name, dob, mrn, sex</text>
+
+  <!-- Admission -->
+  <rect class="ent" x="40" y="270" width="150" height="64" rx="8"/>
+  <text x="115" y="298" text-anchor="middle" class="ent-title">Admission</text>
+  <text x="115" y="316" text-anchor="middle" class="ent-sub">patient_admissions</text>
+  <text x="115" y="329" text-anchor="middle" class="ent-sub">soc, eoc + ref FKs</text>
+
+  <!-- Episode -->
+  <rect class="ent" x="40" y="460" width="150" height="64" rx="8"/>
+  <text x="115" y="488" text-anchor="middle" class="ent-title">Episode</text>
+  <text x="115" y="506" text-anchor="middle" class="ent-sub">patient_episodes</text>
+  <text x="115" y="519" text-anchor="middle" class="ent-sub">soe, eoe, diagnosis_codes</text>
+
+  <!-- Patient -> Admission -->
+  <path class="edge" d="M115,144 L115,270" marker-end="url(#arrow)"/>
+  <text x="124" y="168" class="card">1</text>
+  <text x="124" y="262" class="card">*</text>
+  <text x="124" y="210" class="lbl">patient_id</text>
+
+  <!-- Admission -> Episode -->
+  <path class="edge" d="M115,334 L115,460" marker-end="url(#arrow)"/>
+  <text x="124" y="358" class="card">1</text>
+  <text x="124" y="452" class="card">*</text>
+  <text x="124" y="400" class="lbl">admission_id</text>
+
+  <!-- ===== Reference entities (right) ===== -->
+  <rect class="ref" x="430" y="190" width="170" height="50" rx="8"/>
+  <text x="515" y="212" text-anchor="middle" class="ref-title">HHAH</text>
+  <text x="515" y="228" text-anchor="middle" class="ent-sub">home_health_agencies</text>
+
+  <rect class="ref" x="430" y="270" width="170" height="50" rx="8"/>
+  <text x="515" y="292" text-anchor="middle" class="ref-title">Physician Group</text>
+  <text x="515" y="308" text-anchor="middle" class="ent-sub">physician_groups</text>
+
+  <rect class="ref" x="430" y="350" width="170" height="50" rx="8"/>
+  <text x="515" y="372" text-anchor="middle" class="ref-title">Practitioner</text>
+  <text x="515" y="388" text-anchor="middle" class="ent-sub">practitioners (by NPI)</text>
+
+  <!-- Admission -> refs (many-to-one via nullable FKs) -->
+  <path class="edge" d="M190,290 C310,290 320,215 430,215" marker-end="url(#arrow)"/>
+  <path class="edge" d="M190,300 C320,300 330,295 430,295" marker-end="url(#arrow)"/>
+  <path class="edge" d="M190,310 C310,310 320,375 430,375" marker-end="url(#arrow)"/>
+  <text x="250" y="284" class="card">*</text>
+  <text x="412" y="210" class="card">1</text>
+  <text x="270" y="262" class="lbl">agency_id / pg_id / care_provider_id</text>
+
+  <!-- ===== Order (purple, links to everything) ===== -->
+  <rect class="ent" x="720" y="270" width="200" height="64" rx="8" stroke="#a855f7"/>
+  <text x="820" y="298" text-anchor="middle" class="ent-title" fill="#7e22ce">Order</text>
+  <text x="820" y="316" text-anchor="middle" class="ent-sub">orders</text>
+  <text x="820" y="329" text-anchor="middle" class="ent-sub">order_number (unique)</text>
+
+  <!-- Order -> Patient -->
+  <path class="edge-order" d="M720,278 C470,150 250,120 190,108" marker-end="url(#arrow)"/>
+  <!-- Order -> Episode -->
+  <path class="edge-order" d="M740,334 C520,560 250,500 190,492" marker-end="url(#arrow)"/>
+  <!-- Order -> Admission -->
+  <path class="edge-order" d="M730,320 C520,420 300,330 190,318" marker-end="url(#arrow)"/>
+  <!-- Order -> refs -->
+  <path class="edge-order" d="M720,300 C660,260 620,225 600,218" marker-end="url(#arrow)"/>
+  <path class="edge-order" d="M720,302 L600,297" marker-end="url(#arrow)"/>
+  <path class="edge-order" d="M720,316 C660,350 620,372 600,378" marker-end="url(#arrow)"/>
+  <text x="835" y="360" class="card-o">Order *—1 each of:</text>
+  <text x="835" y="376" class="note">Patient, Admission,</text>
+  <text x="835" y="389" class="note">Episode, HHAH, PG,</text>
+  <text x="835" y="402" class="note">Practitioner (billing</text>
+  <text x="835" y="415" class="note">+ supervising)</text>
+
+  <!-- ===== Legend ===== -->
+  <rect x="40" y="568" width="900" height="54" rx="8" fill="#f8fafc" stroke="#e2e8f0"/>
+  <line x1="60" y1="585" x2="100" y2="585" class="edge" marker-end="url(#arrow)"/>
+  <text x="110" y="589" class="lbl">FK relationship (parent → child / many → one)</text>
+  <line x1="60" y1="606" x2="100" y2="606" class="edge-order" marker-end="url(#arrow)"/>
+  <text x="110" y="610" class="lbl">Order references (purple, dashed)</text>
+  <text x="430" y="589" class="note">1 / *  = cardinality.  An HHAH/PG/Practitioner reaches a Patient THROUGH an Admission (or Order) —</text>
+  <text x="430" y="610" class="note">there is no direct Patient→HHAH and no "Practice" entity. Insurance is JSONB on Patient, not a table.</text>
+</svg>

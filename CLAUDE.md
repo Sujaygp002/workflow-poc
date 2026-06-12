@@ -62,6 +62,22 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-12** — Implemented Lisa's data-model & workflow changes:
+  - Migration `002_patient_unit_and_links.sql`: `patient_units` (stable base layer) +
+    `patients.unit_id`; `patient_physician_groups` and `patient_practitioners` direct
+    many-to-many links (0..* both sides, independent of admission); `orders.document_type`.
+    Applied to Neon.
+  - `repositories.js`: `writePatientUnit`, `linkPatientToPg`, `linkPatientToPractitioner`;
+    `writePatientBundle`/`writeOrderBundle` now write the unit + direct links; episode
+    reuse-or-create by SOE/EOE was already keyed; `computeEpisodeStatus` (eligible =
+    485 + active F2F within 6mo of F2F order_date; billable = all orders signed);
+    `getPatientTree`/`listPatients` surface `latest_episode_status`.
+  - Workflow: PG missing now **blocks the row → human review** (`human.reviewMissingPg`,
+    `pg_missing_blocks_patient`), no longer auto-creates; `reference_records_ready` gates
+    on PG. Added `objectLifecycle()` for the lifecycle view.
+  - UI: `HhhLogin` shows episode + patient latest eligible/billable status; `WorkBucket`
+    record card shows an object-lifecycle strip (found/missing/created/updated/in-review).
+
 - **2026-06-12** — Render the AI extraction step as **AI** (not SYS). Added AI as a
   first-class actor in `StepNode` (violet tone + "AI" badge) and `WorkflowFlowChart`'s
   `StepBox`; added an `ActorBadge` helper for the "currently at" footer; split the legend

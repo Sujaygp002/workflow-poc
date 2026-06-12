@@ -9,6 +9,22 @@ function formatDate(value) {
   return date.toLocaleDateString();
 }
 
+// Computed episode status (eligible / billable / started). Shown on episodes and
+// surfaced on the patient as the latest episode's status.
+function EpisodeStatusBadge({ status }) {
+  if (!status || status === 'none') return null;
+  const cls = status === 'billable'
+    ? 'bg-green-100 text-green-700 border-green-200'
+    : status === 'eligible'
+      ? 'bg-sky-100 text-sky-700 border-sky-200'
+      : 'bg-slate-100 text-slate-600 border-slate-200';
+  return (
+    <span className={`text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full border ${cls}`}>
+      {status}
+    </span>
+  );
+}
+
 function Metric({ label, value }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
@@ -57,7 +73,10 @@ function PatientFlow({ tree }) {
                           onClick={() => setOpenEpisodeId(isOpen ? null : episode.id)}
                           className={`w-56 text-left rounded-2xl border-2 p-3 transition-colors ${isOpen ? 'border-amber-400 bg-amber-50' : 'border-amber-200 bg-white hover:bg-amber-50'}`}
                         >
-                          <div className="text-[10px] font-bold text-amber-700 uppercase">Episode</div>
+                          <div className="flex items-center justify-between gap-1">
+                            <div className="text-[10px] font-bold text-amber-700 uppercase">Episode</div>
+                            <EpisodeStatusBadge status={episode.status} />
+                          </div>
                           <div className="text-sm font-bold text-slate-800 mt-1">
                             {formatDate(episode.soe)} to {formatDate(episode.eoe)}
                           </div>
@@ -366,7 +385,10 @@ export default function HhhLogin() {
                   onClick={() => openPatient(patient)}
                   className={`w-full text-left rounded-xl border p-3 transition-colors ${selectedPatient?.id === patient.id ? 'border-sky-300 bg-sky-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
                 >
-                  <div className="font-bold text-slate-800">{patient.name}</div>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-bold text-slate-800">{patient.name}</div>
+                    <EpisodeStatusBadge status={patient.latest_episode_status} />
+                  </div>
                   <div className="text-xs text-slate-500 mt-0.5">DOB {formatDate(patient.dob)} | MRN {patient.mrn || 'Missing'}</div>
                   <div className="flex gap-2 mt-2 text-[11px] text-slate-500">
                     <span>{patient.admission_count} adm</span>

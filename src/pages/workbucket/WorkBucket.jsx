@@ -102,6 +102,47 @@ function payloadForSubmit(patch) {
   };
 }
 
+// Lisa: show object lifecycle (found/missing/created/updated/in-review) per the
+// diagram's objects, derived from the item's decision flags. Mirrors
+// objectLifecycle() on the server.
+function lifecycleFromDecisions(d = {}) {
+  const ref = (exists, notExists) => exists ? 'found' : notExists ? 'missing' : 'pending';
+  return {
+    Patient: d.needs_manual_review ? 'in-review'
+      : (d.patient_write_success || d.patient_retry_success) ? (d.patient_exists ? 'updated' : 'created')
+      : d.patient_exists ? 'found' : d.patient_not_exists ? 'missing' : 'pending',
+    'Physician Group': d.pg_missing_blocks_patient ? 'in-review' : ref(d.pg_exists, d.pg_not_exists),
+    Practitioner: ref(d.practitioner_exists, d.practitioner_not_exists),
+    HHAH: ref(d.hhah_exists, d.hhah_not_exists),
+    Admission: (d.patient_write_success || d.patient_retry_success) ? 'created' : 'pending',
+    Episode: (d.patient_write_success || d.patient_retry_success) ? 'created' : 'pending',
+    Order: (d.order_write_success || d.order_retry_success) ? (d.order_exists ? 'updated' : 'created')
+      : d.order_exists ? 'found' : d.order_not_exists ? 'missing' : 'pending',
+  };
+}
+
+const LIFECYCLE_TONE = {
+  found: 'bg-sky-50 text-sky-700 border-sky-200',
+  created: 'bg-green-50 text-green-700 border-green-200',
+  updated: 'bg-violet-50 text-violet-700 border-violet-200',
+  missing: 'bg-rose-50 text-rose-700 border-rose-200',
+  'in-review': 'bg-amber-50 text-amber-700 border-amber-200',
+  pending: 'bg-slate-50 text-slate-400 border-slate-200',
+};
+
+function LifecycleStrip({ decisions }) {
+  const lc = lifecycleFromDecisions(decisions);
+  return (
+    <div className="flex flex-wrap gap-1.5 px-3 py-2.5 border-b border-slate-100 bg-slate-50/50">
+      {Object.entries(lc).map(([obj, state]) => (
+        <span key={obj} className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${LIFECYCLE_TONE[state] || LIFECYCLE_TONE.pending}`}>
+          {obj}: {state}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function RecordSummary({ item, missingFields }) {
   const patient = item.dbPayload?.patient || {};
   const order = item.dbPayload?.order || {};
@@ -111,6 +152,7 @@ function RecordSummary({ item, missingFields }) {
   const valueClass = (field) => missing.has(field) ? 'text-rose-700 bg-rose-50 rounded px-1 font-bold' : 'text-slate-700';
   return (
     <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+      <LifecycleStrip decisions={item.dbPayload?.decisions} />
       <div className="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-100">
         <div className="p-3">
           <div className="text-[11px] font-bold uppercase tracking-wide text-violet-600 mb-2">Patient</div>

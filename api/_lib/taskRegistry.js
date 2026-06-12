@@ -91,9 +91,13 @@ async function markReferenceDecisions(item) {
     practitioner_not_exists: !refs.practitioner,
     pg_exists: !!refs.pg,
     pg_not_exists: !refs.pg,
+    // Lisa: a missing PG blocks patient creation and routes the row to review.
+    pg_missing_blocks_patient: !refs.pg,
+    needs_manual_review: !refs.pg,
     hhah_exists: !!refs.hhah,
     hhah_not_exists: !refs.hhah,
-    reference_records_ready: !!refs.practitioner && !!refs.pg && !!refs.hhah,
+    // Patient may only be written once the PG exists (HHAH/practitioner optional here).
+    reference_records_ready: !!refs.pg,
   });
   await updateItem(item.id, { decisions });
   return { refs, decisions };
@@ -405,6 +409,33 @@ export const taskRegistry = {
     return { ok: true, output: { pg } };
   },
 
+  // Missing PG blocks patient creation. A human reviews the row and supplies the
+  // correct PG; only then is the block cleared and the patient may be created.
+  'human.reviewMissingPg': async ({ item, payload }) => {
+    const referencePayload = mergeDeep(item.reference_payload, { PG: payload?.PG || {} });
+    const pgName = cleanString(referencePayload?.PG?.name);
+    if (!pgName) {
+      // Still no PG after review — keep the row blocked and in review.
+      const decisions = setDecisions(item, {
+        pg_exists: false,
+        pg_not_exists: true,
+        pg_missing_blocks_patient: true,
+        needs_manual_review: true,
+      });
+      await updateItem(item.id, { referencePayload, decisions });
+      return { ok: false, output: { blocked: true, reason: 'Physician Group still missing' } };
+    }
+    const pg = await createPgFromPayload(referencePayload);
+    const decisions = setDecisions(item, {
+      pg_exists: true,
+      pg_not_exists: false,
+      pg_missing_blocks_patient: false,
+      needs_manual_review: false,
+    });
+    await updateItem(item.id, { referencePayload, decisions });
+    return { ok: true, output: { pg, reviewed: true } };
+  },
+
   'human.createHhah': async ({ item, payload }) => {
     const referencePayload = mergeDeep(item.reference_payload, { HHAH: payload?.HHAH || {} });
     const hhah = await createHhahFromPayload(referencePayload);
@@ -434,6 +465,28 @@ export const taskRegistry = {
   },
 };
 
+// Lisa: the lifecycle view shows object existence/creation status for the
+// diagram's objects (Patient, PG, Practitioner, HHAH, Admission, Episode, Order)
+// rather than field-level changes. Derived from the item's decision flags.
+export function objectLifecycle(item) {
+  const d = item.decisions || {};
+  const ref = (exists, notExists, created) =>
+    created ? 'created' : exists ? 'found' : notExists ? 'missing' : 'pending';
+  return {
+    patient: d.needs_manual_review ? 'in-review'
+      : d.patient_write_success || d.patient_retry_success ? (d.patient_exists ? 'updated' : 'created')
+      : d.patient_exists ? 'found'
+      : d.patient_not_exists ? 'missing' : 'pending',
+    physicianGroup: d.pg_missing_blocks_patient ? 'in-review' : ref(d.pg_exists, d.pg_not_exists),
+    practitioner: ref(d.practitioner_exists, d.practitioner_not_exists),
+    hhah: ref(d.hhah_exists, d.hhah_not_exists),
+    admission: d.patient_write_success || d.patient_retry_success ? 'created' : 'pending',
+    episode: d.patient_write_success || d.patient_retry_success ? 'created' : 'pending',
+    order: d.order_write_success || d.order_retry_success ? (d.order_exists ? 'updated' : 'created')
+      : d.order_exists ? 'found' : d.order_not_exists ? 'missing' : 'pending',
+  };
+}
+
 export function taskDisplayPayload(item) {
   return {
     patient: safeJson(item.patient_payload),
@@ -441,6 +494,7 @@ export function taskDisplayPayload(item) {
     references: safeJson(item.reference_payload),
     extraction: safeJson(item.extraction_payload),
     decisions: safeJson(item.decisions),
+    objectLifecycle: objectLifecycle(item),
     missingFields: missingFields(item),
     practitionerNpi: normalizeNpi(item.reference_payload?.practitioner?.NPI),
     pgName: cleanString(item.reference_payload?.PG?.name),
