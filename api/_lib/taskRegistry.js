@@ -173,7 +173,8 @@ async function evaluateOrderExistence(item) {
 async function runPatientWrite(item, retry) {
   try {
     // Did the admission / episode already exist before this write? Used by the
-    // admission.resolve / episode.resolve steps to report found vs created.
+    // object lifecycle view to report found vs created without separate visual
+    // admission/episode workflow boxes.
     const patientBefore = await findPatient(item.patient_payload);
     const admissionBefore = patientBefore
       ? await findAdmission(patientBefore.id, item.patient_payload?.admission_details?.SOC)
@@ -183,9 +184,19 @@ async function runPatientWrite(item, retry) {
       : null;
 
     const bundle = await writePatientBundle(item);
+    const objectDecisions = {
+      admission_ready: !!bundle.admission?.id,
+      admission_exists: !!bundle.admission?.id && !!admissionBefore,
+      admission_created: !!bundle.admission?.id && !admissionBefore,
+      episode_ready: !!bundle.episode?.id,
+      episode_exists: !!bundle.episode?.id && !!episodeBefore,
+      episode_created: !!bundle.episode?.id && !episodeBefore,
+      admission_seen_before: !!admissionBefore,
+      episode_seen_before: !!episodeBefore,
+    };
     const decisions = setDecisions(item, retry
-      ? { patient_retry_success: true, patient_retry_fail: false, patient_write_fail: false, admission_ready: !!bundle.admission?.id, episode_ready: !!bundle.episode?.id, admission_seen_before: !!admissionBefore, episode_seen_before: !!episodeBefore }
-      : { patient_write_success: true, patient_write_fail: false, admission_ready: !!bundle.admission?.id, episode_ready: !!bundle.episode?.id, admission_seen_before: !!admissionBefore, episode_seen_before: !!episodeBefore });
+      ? { patient_retry_success: true, patient_retry_fail: false, patient_write_fail: false, ...objectDecisions }
+      : { patient_write_success: true, patient_write_fail: false, ...objectDecisions });
     await updateItem(item.id, {
       decisions,
       extractionPayload: {

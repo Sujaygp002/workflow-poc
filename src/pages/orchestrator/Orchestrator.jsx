@@ -747,17 +747,13 @@ function DbBulkInstanceCard({ instance, onDelete }) {
                 <Arrow small />
                 {row('wf7-s12')}
                 <Arrow small />
-                {row('wf7-s24', 'wf7-s25', 'manual object dates if SOC missing')}
-                <Arrow small />
-                {row('wf7-s26', 'wf7-s27', 'manual object dates if SOE/EOE missing')}
-                <Arrow small />
                 {row('wf7-s14', 'wf7-s13', 'create or update patient', { choice: true })}
                 <Arrow small />
                 {row('wf7-s15', 'wf7-s16', 'retry or human fix')}
                 <Arrow small />
-                {row('wf7-s22')}
+                {row('wf7-s24', 'wf7-s25', 'manual object dates if SOC missing')}
                 <Arrow small />
-                {row('wf7-s23')}
+                {row('wf7-s26', 'wf7-s27', 'manual object dates if SOE/EOE missing')}
                 <Arrow small />
                 {row('wf7-s18', 'wf7-s17', 'create or update order', { choice: true })}
                 <Arrow small />

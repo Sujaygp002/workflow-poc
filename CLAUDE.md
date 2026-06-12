@@ -48,8 +48,9 @@ runtime and DB), so prefer build/lint for verification.
 - **Credentials are hardcoded** in `api/_lib/config.js` as fallbacks (`X = process.env.X || '<literal>'`)
   for personal testing. Env vars still override. Do NOT move secrets elsewhere without
   asking. For real production these must move to env vars and the keys rotated.
-- The `wf7` workflow steps are referenced by stepId (`wf7-s1`..`wf7-s21`, plus base
-  ids like `wf7-p1`). The DB bulk renderer maps these explicitly in `row(...)` calls.
+- The `wf7` workflow steps are referenced by stepId. IDs are intentionally
+  non-contiguous (`wf7-s1`..`wf7-s27`; `wf7-s22`/`wf7-s23` were retired). The DB
+  bulk renderer maps the visible steps explicitly in `row(...)` calls.
 - Condition/branch logic: a step's `conditionExpr` gates it (e.g. `practitioner_not_exists`,
   `ai_extraction_fail`). Side branches are not always NO/human: derive the branch label
   from the branch task's condition. For example, `admission_dates_missing` means YES goes
@@ -64,6 +65,12 @@ runtime and DB), so prefer build/lint for verification.
 ## Change Log
 
 Newest first. Add an entry for each change made by Claude Code.
+
+- **2026-06-12** — Removed the duplicate visual Admission/Episode object boxes from wf7.
+  `wf7-s22`/`wf7-s23` are no longer in the seeded workflow definition; admission/episode
+  found-vs-created decisions are recorded during patient write, and the orchestrator now
+  shows the admission-date and episode-date branches in that single object position before
+  order create/update. Re-seeded wf7.
 
 - **2026-06-12** — Fixed wf7 orchestrator branch semantics. Side branches now use the
   actual YES/NO truth value and actor instead of assuming every branch is `NO -> human`.
