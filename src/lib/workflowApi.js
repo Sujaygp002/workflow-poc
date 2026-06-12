@@ -1,7 +1,8 @@
-export async function startBulkUploadRun({ workbook, pdfs = [], sourceLabel }) {
+export async function startBulkUploadRun({ workbook, pdfs = [], orderZip = null, sourceLabel }) {
   const form = new FormData();
   form.append('workbook', workbook);
   pdfs.forEach((pdf) => form.append('pdfs', pdf));
+  if (orderZip) form.append('orderZip', orderZip);
   if (sourceLabel) form.append('sourceLabel', sourceLabel);
 
   const res = await fetch('/api/workflows/bulk-upload/start', {
@@ -20,11 +21,51 @@ export async function fetchWorkflowRuns() {
   return body.runs || [];
 }
 
+export async function fetchWorkflowDefinitions() {
+  const res = await fetch('/api/workflows');
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Unable to load DB workflows');
+  return body.workflows || [];
+}
+
+export async function fetchPatients() {
+  const res = await fetch('/api/patients');
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Unable to load patients');
+  return body.patients || [];
+}
+
+export async function fetchPatientTree(patientId) {
+  const res = await fetch(`/api/patients/${encodeURIComponent(patientId)}`);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Unable to load patient');
+  return body;
+}
+
 export async function fetchWorkItems(userId) {
   const res = await fetch(`/api/work-items${userId ? `?userId=${encodeURIComponent(userId)}` : ''}`);
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || 'Unable to load DB work items');
   return body;
+}
+
+export function dbWorkflowToWorkflow(row) {
+  const definition = row.definition || {};
+  return {
+    ...definition,
+    id: definition.id || row.id,
+    name: definition.name || row.name,
+    description: definition.description || row.description,
+    createdAt: row.created_at,
+    dbBacked: true,
+    version: row.version,
+    steps: (definition.steps || []).map((step) => ({
+      ...step,
+      type: step.actor === 'condition' ? 'conditional' : step.type || 'task',
+      PreReq: Array.isArray(step.preReq) ? step.preReq : step.PreReq || 'none',
+      conditionExpr: step.condition || step.conditionExpr || '',
+    })),
+  };
 }
 
 export async function completeDbWorkItem({ runId, taskRunId, notes = '', payload = {} }) {
@@ -99,6 +140,7 @@ export function dbWorkItemToAction(item) {
     taskKind: item.task_key,
     actor: item.actor,
     status: item.status,
+    completedAt: item.completed_at,
     dbPayload: {
       patient: item.patient_payload,
       order: item.order_payload,

@@ -18,6 +18,16 @@ export async function getActiveWorkflow(id) {
   return rows[0] || null;
 }
 
+export async function listActiveWorkflowDefinitions() {
+  const sql = getSql();
+  return sql`
+    SELECT id, version, name, description, definition, created_at, updated_at
+    FROM workflow_definitions
+    WHERE active = true
+    ORDER BY updated_at DESC, id
+  `;
+}
+
 export async function upsertWorkflowDefinition(definition, version = 1) {
   const sql = getSql();
   const rows = await sql`
@@ -554,4 +564,96 @@ export async function insertAiExtraction({ itemId, documentId, model, status, in
     RETURNING *
   `;
   return rows[0];
+}
+
+export async function listPatients() {
+  const sql = getSql();
+  return sql`
+    SELECT
+      p.id,
+      p.name,
+      p.dob,
+      p.mrn,
+      p.sex,
+      p.updated_at,
+      COUNT(DISTINCT a.id)::int AS admission_count,
+      COUNT(DISTINCT e.id)::int AS episode_count,
+      COUNT(DISTINCT o.id)::int AS order_count
+    FROM patients p
+    LEFT JOIN patient_admissions a ON a.patient_id = p.id
+    LEFT JOIN patient_episodes e ON e.admission_id = a.id
+    LEFT JOIN orders o ON o.patient_id = p.id
+    GROUP BY p.id
+    ORDER BY p.updated_at DESC, p.name
+    LIMIT 200
+  `;
+}
+
+export async function getPatientTree(patientId) {
+  const sql = getSql();
+  const patients = await sql`
+    SELECT *
+    FROM patients
+    WHERE id = ${patientId}
+    LIMIT 1
+  `;
+  const patient = patients[0];
+  if (!patient) return null;
+
+  const admissions = await sql`
+    SELECT
+      a.*,
+      h.name AS agency_name,
+      pg.name AS pg_name,
+      pr.physician_name AS care_provider_name,
+      pr.npi_digits AS care_provider_npi
+    FROM patient_admissions a
+    LEFT JOIN home_health_agencies h ON h.id = a.agency_id
+    LEFT JOIN physician_groups pg ON pg.id = a.pg_id
+    LEFT JOIN practitioners pr ON pr.id = a.care_provider_id
+    WHERE a.patient_id = ${patientId}
+    ORDER BY a.soc NULLS LAST, a.created_at
+  `;
+
+  const episodes = await sql`
+    SELECT e.*
+    FROM patient_episodes e
+    JOIN patient_admissions a ON a.id = e.admission_id
+    WHERE a.patient_id = ${patientId}
+    ORDER BY e.soe NULLS LAST, e.created_at
+  `;
+
+  const orders = await sql`
+    SELECT
+      o.*,
+      h.name AS agency_name,
+      pg.name AS pg_name,
+      pr.physician_name AS billing_provider_name,
+      pr.npi_digits AS billing_provider_npi
+    FROM orders o
+    LEFT JOIN home_health_agencies h ON h.id = o.agency_id
+    LEFT JOIN physician_groups pg ON pg.id = o.pg_id
+    LEFT JOIN practitioners pr ON pr.id = o.billing_provider_id
+    WHERE o.patient_id = ${patientId}
+    ORDER BY o.order_date NULLS LAST, o.created_at
+  `;
+
+  const episodesByAdmission = new Map();
+  for (const episode of episodes) {
+    const entry = { ...episode, orders: orders.filter((order) => order.episode_id === episode.id) };
+    const list = episodesByAdmission.get(episode.admission_id) || [];
+    list.push(entry);
+    episodesByAdmission.set(episode.admission_id, list);
+  }
+
+  const ordersWithoutEpisode = orders.filter((order) => !order.episode_id);
+  return {
+    patient,
+    admissions: admissions.map((admission) => ({
+      ...admission,
+      episodes: episodesByAdmission.get(admission.id) || [],
+      orders: orders.filter((order) => order.admission_id === admission.id && !order.episode_id),
+    })),
+    ordersWithoutEpisode,
+  };
 }

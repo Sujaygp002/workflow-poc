@@ -1,5 +1,7 @@
+import fs from 'node:fs/promises';
+import JSZip from 'jszip';
 import { parseMultipart } from '../../_lib/multipart.js';
-import { uploadPdfToBlob } from '../../_lib/blobStore.js';
+import { orderNumberFromPdfName, uploadPdfBufferToBlob, uploadPdfToBlob, withPdfOrderKey } from '../../_lib/blobStore.js';
 import { parseWorkflowWorkbook } from '../../_lib/excelParser.js';
 import { handleError, methodNotAllowed, readJson, sendJson } from '../../_lib/http.js';
 import { SEEDED_USERS, WF7_DEFINITION } from '../../_lib/workflowDefinition.js';
@@ -32,8 +34,33 @@ async function ensureWorkflow() {
   return workflow;
 }
 
+function firstField(value, fallback = '') {
+  if (Array.isArray(value)) return value[0] ?? fallback;
+  return value ?? fallback;
+}
+
+async function pdfsFromZip(zipFile) {
+  const zipBuffer = await fs.readFile(zipFile.filepath);
+  const zip = await JSZip.loadAsync(zipBuffer);
+  const extracted = [];
+
+  for (const [name, entry] of Object.entries(zip.files)) {
+    if (entry.dir || !name.toLowerCase().endsWith('.pdf')) continue;
+    const buffer = await entry.async('nodebuffer');
+    extracted.push({
+      buffer,
+      originalFilename: name.split('/').pop(),
+      mimetype: 'application/pdf',
+      size: buffer.byteLength,
+      sourceZip: zipFile.originalFilename || 'orders.zip',
+    });
+  }
+
+  return extracted;
+}
+
 async function startFromMultipart(req) {
-  const { fields, workbook, pdfs } = await parseMultipart(req);
+  const { fields, workbook, pdfs, zips } = await parseMultipart(req);
   if (!workbook) throw new Error('Upload requires a .xlsx workbook field named "workbook".');
 
   const workflow = await ensureWorkflow();
@@ -41,7 +68,7 @@ async function startFromMultipart(req) {
   const run = await createWorkflowRun({
     workflowId: workflow.id,
     workflowVersion: workflow.version,
-    sourceLabel: String(fields.sourceLabel || workbook.originalFilename || 'Excel upload'),
+    sourceLabel: String(firstField(fields.sourceLabel, workbook.originalFilename || 'Excel upload')),
     totalItems: parsed.joined.length,
     inputSummary: parsed.summary,
   });
@@ -57,7 +84,28 @@ async function startFromMultipart(req) {
       blobUrl: uploaded.blobUrl,
       blobPath: uploaded.blobPath,
     });
-    uploadedPdfs.push({ ...uploaded, fileName: pdf.originalFilename, document });
+    uploadedPdfs.push(withPdfOrderKey({ ...uploaded, fileName: pdf.originalFilename, document }));
+  }
+
+  for (const zip of zips) {
+    const extractedPdfs = await pdfsFromZip(zip);
+    for (const pdf of extractedPdfs) {
+      const uploaded = await uploadPdfBufferToBlob(pdf, run.id);
+      const document = await insertUploadedDocument({
+        runId: run.id,
+        fileName: pdf.originalFilename || 'document.pdf',
+        contentType: pdf.mimetype || 'application/pdf',
+        sizeBytes: pdf.size || uploaded.buffer?.byteLength,
+        blobUrl: uploaded.blobUrl,
+        blobPath: uploaded.blobPath,
+      });
+      uploadedPdfs.push(withPdfOrderKey({
+        ...uploaded,
+        fileName: pdf.originalFilename,
+        sourceZip: pdf.sourceZip,
+        document,
+      }));
+    }
   }
 
   let itemIndex = 0;
@@ -83,7 +131,10 @@ async function startFromMultipart(req) {
   await runWorkflowAutomation({
     runId: run.id,
     definition: workflow.definition,
-    context: { pdfs: uploadedPdfs },
+    context: {
+      pdfs: uploadedPdfs,
+      pdfsByOrderNumber: Object.fromEntries(uploadedPdfs.map((pdf) => [orderNumberFromPdfName(pdf.fileName), pdf])),
+    },
   });
 
   const refreshed = await getRunWithDefinition(run.id);

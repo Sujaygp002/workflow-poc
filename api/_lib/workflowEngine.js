@@ -33,9 +33,7 @@ function terminal(task) {
 async function assignHuman() {
   const users = await listUsers();
   if (!users.length) return null;
-  const activeCounts = users.map((user) => ({ user, count: 0 }));
-  activeCounts.sort((a, b) => a.count - b.count || a.user.id.localeCompare(b.user.id));
-  return activeCounts[0].user.id;
+  return users[Math.floor(Math.random() * users.length)].id;
 }
 
 export async function runItemAutomation({ definition, itemId, context = {} }) {

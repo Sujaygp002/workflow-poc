@@ -65,6 +65,18 @@ function confidenceConfirmed(payload) {
   return next;
 }
 
+function orderPdfKey(value) {
+  return cleanString(value).replace(/\.pdf$/i, '').toLowerCase();
+}
+
+function findPdfForOrder(item, context) {
+  const orderNumber = orderPdfKey(item.order_payload?.order_info?.order_number);
+  if (!orderNumber) return context?.pdfs?.[0] || null;
+  return context?.pdfsByOrderNumber?.[orderNumber]
+    || (context?.pdfs || []).find((pdf) => orderPdfKey(pdf.fileName) === orderNumber)
+    || null;
+}
+
 async function checkAllReferences(item) {
   const practitioner = await findPractitionerByNpi(item.reference_payload?.practitioner?.NPI);
   const pg = await findPgByName(item.reference_payload?.PG?.name);
@@ -215,7 +227,7 @@ export const taskRegistry = {
 
   'ai.extractMissingDataFromPdf': async ({ item, context }) => {
     const missing = missingFields(item);
-    const pdf = context?.pdfs?.[0] || null;
+    const pdf = findPdfForOrder(item, context);
     try {
       const result = await extractMissingDataFromPdf({
         pdfBuffer: pdf?.buffer || null,

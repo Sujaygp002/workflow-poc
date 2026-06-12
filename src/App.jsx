@@ -1,11 +1,12 @@
-import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
-import { GitBranch, Inbox, Settings, Activity, Zap } from 'lucide-react';
+import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
+import { Building2, GitBranch, Inbox, Settings, Activity, Zap } from 'lucide-react';
 import WorkflowList from './pages/builder/WorkflowList';
 import WorkflowBuilder from './pages/builder/WorkflowBuilder';
 import WorkBucket from './pages/workbucket/WorkBucket';
 import UserSelect from './pages/workbucket/UserSelect';
 import Orchestrator from './pages/orchestrator/Orchestrator';
 import Triggers from './pages/triggers/Triggers';
+import HhhLogin from './pages/hhh/HhhLogin';
 
 function Sidebar() {
   const navItem = (to, icon, label, end) => (
@@ -37,6 +38,7 @@ function Sidebar() {
         <div className="text-xs font-semibold text-slate-400 px-3 py-1 mt-4 uppercase tracking-wider">Execution</div>
         {navItem('/orchestrator', <Activity size={16} />, 'Orchestrator', true)}
         {navItem('/worker', <Inbox size={16} />, 'Work Bucket', true)}
+        {navItem('/hhh-login', <Building2 size={16} />, 'HHH Login', true)}
       </nav>
 
       <div className="p-3 border-t border-slate-100 space-y-1">
@@ -57,20 +59,30 @@ function Sidebar() {
 export default function App() {
   return (
     <BrowserRouter>
-      <div className="flex min-h-screen bg-slate-50">
-        <Sidebar />
-        <main className="flex-1 min-w-0 overflow-y-auto">
-          <Routes>
-            <Route path="/" element={<Navigate to="/triggers" replace />} />
-            <Route path="/triggers" element={<Triggers />} />
-            <Route path="/builder/workflows" element={<WorkflowList />} />
-            <Route path="/builder/create" element={<WorkflowBuilder />} />
-            <Route path="/orchestrator" element={<Orchestrator />} />
-            <Route path="/worker" element={<UserSelect />} />
-            <Route path="/worker/bucket/:userId" element={<WorkBucket />} />
-          </Routes>
-        </main>
-      </div>
+      <AppShell />
     </BrowserRouter>
+  );
+}
+
+function AppShell() {
+  const location = useLocation();
+  const standalone = location.pathname.startsWith('/hhh-login');
+
+  return (
+    <div className="flex min-h-screen bg-slate-50">
+      {!standalone && <Sidebar />}
+      <main className="flex-1 min-w-0 overflow-y-auto">
+        <Routes>
+          <Route path="/" element={<Navigate to="/triggers" replace />} />
+          <Route path="/triggers" element={<Triggers />} />
+          <Route path="/builder/workflows" element={<WorkflowList />} />
+          <Route path="/builder/create" element={<WorkflowBuilder />} />
+          <Route path="/orchestrator" element={<Orchestrator />} />
+          <Route path="/worker" element={<UserSelect />} />
+          <Route path="/worker/bucket/:userId" element={<WorkBucket />} />
+          <Route path="/hhh-login" element={<HhhLogin />} />
+        </Routes>
+      </main>
+    </div>
   );
 }

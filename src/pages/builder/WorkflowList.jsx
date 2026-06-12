@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Trash2, GitBranch, Clock, Edit2, Zap, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
 import WorkflowFlowChart, { nodesFromWorkflow } from '../../components/WorkflowFlowChart';
 import { getWorkflows, deleteWorkflow, getTriggers, getUnmappedTriggers } from '../../store';
+import { dbWorkflowToWorkflow, fetchWorkflowDefinitions } from '../../lib/workflowApi';
 
 const typeBadgeCls = {
   task:        'bg-violet-100 text-violet-700',
@@ -32,6 +33,11 @@ function WorkflowCard({ wf, trigger, onEdit, onDelete }) {
                   <Zap size={10} /> {trigger.name}
                 </span>
               )}
+              {wf.dbBacked && (
+                <span className="text-xs px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-100 font-medium">
+                  DB saved
+                </span>
+              )}
             </div>
             {wf.description && <p className="text-sm text-slate-500 mt-1 line-clamp-1">{wf.description}</p>}
             <div className="flex items-center gap-2 mt-2 flex-wrap">
@@ -54,12 +60,12 @@ function WorkflowCard({ wf, trigger, onEdit, onDelete }) {
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${showFlow ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-slate-600 border-slate-200 hover:border-violet-300'}`}>
               <GitBranch size={13} /> Flow {showFlow ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
             </button>
-            <button onClick={() => onEdit(wf)}
-              className="p-2 rounded-lg hover:bg-violet-50 text-slate-400 hover:text-violet-500">
+            <button onClick={() => onEdit(wf)} disabled={wf.dbBacked}
+              className="p-2 rounded-lg hover:bg-violet-50 text-slate-400 hover:text-violet-500 disabled:opacity-30 disabled:cursor-not-allowed">
               <Edit2 size={15} />
             </button>
-            <button onClick={() => onDelete(wf.id)}
-              className="p-2 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500">
+            <button onClick={() => onDelete(wf.id)} disabled={wf.dbBacked}
+              className="p-2 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500 disabled:opacity-30 disabled:cursor-not-allowed">
               <Trash2 size={15} />
             </button>
           </div>
@@ -78,8 +84,22 @@ function WorkflowCard({ wf, trigger, onEdit, onDelete }) {
 export default function WorkflowList() {
   const navigate = useNavigate();
   const [workflows, setWorkflows] = useState(getWorkflows);
+  const [dbError, setDbError] = useState(null);
   const triggers = getTriggers();
   const unmapped = getUnmappedTriggers();
+
+  useEffect(() => {
+    const local = getWorkflows();
+    fetchWorkflowDefinitions()
+      .then((dbWorkflows) => {
+        setWorkflows([...dbWorkflows.map(dbWorkflowToWorkflow), ...local]);
+        setDbError(null);
+      })
+      .catch((error) => {
+        setWorkflows(local);
+        setDbError(error.message);
+      });
+  }, []);
 
   function handleDelete(id) {
     deleteWorkflow(id);
@@ -117,6 +137,12 @@ export default function WorkflowList() {
               </button>
             ))}
           </div>
+        </div>
+      )}
+
+      {dbError && (
+        <div className="mb-5 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-sm">
+          DB workflows unavailable: {dbError}. Showing local dummy workflows only.
         </div>
       )}
 

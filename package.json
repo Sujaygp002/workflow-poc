@@ -17,6 +17,7 @@
     "@vercel/blob": "^2.4.0",
     "exceljs": "^4.4.0",
     "formidable": "^3.5.4",
+    "jszip": "^3.10.1",
     "lucide-react": "^1.17.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",

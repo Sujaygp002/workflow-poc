@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Inbox } from 'lucide-react';
 import { getUsers, getMyWorkItems, getMyCompletedItems } from '../../store';
 
@@ -12,6 +12,7 @@ const AVATAR_COLORS = [
 
 export default function UserSelect() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [users, setUsers] = useState(getUsers);
   const [, setTick] = useState(0);
 
@@ -42,7 +43,7 @@ export default function UserSelect() {
             return (
               <button
                 key={user.id}
-                onClick={() => navigate(`/bucket/${user.id}`)}
+                onClick={() => navigate(location.pathname.startsWith('/worker') ? `/worker/bucket/${user.id}` : `/bucket/${user.id}`)}
                 className="w-full flex items-center gap-4 bg-white rounded-2xl p-4 shadow-sm border border-slate-100 hover:border-violet-300 hover:shadow-md transition-all group text-left"
               >
                 <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-xl font-bold shrink-0 ${AVATAR_COLORS[i % AVATAR_COLORS.length]}`}>

@@ -363,7 +363,7 @@ export function nodesFromWorkflow(wf) {
     cases: s.cases || [],
     loopSet: s.loopSet,
     loopExpr: s.loopExpr,
-    PreReq: s.PreReq || 'none',
+    PreReq: s.PreReq || s.preReq || 'none',
   }));
 }
 
