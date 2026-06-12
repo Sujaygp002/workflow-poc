@@ -43,6 +43,24 @@ function ArrowDownTiny() {
   );
 }
 
+function ConditionDecision({ label }) {
+  if (!label) return null;
+  return (
+    <div className="border-t border-amber-100 bg-amber-50/60 px-3 py-3">
+      <div className="flex items-center justify-center gap-3">
+        <div className="relative flex h-16 w-16 shrink-0 items-center justify-center">
+          <div className="absolute h-11 w-11 rotate-45 rounded-md border-2 border-amber-400 bg-white shadow-sm" />
+          <span className="relative z-10 text-[10px] font-black text-amber-700">IF</span>
+        </div>
+        <div className="min-w-0 text-left">
+          <div className="text-[9px] font-black uppercase tracking-wide text-amber-600">Condition</div>
+          <div className="font-mono text-[10px] leading-tight text-amber-800 break-words">{label}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Task / loop box — atomic unit (no sub-steps) ───────
 function StepBox({ node }) {
   const live = !!node.status;
@@ -85,15 +103,10 @@ function StepBox({ node }) {
         </div>
       )}
       {node.when && (
-        <div className="px-3 py-1 bg-amber-50/60 border-t border-amber-100 text-[10px] font-mono text-amber-700">
-          ◆ when {node.when.expr} = {String(node.when.equals).toUpperCase()}
-        </div>
+        <ConditionDecision label={`when ${node.when.expr} = ${String(node.when.equals).toUpperCase()}`} />
       )}
       {node.conditionExpr && node.type !== 'conditional' && !node.when && (
-        <div className="px-3 py-1 bg-amber-50/60 border-t border-amber-100 text-[10px] font-mono text-amber-700 flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-2.5 rotate-45 border border-amber-500 bg-white shrink-0" />
-          <span className="truncate">when {node.conditionExpr}</span>
-        </div>
+        <ConditionDecision label={`when ${node.conditionExpr}`} />
       )}
       {live && !skipped && node.assignee && (
         <div className="px-3 py-1.5 border-t border-slate-100 flex items-center gap-1.5 bg-white/60">

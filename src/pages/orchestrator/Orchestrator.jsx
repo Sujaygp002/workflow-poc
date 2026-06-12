@@ -264,22 +264,30 @@ function ConditionDiamond({ expr }) {
 
 function LoopArrow() {
   return (
-    <svg
-      className="pointer-events-none absolute right-4 top-16 h-[calc(100%-5rem)] w-24 text-purple-300"
-      viewBox="0 0 96 520"
-      preserveAspectRatio="none"
-      aria-hidden="true"
-    >
-      <path
-        d="M25 10 C86 120 86 400 25 510"
-        stroke="currentColor"
-        strokeWidth="4"
-        strokeDasharray="12 10"
-        fill="none"
-        strokeLinecap="round"
-      />
-      <path d="M25 510 L42 486 L50 518 Z" fill="currentColor" />
-    </svg>
+    <div className="pointer-events-none absolute inset-y-12 right-4 w-36 text-purple-400" aria-hidden="true">
+      <svg className="h-full w-full" viewBox="0 0 144 900" preserveAspectRatio="none">
+        <path
+          d="M30 820 C128 690 128 205 38 76"
+          stroke="currentColor"
+          strokeWidth="5"
+          strokeDasharray="16 13"
+          fill="none"
+          strokeLinecap="round"
+        />
+        <path d="M38 76 L66 84 L45 111 Z" fill="currentColor" />
+        <path
+          d="M30 820 L8 820"
+          stroke="currentColor"
+          strokeWidth="5"
+          strokeDasharray="16 13"
+          fill="none"
+          strokeLinecap="round"
+        />
+      </svg>
+      <div className="absolute right-7 top-1/2 -translate-y-1/2 rotate-90 whitespace-nowrap rounded-full border border-purple-200 bg-white/90 px-3 py-1 text-[10px] font-bold uppercase tracking-wide text-purple-700 shadow-sm">
+        repeat next patient/order row
+      </div>
+    </div>
   );
 }
 
@@ -528,35 +536,37 @@ function DbBulkInstanceCard({ instance }) {
         <div className="w-fit mx-auto flex flex-col items-center">
           <div className="rounded-full px-6 py-1.5 text-sm font-bold border-2 border-violet-400 bg-violet-50 text-violet-700">START · Excel + order PDFs</div>
           <Arrow />
-          <div className="relative border-2 border-dashed border-purple-300 rounded-2xl bg-purple-50/20 px-5 py-4 pr-32">
+          <div className="relative border-2 border-dashed border-purple-300 rounded-2xl bg-purple-50/20 px-5 py-4 pr-44">
             <LoopArrow />
-            <div className="flex items-center justify-center gap-1.5 text-[11px] font-bold text-purple-700 mb-4">
-              <RefreshCw size={12} /> FOR EACH PATIENT / ORDER ROW UNTIL LAST ROW
-            </div>
-            <div className="space-y-2">
-              {row('wf7-s1')}
-              <Arrow small />
-              {row('wf7-s2')}
-              <Arrow small />
-              {row('wf7-s3', 'wf7-s5', 'missing data fallback')}
-              <Arrow small />
-              {row('wf7-s6', 'wf7-s7', 'create if NPI missing')}
-              <Arrow small />
-              {row('wf7-s8', 'wf7-s9', 'create if PG missing')}
-              <Arrow small />
-              {row('wf7-s10', 'wf7-s11', 'create if HHAH missing')}
-              <Arrow small />
-              {row('wf7-s12')}
-              <Arrow small />
-              {row('wf7-s14', 'wf7-s13', 'create or update patient')}
-              <Arrow small />
-              {row('wf7-s15', 'wf7-s16', 'retry or human fix')}
-              <Arrow small />
-              {row('wf7-s18', 'wf7-s17', 'create or update order')}
-              <Arrow small />
-              {row('wf7-s19', 'wf7-s20', 'retry or human fix')}
-              <Arrow small />
-              {row('wf7-s21')}
+            <div className="relative z-10">
+              <div className="flex items-center justify-center gap-1.5 text-[11px] font-bold text-purple-700 mb-4">
+                <RefreshCw size={12} /> FOR EACH PATIENT / ORDER ROW UNTIL LAST ROW
+              </div>
+              <div className="space-y-2">
+                {row('wf7-s1')}
+                <Arrow small />
+                {row('wf7-s2')}
+                <Arrow small />
+                {row('wf7-s3', 'wf7-s5', 'missing data fallback')}
+                <Arrow small />
+                {row('wf7-s6', 'wf7-s7', 'create if NPI missing')}
+                <Arrow small />
+                {row('wf7-s8', 'wf7-s9', 'create if PG missing')}
+                <Arrow small />
+                {row('wf7-s10', 'wf7-s11', 'create if HHAH missing')}
+                <Arrow small />
+                {row('wf7-s12')}
+                <Arrow small />
+                {row('wf7-s14', 'wf7-s13', 'create or update patient')}
+                <Arrow small />
+                {row('wf7-s15', 'wf7-s16', 'retry or human fix')}
+                <Arrow small />
+                {row('wf7-s18', 'wf7-s17', 'create or update order')}
+                <Arrow small />
+                {row('wf7-s19', 'wf7-s20', 'retry or human fix')}
+                <Arrow small />
+                {row('wf7-s21')}
+              </div>
             </div>
           </div>
           <Arrow />

@@ -59,7 +59,7 @@
 - `/triggers` is back in FlowPOC and starts the DB-backed bulk upload trigger.
 - `/builder/workflows` now pulls only DB workflow definitions and no longer shows local dummy workflows.
 - `/orchestrator` now shows only DB workflow runs and renders wf7 as one aggregate loop body instead of one repeated flow per patient/order row.
-- `/orchestrator` and `/builder/workflows` show condition markers as diamond chips; the wf7 loop is shown with a large curved repeat arrow.
+- `/orchestrator` and `/builder/workflows` show condition markers as diamond decision blocks; the wf7 loop is shown with a large curved repeat arrow.
 - `/orders` shows order records and their patient/reference/status/admission details.
 - `/reference-data` shows practitioners, physician groups, HHAH records, and supports mapping PG to practitioner.
 - `/worker` and `/worker/bucket/:userId` use the dummy users but show DB-assigned tasks only.
