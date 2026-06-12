@@ -76,13 +76,6 @@ function referenceFieldsForTask(taskKind) {
       { label: 'Type', key: 'type', root: 'PG' },
     ];
   }
-  if (taskKind === 'human.createHhah') {
-    return [
-      { label: 'HHAH name', key: 'name', root: 'HHAH' },
-      { label: 'NPI', key: 'NPI', root: 'HHAH' },
-      { label: 'Type of service', key: 'type_of_service', root: 'HHAH' },
-    ];
-  }
   return [];
 }
 

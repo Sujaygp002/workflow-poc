@@ -62,6 +62,8 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-12** — Removed the "Create HHAH" human task (wf7-s11) and `human.createHhah`. HHAH is always present via the HHAH login context, so it never needs manual creation. Kept Check HHAH; rewired wf7-s12 preReq; cleaned WorkBucket/Triggers/Orchestrator refs. Re-seeded wf7.
+
 - **2026-06-12** — Implemented Lisa's data-model & workflow changes:
   - Migration `002_patient_unit_and_links.sql`: `patient_units` (stable base layer) +
     `patients.unit_id`; `patient_physician_groups` and `patient_practitioners` direct

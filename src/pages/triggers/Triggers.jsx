@@ -7,7 +7,6 @@ const CONDITIONS = [
   'excel_row_incomplete',
   'practitioner_not_exists',
   'pg_not_exists',
-  'hhah_not_exists',
   'patient_exists',
   'patient_not_exists',
   'order_exists',

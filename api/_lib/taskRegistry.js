@@ -1,5 +1,4 @@
 import {
-  createHhahFromPayload,
   createPgFromPayload,
   createPractitionerFromPayload,
   findHhahByName,
@@ -434,14 +433,6 @@ export const taskRegistry = {
     });
     await updateItem(item.id, { referencePayload, decisions });
     return { ok: true, output: { pg, reviewed: true } };
-  },
-
-  'human.createHhah': async ({ item, payload }) => {
-    const referencePayload = mergeDeep(item.reference_payload, { HHAH: payload?.HHAH || {} });
-    const hhah = await createHhahFromPayload(referencePayload);
-    const decisions = setDecisions(item, { hhah_exists: true, hhah_not_exists: false });
-    await updateItem(item.id, { referencePayload, decisions });
-    return { ok: true, output: { hhah } };
   },
 
   'human.fixPatientWrite': async ({ item, payload }) => {
