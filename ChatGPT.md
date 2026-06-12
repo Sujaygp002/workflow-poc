@@ -60,11 +60,14 @@
 - `/builder/workflows` now pulls only DB workflow definitions and no longer shows local dummy workflows.
 - `/orchestrator` now shows only DB workflow runs and renders wf7 as one aggregate loop body instead of one repeated flow per patient/order row.
 - `/orchestrator` and `/builder/workflows` show condition markers as diamond decision blocks; the wf7 loop is shown with a large curved repeat arrow.
+- `/orchestrator` object lifecycle excludes HHAH from created/updated/found counts because HHAH comes from the login context.
 - `/orders` shows order records, patient/reference details, and the matched order PDF.
+- `/orders` and `/hhh-login` show explicit Eligible and Billable chips from the computed episode status.
 - `/reference-data` shows practitioners, physician groups, HHAH records, and supports mapping PG to practitioner.
 - `/worker` and `/worker/bucket/:userId` use the dummy users but show DB-assigned tasks only.
 - Worker task cards show matched order PDF side-by-side with the record.
 - Missing fields are highlighted and can be entered before completing the human task.
+- wf7 now has manual fallback tasks for missing SOC and missing SOE/EOE before admission/episode matching.
 - `/hhh-login` is a standalone route without the builder sidebar and is not shown inside FlowPOC navigation.
 - `/hhh-login` includes patient and order browsing after upload; order detail opens the matched PDF instead of JSON.
 

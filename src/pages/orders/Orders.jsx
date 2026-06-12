@@ -8,6 +8,28 @@ function fmt(value) {
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString();
 }
 
+function StatusChip({ active, label, inactiveLabel, tone }) {
+  const cls = active
+    ? tone
+    : 'bg-slate-50 text-slate-400 border-slate-200';
+  return (
+    <span className={`text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full border ${cls}`}>
+      {active ? label : inactiveLabel}
+    </span>
+  );
+}
+
+function EligibilityChips({ status }) {
+  const eligible = status === 'eligible' || status === 'billable';
+  const billable = status === 'billable';
+  return (
+    <div className="flex flex-wrap gap-1">
+      <StatusChip active={eligible} label="Eligible" inactiveLabel="Not eligible" tone="bg-sky-100 text-sky-700 border-sky-200" />
+      <StatusChip active={billable} label="Billable" inactiveLabel="Not billable" tone="bg-green-100 text-green-700 border-green-200" />
+    </div>
+  );
+}
+
 function OrderCard({ order, selected, onClick }) {
   return (
     <button
@@ -17,6 +39,9 @@ function OrderCard({ order, selected, onClick }) {
     >
       <div className="font-bold text-slate-800">{order.order_number}</div>
       <div className="text-xs text-slate-500 mt-0.5">{order.patient_name || 'No patient'} | {order.order_type || 'No type'}</div>
+      <div className="mt-2">
+        <EligibilityChips status={order.episode_status} />
+      </div>
       <div className="text-[11px] text-slate-400 mt-1">{fmt(order.order_date)}</div>
     </button>
   );
@@ -116,6 +141,9 @@ export default function Orders() {
                 <div className="text-xs font-bold uppercase tracking-wide text-violet-700">Order</div>
                 <h2 className="text-2xl font-bold text-slate-900 mt-1">{selected.order_number}</h2>
                 <p className="text-sm text-slate-600 mt-1">{selected.order_type || 'No type'} | {fmt(selected.order_date)}</p>
+                <div className="mt-3">
+                  <EligibilityChips status={selected.episode_status} />
+                </div>
               </div>
               <div className="grid md:grid-cols-2 gap-3 text-sm">
                 <div className="rounded-xl border border-slate-200 p-3">

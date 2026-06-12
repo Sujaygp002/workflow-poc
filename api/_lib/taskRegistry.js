@@ -66,6 +66,39 @@ function confidenceConfirmed(payload) {
   return next;
 }
 
+function admissionDateValues(item) {
+  return {
+    SOC: item.patient_payload?.admission_details?.SOC,
+    EOC: item.patient_payload?.admission_details?.EOC,
+    SOE: item.patient_payload?.admission_details?.SOE,
+    EOE: item.patient_payload?.admission_details?.EOE,
+  };
+}
+
+function admissionDateDecisions(item) {
+  const dates = admissionDateValues(item);
+  const admissionReady = hasValue(dates.SOC);
+  const episodeReady = hasValue(dates.SOE) && hasValue(dates.EOE);
+  return {
+    admission_dates_ready: admissionReady,
+    admission_dates_missing: !admissionReady,
+    episode_dates_ready: episodeReady,
+    episode_dates_missing: !episodeReady,
+  };
+}
+
+function syncOrderAdmissionDates(orderPayload, patientPayload) {
+  const details = patientPayload?.admission_details || {};
+  return mergeDeep(orderPayload, {
+    order_admission_details: {
+      SOC: details.SOC,
+      EOC: details.EOC,
+      SOE: details.SOE,
+      EOE: details.EOE,
+    },
+  });
+}
+
 function orderPdfKey(value) {
   return cleanString(value).replace(/\.pdf$/i, '').toLowerCase();
 }
@@ -217,6 +250,11 @@ export async function evaluateCondition(condition, item) {
     const existing = await evaluateOrderExistence(item);
     return condition === 'order_exists' ? !!existing : !existing;
   }
+  if (condition === 'admission_dates_ready' || condition === 'admission_dates_missing' || condition === 'episode_dates_ready' || condition === 'episode_dates_missing') {
+    const decisions = setDecisions(item, admissionDateDecisions(item));
+    await updateItem(item.id, { decisions });
+    return decisions[condition] === true;
+  }
   if (condition.startsWith('practitioner_') || condition.startsWith('pg_') || condition.startsWith('hhah_') || condition === 'reference_records_ready') {
     const { decisions } = await markReferenceDecisions(item);
     return decisions[condition] === true;
@@ -367,6 +405,34 @@ export const taskRegistry = {
     return { ok: result.decisions.reference_records_ready, output: result };
   },
 
+  'dates.checkAdmission': async ({ item }) => {
+    const dateDecisions = admissionDateDecisions(item);
+    const decisions = setDecisions(item, dateDecisions);
+    await updateItem(item.id, { decisions });
+    return {
+      ok: true,
+      output: {
+        SOC: item.patient_payload?.admission_details?.SOC || null,
+        EOC: item.patient_payload?.admission_details?.EOC || null,
+        ready: dateDecisions.admission_dates_ready,
+      },
+    };
+  },
+
+  'dates.checkEpisode': async ({ item }) => {
+    const dateDecisions = admissionDateDecisions(item);
+    const decisions = setDecisions(item, dateDecisions);
+    await updateItem(item.id, { decisions });
+    return {
+      ok: true,
+      output: {
+        SOE: item.patient_payload?.admission_details?.SOE || null,
+        EOE: item.patient_payload?.admission_details?.EOE || null,
+        ready: dateDecisions.episode_dates_ready,
+      },
+    };
+  },
+
   'patient.update': async ({ item }) => runPatientWrite(item, false),
   'patient.create': async ({ item }) => runPatientWrite(item, false),
   'patient.retryWrite': async ({ item }) => runPatientWrite(item, true),
@@ -480,6 +546,24 @@ export const taskRegistry = {
     return { ok: true, output: { pg, reviewed: true } };
   },
 
+  'human.fillAdmissionDates': async ({ item, payload }) => {
+    const patientPayload = confidenceConfirmed(mergeDeep(item.patient_payload, payload?.patient || {}));
+    const orderPayload = syncOrderAdmissionDates(item.order_payload, patientPayload);
+    const dateDecisions = admissionDateDecisions({ ...item, patient_payload: patientPayload });
+    const decisions = setDecisions(item, dateDecisions);
+    await updateItem(item.id, { patientPayload, orderPayload, decisions });
+    return { ok: dateDecisions.admission_dates_ready, output: { filled: true, ...dateDecisions } };
+  },
+
+  'human.fillEpisodeDates': async ({ item, payload }) => {
+    const patientPayload = confidenceConfirmed(mergeDeep(item.patient_payload, payload?.patient || {}));
+    const orderPayload = syncOrderAdmissionDates(item.order_payload, patientPayload);
+    const dateDecisions = admissionDateDecisions({ ...item, patient_payload: patientPayload });
+    const decisions = setDecisions(item, dateDecisions);
+    await updateItem(item.id, { patientPayload, orderPayload, decisions });
+    return { ok: dateDecisions.episode_dates_ready, output: { filled: true, ...dateDecisions } };
+  },
+
   'human.fixPatientWrite': async ({ item, payload }) => {
     const patched = payload?.patient ? mergeDeep(item.patient_payload, payload.patient) : item.patient_payload;
     await updateItem(item.id, { patientPayload: patched });
@@ -515,7 +599,6 @@ export function objectLifecycle(item) {
       : d.patient_not_exists ? 'missing' : 'pending',
     physicianGroup: d.pg_missing_blocks_patient ? 'in-review' : ref(d.pg_exists, d.pg_not_exists),
     practitioner: ref(d.practitioner_exists, d.practitioner_not_exists),
-    hhah: ref(d.hhah_exists, d.hhah_not_exists),
     admission: d.admission_created ? 'created' : d.admission_exists ? 'found' : d.admission_ready ? 'created' : 'pending',
     episode: d.episode_created ? 'created' : d.episode_exists ? 'found' : d.episode_ready ? 'created' : 'pending',
     order: d.order_write_success || d.order_retry_success ? (d.order_exists ? 'updated' : 'created')

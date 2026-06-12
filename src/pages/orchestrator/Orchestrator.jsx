@@ -534,7 +534,6 @@ function aggregateObjects(instance) {
     Patient: { created: 0, updated: 0, review: 0 },
     'Physician Group': { found: 0, created: 0, review: 0 },
     Practitioner: { found: 0, created: 0 },
-    HHAH: { found: 0, missing: 0 },
     Admission: { found: 0, created: 0 },
     Episode: { found: 0, created: 0 },
     Order: { created: 0, updated: 0 },
@@ -546,7 +545,6 @@ function aggregateObjects(instance) {
     else if (d.patient_write_success || d.patient_retry_success) objs.Patient.created += 1;
     if (d.needs_manual_review) objs.Patient.review += 1;
     if (d.practitioner_exists) objs.Practitioner.found += 1;
-    if (d.hhah_exists) objs.HHAH.found += 1; else if (d.hhah_not_exists) objs.HHAH.missing += 1;
     if (d.admission_created) objs.Admission.created += 1; else if (d.admission_exists || d.admission_ready) objs.Admission.found += 1;
     if (d.episode_created) objs.Episode.created += 1; else if (d.episode_exists || d.episode_ready) objs.Episode.found += 1;
     if (d.order_write_success && d.order_exists) objs.Order.updated += 1;
@@ -716,6 +714,10 @@ function DbBulkInstanceCard({ instance, onDelete }) {
                 {row('wf7-s8', 'wf7-s9', 'review if PG missing')}
                 <Arrow small />
                 {row('wf7-s12')}
+                <Arrow small />
+                {row('wf7-s24', 'wf7-s25', 'manual dates if SOC missing')}
+                <Arrow small />
+                {row('wf7-s26', 'wf7-s27', 'manual dates if SOE/EOE missing')}
                 <Arrow small />
                 {row('wf7-s14', 'wf7-s13', 'create or update patient')}
                 <Arrow small />

@@ -9,19 +9,35 @@ function formatDate(value) {
   return date.toLocaleDateString();
 }
 
-// Computed episode status (eligible / billable / started). Shown on episodes and
-// surfaced on the patient as the latest episode's status.
-function EpisodeStatusBadge({ status }) {
-  if (!status || status === 'none') return null;
-  const cls = status === 'billable'
-    ? 'bg-green-100 text-green-700 border-green-200'
-    : status === 'eligible'
-      ? 'bg-sky-100 text-sky-700 border-sky-200'
-      : 'bg-slate-100 text-slate-600 border-slate-200';
+// Computed status: eligible = has 485 + active F2F. Billable = all orders signed.
+// Patient status is the latest episode status.
+function StatusChip({ active, label, inactiveLabel, tone }) {
+  const cls = active
+    ? tone
+    : 'bg-slate-50 text-slate-400 border-slate-200';
   return (
     <span className={`text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full border ${cls}`}>
-      {status}
+      {active ? label : inactiveLabel}
     </span>
+  );
+}
+
+function EligibilityChips({ status }) {
+  if (!status || status === 'none') {
+    return (
+      <div className="flex flex-wrap gap-1">
+        <StatusChip active={false} label="Eligible" inactiveLabel="Not eligible" tone="bg-sky-100 text-sky-700 border-sky-200" />
+        <StatusChip active={false} label="Billable" inactiveLabel="Not billable" tone="bg-green-100 text-green-700 border-green-200" />
+      </div>
+    );
+  }
+  const eligible = status === 'eligible' || status === 'billable';
+  const billable = status === 'billable';
+  return (
+    <div className="flex flex-wrap gap-1">
+      <StatusChip active={eligible} label="Eligible" inactiveLabel="Not eligible" tone="bg-sky-100 text-sky-700 border-sky-200" />
+      <StatusChip active={billable} label="Billable" inactiveLabel="Not billable" tone="bg-green-100 text-green-700 border-green-200" />
+    </div>
   );
 }
 
@@ -48,6 +64,9 @@ function PatientFlow({ tree }) {
             <div className="font-bold text-slate-800 mt-1">{patient.name}</div>
             <div className="text-xs text-slate-500 mt-1">DOB {formatDate(patient.dob)}</div>
             <div className="text-xs text-slate-500">MRN {patient.mrn || 'Missing'}</div>
+            <div className="mt-2">
+              <EligibilityChips status={patient.latest_episode_status} />
+            </div>
           </div>
           <ChevronRight className="text-slate-300 shrink-0" />
           <div className="flex flex-col gap-4">
@@ -75,10 +94,12 @@ function PatientFlow({ tree }) {
                         >
                           <div className="flex items-center justify-between gap-1">
                             <div className="text-[10px] font-bold text-amber-700 uppercase">Episode</div>
-                            <EpisodeStatusBadge status={episode.status} />
                           </div>
                           <div className="text-sm font-bold text-slate-800 mt-1">
                             {formatDate(episode.soe)} to {formatDate(episode.eoe)}
+                          </div>
+                          <div className="mt-2">
+                            <EligibilityChips status={episode.status} />
                           </div>
                           <div className="text-xs text-slate-500 mt-1">{orders.length} order{orders.length === 1 ? '' : 's'}</div>
                         </button>
@@ -387,9 +408,11 @@ export default function HhhLogin() {
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="font-bold text-slate-800">{patient.name}</div>
-                    <EpisodeStatusBadge status={patient.latest_episode_status} />
                   </div>
                   <div className="text-xs text-slate-500 mt-0.5">DOB {formatDate(patient.dob)} | MRN {patient.mrn || 'Missing'}</div>
+                  <div className="mt-2">
+                    <EligibilityChips status={patient.latest_episode_status} />
+                  </div>
                   <div className="flex gap-2 mt-2 text-[11px] text-slate-500">
                     <span>{patient.admission_count} adm</span>
                     <span>{patient.episode_count} ep</span>
@@ -414,6 +437,9 @@ export default function HhhLogin() {
                 >
                   <div className="font-bold text-slate-800">{order.order_number}</div>
                   <div className="text-xs text-slate-500 mt-0.5">{order.patient_name || 'No patient'} | {order.order_type || 'No type'}</div>
+                  <div className="mt-2">
+                    <EligibilityChips status={order.episode_status} />
+                  </div>
                   <div className="flex gap-2 mt-2 text-[11px] text-slate-500">
                     <span>{formatDate(order.order_date)}</span>
                     <span className="ml-auto font-bold text-violet-700">Open order</span>
@@ -433,6 +459,9 @@ export default function HhhLogin() {
                   <div className="text-xs font-bold uppercase tracking-wide text-violet-700">Order</div>
                   <h2 className="text-2xl font-bold text-slate-900 mt-1">{selectedOrder.order_number}</h2>
                   <p className="text-sm text-slate-600 mt-1">{selectedOrder.order_type || 'No type'} | {formatDate(selectedOrder.order_date)}</p>
+                  <div className="mt-3">
+                    <EligibilityChips status={selectedOrder.episode_status} />
+                  </div>
                 </div>
                 <div className="grid md:grid-cols-2 gap-3 text-sm">
                   <div className="rounded-xl border border-slate-200 p-3">

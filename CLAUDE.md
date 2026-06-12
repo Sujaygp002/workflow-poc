@@ -62,6 +62,13 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-12** — Added explicit date fallbacks and eligibility visibility. wf7 now checks
+  admission dates (`wf7-s24`) and episode dates (`wf7-s26`) before patient/admission writes;
+  missing SOC routes to **Manually Add Admission Dates** (`wf7-s25`) and missing SOE/EOE
+  routes to **Manually Add Episode Dates** (`wf7-s27`). Removed HHAH from object lifecycle
+  summaries. Surfaced computed Eligible/Billable chips on HHH patient/order views and the
+  standalone Orders view.
+
 - **2026-06-12** — Reworked Admission/Episode steps + added live orchestrator. (1) wf7-s22/s23
   are now **Admission — reuse or create** / **Episode — reuse or create** (`admission.resolve`/
   `episode.resolve`): `findAdmission`(patient+SOC) and `findEpisode`(admission+SOE/EOE) detect

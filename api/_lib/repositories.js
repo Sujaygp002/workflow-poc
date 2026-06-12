@@ -848,7 +848,7 @@ export async function getPatientTree(patientId) {
 
 export async function listOrders() {
   const sql = getSql();
-  return sql`
+  const rows = await sql`
     SELECT
       o.*,
       p.name AS patient_name,
@@ -874,6 +874,26 @@ export async function listOrders() {
     ORDER BY o.updated_at DESC, o.order_date DESC NULLS LAST
     LIMIT 250
   `;
+
+  const episodeIds = [...new Set(rows.map((row) => row.episode_id).filter(Boolean))];
+  if (!episodeIds.length) return rows.map((row) => ({ ...row, episode_status: 'none' }));
+
+  const episodeOrders = await sql`
+    SELECT episode_id, order_type, document_type, order_date, order_status
+    FROM orders
+    WHERE episode_id = ANY(${episodeIds})
+  `;
+  const ordersByEpisode = new Map();
+  for (const order of episodeOrders) {
+    const list = ordersByEpisode.get(order.episode_id) || [];
+    list.push(order);
+    ordersByEpisode.set(order.episode_id, list);
+  }
+
+  return rows.map((row) => ({
+    ...row,
+    episode_status: row.episode_id ? computeEpisodeStatus(ordersByEpisode.get(row.episode_id) || []) : 'none',
+  }));
 }
 
 export async function listReferenceData() {
