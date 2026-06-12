@@ -60,6 +60,7 @@
 - `/builder/workflows` now pulls only DB workflow definitions and no longer shows local dummy workflows.
 - `/orchestrator` now shows only DB workflow runs and renders wf7 as one aggregate loop body instead of one repeated flow per patient/order row.
 - `/orchestrator` and `/builder/workflows` show condition markers as diamond decision blocks; the wf7 loop is shown with a large curved repeat arrow.
+- The wf7 orchestrator diamonds now label the real branch truth: missing-date checks route YES to manual date entry, and patient/order exists checks route YES to update and NO to create.
 - `/orchestrator` object lifecycle excludes HHAH from created/updated/found counts because HHAH comes from the login context.
 - `/orders` shows order records, patient/reference details, and the matched order PDF.
 - `/orders` and `/hhh-login` show explicit Eligible and Billable chips from the computed episode status.

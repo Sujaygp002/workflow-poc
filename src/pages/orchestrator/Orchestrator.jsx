@@ -283,12 +283,15 @@ function ConditionDiamond({ expr }) {
 }
 
 // A real if/else decision shape: a rotated-square diamond holding the condition
-// expression, with YES (down, main flow) and NO (right, human fallback) exits.
-// `active` highlights the diamond when the run is currently evaluating it.
-function DecisionDiamond({ expr, active }) {
+// expression. The down exit can be YES or NO depending on which branch continues
+// through the main column.
+function DecisionDiamond({ expr, active, downLabel = 'YES' }) {
   const tone = active
     ? 'border-amber-400 bg-amber-50 ring-4 ring-amber-200/60 shadow'
     : 'border-amber-300 bg-amber-50';
+  const downTone = downLabel === 'YES'
+    ? 'border-green-200 text-green-600'
+    : 'border-rose-200 text-rose-500';
   return (
     <div className="relative flex h-[88px] w-[300px] items-center justify-center select-none">
       {/* the diamond */}
@@ -297,24 +300,27 @@ function DecisionDiamond({ expr, active }) {
         <div className="text-[9px] font-black uppercase tracking-wide text-amber-600">IF</div>
         <div className="font-mono text-[10px] leading-tight text-amber-800 break-words">{expr}</div>
       </div>
-      {/* YES exit — straight down the main column */}
-      <span className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 translate-y-1/2 rounded-full border border-green-200 bg-white px-1.5 text-[9px] font-bold text-green-600 shadow-sm">
-        YES
+      <span className={`absolute -bottom-0.5 left-1/2 -translate-x-1/2 translate-y-1/2 rounded-full border bg-white px-1.5 text-[9px] font-bold shadow-sm ${downTone}`}>
+        {downLabel}
       </span>
     </div>
   );
 }
 
-// The NO arm: a horizontal connector from the diamond out to the human box,
-// labelled NO, sitting in the right grid column.
-function NoArm({ human, current }) {
+// Horizontal connector from the diamond to the side branch. The branch can be
+// YES or NO, and the task can be system or human.
+function BranchArm({ task, branchLabel = 'NO', current }) {
+  const yes = branchLabel === 'YES';
+  const textTone = yes ? 'text-green-600' : 'text-rose-500';
+  const bgTone = yes ? 'bg-green-300' : 'bg-rose-300';
+  const lineTone = yes ? 'text-green-300' : 'text-rose-300';
   return (
     <div className="flex h-full items-center">
-      <span className="mr-1 shrink-0 text-[10px] font-bold text-rose-500">NO</span>
-      <div className="h-px w-5 shrink-0 bg-rose-300" />
-      <svg width="7" height="9" viewBox="0 0 7 9" className="shrink-0 text-rose-300"><path d="M0 0 L7 4.5 L0 9 Z" fill="currentColor" /></svg>
+      <span className={`mr-1 shrink-0 text-[10px] font-bold ${textTone}`}>{branchLabel}</span>
+      <div className={`h-px w-5 shrink-0 ${bgTone}`} />
+      <svg width="7" height="9" viewBox="0 0 7 9" className={`shrink-0 ${lineTone}`}><path d="M0 0 L7 4.5 L0 9 Z" fill="currentColor" /></svg>
       <div className="ml-1 flex-1">
-        <StepNode name={human.name} actor="human" agg={human.agg} sub={human.label} compact current={current} />
+        <StepNode name={task.name} actor={task.actor} agg={task.agg} sub={task.label} compact current={current} />
       </div>
     </div>
   );
@@ -601,16 +607,22 @@ function DbBulkInstanceCard({ instance, onDelete }) {
     return tasks.length > 0 && tasks.every(t => t.status === 'completed');
   }).length;
 
-  const row = (leftId, rightId = null, label = null) => {
+  const hiddenInlineConditions = new Set(['admission_ready', 'episode_ready']);
+
+  const row = (leftId, rightId = null, label = null, options = {}) => {
     const leftTask = instance.taskInstances.find(t => t.stepId === leftId);
     const rightTask = rightId ? instance.taskInstances.find(t => t.stepId === rightId) : null;
 
-    // The condition that gates the human fallback. Prefer the human step's own
-    // condition (e.g. `practitioner_not_exists`), falling back to the SYS step's.
+    // Prefer the side branch condition because that describes when the branch is
+    // taken (e.g. missing dates, patient exists, retry failed).
     const branchExpr = rightTask?.conditionExpr || leftTask?.conditionExpr;
+    const sideBranchIsTrue = Boolean(rightTask?.conditionExpr && rightTask.conditionExpr === branchExpr);
+    const downLabel = sideBranchIsTrue ? 'NO' : 'YES';
+    const sideLabel = sideBranchIsTrue ? 'YES' : 'NO';
 
     // No fallback branch → a single step box, no decision.
     if (!rightId) {
+      const inlineCondition = hiddenInlineConditions.has(leftTask?.conditionExpr) ? null : leftTask?.conditionExpr;
       return (
         <div className="grid items-center gap-x-4" style={{ gridTemplateColumns: '320px 320px' }}>
           <div className="flex justify-center">
@@ -618,7 +630,7 @@ function DbBulkInstanceCard({ instance, onDelete }) {
               name={leftTask?.taskName || leftId}
               actor={leftTask?.actor || 'system'}
               agg={aggDbStep(instance, leftId)}
-              sub={<ConditionDiamond expr={leftTask?.conditionExpr} />}
+              sub={<ConditionDiamond expr={inlineCondition} />}
               current={active?.stepId === leftId}
             />
           </div>
@@ -627,10 +639,38 @@ function DbBulkInstanceCard({ instance, onDelete }) {
       );
     }
 
-    // if/else fork: SYS step → decision diamond → YES continues, NO → human box.
+    const sideTask = {
+      name: rightTask?.taskName || rightId,
+      actor: rightTask?.actor || 'system',
+      agg: aggDbStep(instance, rightId),
+      label,
+    };
+
+    if (options.choice) {
+      return (
+        <div className="grid items-center gap-x-4" style={{ gridTemplateColumns: '320px 320px' }}>
+          <div className="flex flex-col items-center">
+            {branchExpr && (
+              <>
+                <DecisionDiamond expr={branchExpr} active={active?.stepId === leftId || active?.stepId === rightId} downLabel={downLabel} />
+                <Arrow small />
+              </>
+            )}
+            <StepNode
+              name={leftTask?.taskName || leftId}
+              actor={leftTask?.actor || 'system'}
+              agg={aggDbStep(instance, leftId)}
+              current={active?.stepId === leftId}
+            />
+          </div>
+          <BranchArm task={sideTask} branchLabel={sideLabel} current={active?.stepId === rightId} />
+        </div>
+      );
+    }
+
+    // Check/fallback fork: first run the check/action, then branch on the result.
     return (
       <div className="grid items-center gap-x-4" style={{ gridTemplateColumns: '320px 320px' }}>
-        {/* main column: SYS step, then the decision diamond beneath it */}
         <div className="flex flex-col items-center">
           <StepNode
             name={leftTask?.taskName || leftId}
@@ -641,19 +681,11 @@ function DbBulkInstanceCard({ instance, onDelete }) {
           {branchExpr && (
             <>
               <Arrow small />
-              <DecisionDiamond expr={branchExpr} active={active?.stepId === leftId || active?.stepId === rightId} />
+              <DecisionDiamond expr={branchExpr} active={active?.stepId === leftId || active?.stepId === rightId} downLabel={downLabel} />
             </>
           )}
         </div>
-        {/* right column: NO arm into the human fallback box, centred on the diamond */}
-        <NoArm
-          human={{
-            name: rightTask?.taskName || rightId,
-            agg: aggDbStep(instance, rightId),
-            label,
-          }}
-          current={active?.stepId === rightId}
-        />
+        <BranchArm task={sideTask} branchLabel={sideLabel} current={active?.stepId === rightId} />
       </div>
     );
   };
@@ -719,7 +751,7 @@ function DbBulkInstanceCard({ instance, onDelete }) {
                 <Arrow small />
                 {row('wf7-s26', 'wf7-s27', 'manual object dates if SOE/EOE missing')}
                 <Arrow small />
-                {row('wf7-s14', 'wf7-s13', 'create or update patient')}
+                {row('wf7-s14', 'wf7-s13', 'create or update patient', { choice: true })}
                 <Arrow small />
                 {row('wf7-s15', 'wf7-s16', 'retry or human fix')}
                 <Arrow small />
@@ -727,7 +759,7 @@ function DbBulkInstanceCard({ instance, onDelete }) {
                 <Arrow small />
                 {row('wf7-s23')}
                 <Arrow small />
-                {row('wf7-s18', 'wf7-s17', 'create or update order')}
+                {row('wf7-s18', 'wf7-s17', 'create or update order', { choice: true })}
                 <Arrow small />
                 {row('wf7-s19', 'wf7-s20', 'retry or human fix')}
                 <Arrow small />

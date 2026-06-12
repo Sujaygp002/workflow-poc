@@ -51,16 +51,26 @@ runtime and DB), so prefer build/lint for verification.
 - The `wf7` workflow steps are referenced by stepId (`wf7-s1`..`wf7-s21`, plus base
   ids like `wf7-p1`). The DB bulk renderer maps these explicitly in `row(...)` calls.
 - Condition/branch logic: a step's `conditionExpr` gates it (e.g. `practitioner_not_exists`,
-  `ai_extraction_fail`). Human fallback steps hang off the NO branch of the SYS step.
+  `ai_extraction_fail`). Side branches are not always NO/human: derive the branch label
+  from the branch task's condition. For example, `admission_dates_missing` means YES goes
+  to manual dates, while `patient_exists` means YES goes to Update Patient and NO goes to
+  Create Patient.
 - **Flowchart conditions render as if/else decision diamonds**: a rotated-square diamond
-  holds the condition, with YES (down, main flow) and NO (right, to human box) exits.
-  See `DecisionDiamond` / `NoArm` in `Orchestrator.jsx`.
+  holds the condition, with the down and right exits labelled according to the actual branch
+  truth. See `DecisionDiamond` / `BranchArm` in `Orchestrator.jsx`.
 - Match surrounding Tailwind/style idiom. Actor coloring: system = sky/blue, human = pink,
   conditions = amber.
 
 ## Change Log
 
 Newest first. Add an entry for each change made by Claude Code.
+
+- **2026-06-12** — Fixed wf7 orchestrator branch semantics. Side branches now use the
+  actual YES/NO truth value and actor instead of assuming every branch is `NO -> human`.
+  Patient/order create-vs-update rows now render as decisions before the action
+  (`patient_exists`: YES update, NO create; `order_exists`: YES update, NO create), and
+  admission/episode readiness chips are hidden from the single object rows to avoid
+  presenting them as extra if/else branches.
 
 - **2026-06-12** — Renamed Admission/Episode display language to **Admission Object** and
   **Episode Object** across wf7 step names/descriptions, object lifecycle summaries, worker
