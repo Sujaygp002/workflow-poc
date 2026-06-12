@@ -678,12 +678,21 @@ export async function listOrders() {
       h.name AS agency_name,
       pg.name AS pg_name,
       pr.physician_name AS billing_provider_name,
-      pr.npi_digits AS billing_provider_npi
+      pr.npi_digits AS billing_provider_npi,
+      d.file_name AS pdf_file_name,
+      d.blob_url AS pdf_blob_url
     FROM orders o
     LEFT JOIN patients p ON p.id = o.patient_id
     LEFT JOIN home_health_agencies h ON h.id = o.agency_id
     LEFT JOIN physician_groups pg ON pg.id = o.pg_id
     LEFT JOIN practitioners pr ON pr.id = o.billing_provider_id
+    LEFT JOIN LATERAL (
+      SELECT file_name, blob_url
+      FROM uploaded_documents
+      WHERE lower(regexp_replace(file_name, '\\.pdf$', '', 'i')) = lower(o.order_number)
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) d ON true
     ORDER BY o.updated_at DESC, o.order_date DESC NULLS LAST
     LIMIT 250
   `;

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ClipboardList, Loader2, RefreshCw } from 'lucide-react';
+import { ClipboardList, ExternalLink, FileText, Loader2, RefreshCw } from 'lucide-react';
 import { fetchOrders } from '../../lib/workflowApi';
 
 function fmt(value) {
@@ -22,6 +22,37 @@ function OrderCard({ order, selected, onClick }) {
   );
 }
 
+function OrderPdfViewer({ order }) {
+  const pdfUrl = order?.pdf_blob_url;
+  return (
+    <div className="rounded-xl border border-slate-200 overflow-hidden">
+      <div className="flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-4 py-3">
+        <FileText size={16} className="text-violet-600" />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-bold uppercase tracking-wide text-slate-500">Order PDF</div>
+          <div className="truncate text-sm font-semibold text-slate-800">{order?.pdf_file_name || `${order?.order_number || 'order'}.pdf`}</div>
+        </div>
+        {pdfUrl && (
+          <a href={pdfUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50">
+            <ExternalLink size={13} /> Open PDF
+          </a>
+        )}
+      </div>
+      {pdfUrl ? (
+        <iframe title={`Order PDF ${order.order_number}`} src={pdfUrl} className="h-[720px] w-full bg-slate-100" />
+      ) : (
+        <div className="flex h-[420px] items-center justify-center bg-slate-50 text-center text-sm text-slate-400">
+          <div>
+            <FileText size={34} className="mx-auto mb-3 opacity-40" />
+            <p className="font-medium text-slate-500">No matched order PDF found.</p>
+            <p className="mt-1">Upload a PDF named {order?.order_number || 'ORDER_NUMBER'}.pdf in the order ZIP.</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Orders() {
   const [orders, setOrders] = useState([]);
   const [selected, setSelected] = useState(null);
@@ -33,7 +64,7 @@ export default function Orders() {
     try {
       const rows = await fetchOrders();
       setOrders(rows);
-      setSelected((current) => current || rows[0] || null);
+      setSelected((current) => rows.find((row) => row.id === current?.id) || rows[0] || null);
       setError('');
     } catch (err) {
       setError(err.message);
@@ -98,15 +129,8 @@ export default function Orders() {
                   <div className="text-slate-700">HHAH: {selected.agency_name || 'Missing'}</div>
                   <div className="text-slate-700">NPI: {selected.billing_provider_npi || 'Missing'}</div>
                 </div>
-                <div className="rounded-xl border border-slate-200 p-3">
-                  <div className="text-xs font-bold uppercase tracking-wide text-slate-400 mb-2">Status</div>
-                  <pre className="text-xs text-slate-600 whitespace-pre-wrap">{JSON.stringify(selected.order_status || {}, null, 2)}</pre>
-                </div>
-                <div className="rounded-xl border border-slate-200 p-3">
-                  <div className="text-xs font-bold uppercase tracking-wide text-slate-400 mb-2">Admission Details</div>
-                  <pre className="text-xs text-slate-600 whitespace-pre-wrap">{JSON.stringify(selected.order_admission_details || {}, null, 2)}</pre>
-                </div>
               </div>
+              <OrderPdfViewer order={selected} />
             </div>
           )}
         </div>

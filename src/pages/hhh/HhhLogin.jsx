@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, ArrowLeft, Building2, CheckCircle2, ChevronRight, FileArchive, FileSpreadsheet, GitBranch, Loader2, Lock, RefreshCw, Upload, UserRound } from 'lucide-react';
+import { Activity, ArrowLeft, Building2, CheckCircle2, ChevronRight, ExternalLink, FileArchive, FileSpreadsheet, FileText, GitBranch, Loader2, Lock, RefreshCw, Upload, UserRound } from 'lucide-react';
 import { fetchOrders, fetchPatientTree, fetchPatients, startBulkUploadRun } from '../../lib/workflowApi';
 
 function formatDate(value) {
@@ -101,6 +101,37 @@ function PatientFlow({ tree }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function OrderPdfViewer({ order }) {
+  const pdfUrl = order?.pdf_blob_url;
+  return (
+    <div className="rounded-xl border border-slate-200 overflow-hidden">
+      <div className="flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-4 py-3">
+        <FileText size={16} className="text-violet-600" />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-bold uppercase tracking-wide text-slate-500">Order PDF</div>
+          <div className="truncate text-sm font-semibold text-slate-800">{order?.pdf_file_name || `${order?.order_number || 'order'}.pdf`}</div>
+        </div>
+        {pdfUrl && (
+          <a href={pdfUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50">
+            <ExternalLink size={13} /> Open PDF
+          </a>
+        )}
+      </div>
+      {pdfUrl ? (
+        <iframe title={`Order PDF ${order.order_number}`} src={pdfUrl} className="h-[680px] w-full bg-slate-100" />
+      ) : (
+        <div className="flex h-[360px] items-center justify-center bg-slate-50 text-center text-sm text-slate-400">
+          <div>
+            <FileText size={34} className="mx-auto mb-3 opacity-40" />
+            <p className="font-medium text-slate-500">No matched order PDF found.</p>
+            <p className="mt-1">Upload a PDF named {order?.order_number || 'ORDER_NUMBER'}.pdf in the order ZIP.</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -393,11 +424,8 @@ export default function HhhLogin() {
                     <div className="text-slate-700">HHAH: {selectedOrder.agency_name || 'Missing'}</div>
                     <div className="text-slate-700">NPI: {selectedOrder.billing_provider_npi || 'Missing'}</div>
                   </div>
-                  <div className="rounded-xl border border-slate-200 p-3 md:col-span-2">
-                    <div className="text-xs font-bold uppercase tracking-wide text-slate-400 mb-2">Order Details</div>
-                    <pre className="text-xs text-slate-600 whitespace-pre-wrap">{JSON.stringify(selectedOrder.order_admission_details || {}, null, 2)}</pre>
-                  </div>
                 </div>
+                <OrderPdfViewer order={selectedOrder} />
               </div>
             ) : !selectedPatient ? (
               <div className="h-full min-h-[460px] flex items-center justify-center text-center text-slate-400">
