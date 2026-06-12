@@ -262,6 +262,44 @@ function ConditionDiamond({ expr }) {
   );
 }
 
+// A real if/else decision shape: a rotated-square diamond holding the condition
+// expression, with YES (down, main flow) and NO (right, human fallback) exits.
+// `active` highlights the diamond when the run is currently evaluating it.
+function DecisionDiamond({ expr, active }) {
+  const tone = active
+    ? 'border-amber-400 bg-amber-50 ring-4 ring-amber-200/60 shadow'
+    : 'border-amber-300 bg-amber-50';
+  return (
+    <div className="relative flex h-[88px] w-[300px] items-center justify-center select-none">
+      {/* the diamond */}
+      <div className={`absolute h-[78px] w-[78px] rotate-45 rounded-md border-2 ${tone}`} />
+      <div className="relative z-10 max-w-[180px] px-2 text-center">
+        <div className="text-[9px] font-black uppercase tracking-wide text-amber-600">IF</div>
+        <div className="font-mono text-[10px] leading-tight text-amber-800 break-words">{expr}</div>
+      </div>
+      {/* YES exit — straight down the main column */}
+      <span className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 translate-y-1/2 rounded-full border border-green-200 bg-white px-1.5 text-[9px] font-bold text-green-600 shadow-sm">
+        YES
+      </span>
+    </div>
+  );
+}
+
+// The NO arm: a horizontal connector from the diamond out to the human box,
+// labelled NO, sitting in the right grid column.
+function NoArm({ human, current }) {
+  return (
+    <div className="flex h-full items-center">
+      <span className="mr-1 shrink-0 text-[10px] font-bold text-rose-500">NO</span>
+      <div className="h-px w-5 shrink-0 bg-rose-300" />
+      <svg width="7" height="9" viewBox="0 0 7 9" className="shrink-0 text-rose-300"><path d="M0 0 L7 4.5 L0 9 Z" fill="currentColor" /></svg>
+      <div className="ml-1 flex-1">
+        <StepNode name={human.name} actor="human" agg={human.agg} sub={human.label} compact current={current} />
+      </div>
+    </div>
+  );
+}
+
 function LoopArrow() {
   return (
     <div className="pointer-events-none absolute inset-y-12 right-4 w-36 text-purple-400" aria-hidden="true">
@@ -480,30 +518,58 @@ function DbBulkInstanceCard({ instance }) {
   const row = (leftId, rightId = null, label = null) => {
     const leftTask = instance.taskInstances.find(t => t.stepId === leftId);
     const rightTask = rightId ? instance.taskInstances.find(t => t.stepId === rightId) : null;
+
+    // The condition that gates the human fallback. Prefer the human step's own
+    // condition (e.g. `practitioner_not_exists`), falling back to the SYS step's.
+    const branchExpr = rightTask?.conditionExpr || leftTask?.conditionExpr;
+
+    // No fallback branch → a single step box, no decision.
+    if (!rightId) {
+      return (
+        <div className="grid items-center gap-x-4" style={{ gridTemplateColumns: '320px 320px' }}>
+          <div className="flex justify-center">
+            <StepNode
+              name={leftTask?.taskName || leftId}
+              actor={leftTask?.actor || 'system'}
+              agg={aggDbStep(instance, leftId)}
+              sub={<ConditionDiamond expr={leftTask?.conditionExpr} />}
+              current={active?.stepId === leftId}
+            />
+          </div>
+          <div />
+        </div>
+      );
+    }
+
+    // if/else fork: SYS step → decision diamond → YES continues, NO → human box.
     return (
-    <div className="grid items-center gap-x-4" style={{ gridTemplateColumns: '320px 320px' }}>
-      <div className="flex justify-center">
-        <StepNode
-          name={leftTask?.taskName || leftId}
-          actor={leftTask?.actor || 'system'}
-          agg={aggDbStep(instance, leftId)}
-          sub={<ConditionDiamond expr={leftTask?.conditionExpr} />}
-          current={active?.stepId === leftId}
+      <div className="grid items-center gap-x-4" style={{ gridTemplateColumns: '320px 320px' }}>
+        {/* main column: SYS step, then the decision diamond beneath it */}
+        <div className="flex flex-col items-center">
+          <StepNode
+            name={leftTask?.taskName || leftId}
+            actor={leftTask?.actor || 'system'}
+            agg={aggDbStep(instance, leftId)}
+            current={active?.stepId === leftId}
+          />
+          {branchExpr && (
+            <>
+              <Arrow small />
+              <DecisionDiamond expr={branchExpr} active={active?.stepId === leftId || active?.stepId === rightId} />
+            </>
+          )}
+        </div>
+        {/* right column: NO arm into the human fallback box, centred on the diamond */}
+        <NoArm
+          human={{
+            name: rightTask?.taskName || rightId,
+            agg: aggDbStep(instance, rightId),
+            label,
+          }}
+          current={active?.stepId === rightId}
         />
       </div>
-      <div className="flex justify-center">
-        {rightId ? (
-          <StepNode
-            name={rightTask?.taskName || rightId}
-            actor={rightTask?.actor || 'human'}
-            agg={aggDbStep(instance, rightId)}
-            sub={rightTask?.conditionExpr ? <ConditionDiamond expr={rightTask.conditionExpr} /> : label}
-            current={active?.stepId === rightId}
-          />
-        ) : null}
-      </div>
-    </div>
-  );
+    );
   };
 
   return (
