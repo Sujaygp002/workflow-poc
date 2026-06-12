@@ -295,19 +295,22 @@ export async function parseWorkflowWorkbook(filePath) {
       patientName: orderRow.patientName,
       dob: orderRow.dob,
       mrn: orderRow.mrn,
-      SOC: orderRow.SOC,
-      EOC: orderRow.EOC,
-      SOE: orderRow.SOE,
-      EOE: orderRow.EOE,
+    };
+    const patientRowForOrder = {
+      ...patientRow,
+      SOC: orderRow.SOC || patientRow.SOC,
+      EOC: orderRow.EOC || patientRow.EOC,
+      SOE: orderRow.SOE || patientRow.SOE,
+      EOE: orderRow.EOE || patientRow.EOE,
     };
     usedPatientKeys.add(key);
-    const referencePayload = makeReferencePayload(patientRow, orderRow);
+    const referencePayload = makeReferencePayload(patientRowForOrder, orderRow);
     joined.push({
-      patientPayload: makePatientPayload(patientRow, referencePayload),
-      orderPayload: makeOrderPayload(orderRow, patientRow, referencePayload),
+      patientPayload: makePatientPayload(patientRowForOrder, referencePayload),
+      orderPayload: makeOrderPayload(orderRow, patientRowForOrder, referencePayload),
       referencePayload,
       sourceRows: {
-        patient: patientRow.__rowNumber || null,
+        patient: patientRowForOrder.__rowNumber || null,
         order: orderRow.__rowNumber || null,
       },
     });
