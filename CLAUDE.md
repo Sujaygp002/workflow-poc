@@ -62,6 +62,14 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-12** — Reworked Admission/Episode steps + added live orchestrator. (1) wf7-s22/s23
+  are now **Admission — reuse or create** / **Episode — reuse or create** (`admission.resolve`/
+  `episode.resolve`): `findAdmission`(patient+SOC) and `findEpisode`(admission+SOE/EOE) detect
+  pre-existence so the lifecycle shows found-vs-created. (2) Orchestrator now **live-polls every
+  2.5s** (Live/Paused toggle, pauses when tab hidden, last-updated stamp) instead of manual
+  refresh only. (3) Added a right-hand **Objects created/updated** panel aggregating lifecycle
+  per object across all rows. Re-seeded wf7.
+
 - **2026-06-12** — Added explicit **Create / Confirm Admission** (wf7-s22) and **Create / Confirm Episode** (wf7-s23) steps between patient write and order, so Admission and Episode appear as distinct workflow + lifecycle objects (flow: Patient → Admission → Episode → Order). New `admission.confirm`/`episode.confirm` tasks + `admission_ready`/`episode_ready` decisions (the bundle still writes them atomically; these confirm/surface them). Re-seeded wf7 (21 steps).
 
 - **2026-06-12** — Removed the **Check HHAH** step (wf7-s10) and `refs.checkHhahByName` too. HHAH always comes from the login context, so neither check nor create is needed in the workflow. Rewired wf7-s12 preReq to the PG check/review; updated the Orchestrator row. Re-seeded wf7 (now 19 steps).

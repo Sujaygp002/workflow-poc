@@ -521,6 +521,76 @@ function BulkInstanceCard({ instance, onDelete }) {
   );
 }
 
+// Aggregate object lifecycle across all rows of a run: how many were created /
+// updated / found / in-review per object. Driven by each task's decision flags.
+function aggregateObjects(instance) {
+  const byPatient = {};
+  for (const t of instance.taskInstances) {
+    const pi = t.patientIndex;
+    if (pi == null) continue;
+    byPatient[pi] = { ...(byPatient[pi] || {}), ...(t.decisions || {}) };
+  }
+  const objs = {
+    Patient: { created: 0, updated: 0, review: 0 },
+    'Physician Group': { found: 0, created: 0, review: 0 },
+    Practitioner: { found: 0, created: 0 },
+    HHAH: { found: 0, missing: 0 },
+    Admission: { found: 0, created: 0 },
+    Episode: { found: 0, created: 0 },
+    Order: { created: 0, updated: 0 },
+  };
+  for (const d of Object.values(byPatient)) {
+    if (d.needs_manual_review || d.pg_missing_blocks_patient) objs['Physician Group'].review += 1;
+    else if (d.pg_exists) objs['Physician Group'].found += 1;
+    if (d.patient_write_success && d.patient_exists) objs.Patient.updated += 1;
+    else if (d.patient_write_success || d.patient_retry_success) objs.Patient.created += 1;
+    if (d.needs_manual_review) objs.Patient.review += 1;
+    if (d.practitioner_exists) objs.Practitioner.found += 1;
+    if (d.hhah_exists) objs.HHAH.found += 1; else if (d.hhah_not_exists) objs.HHAH.missing += 1;
+    if (d.admission_created) objs.Admission.created += 1; else if (d.admission_exists || d.admission_ready) objs.Admission.found += 1;
+    if (d.episode_created) objs.Episode.created += 1; else if (d.episode_exists || d.episode_ready) objs.Episode.found += 1;
+    if (d.order_write_success && d.order_exists) objs.Order.updated += 1;
+    else if (d.order_write_success || d.order_retry_success) objs.Order.created += 1;
+  }
+  return objs;
+}
+
+const OBJ_TONE = {
+  created: 'text-green-700 bg-green-50 border-green-200',
+  updated: 'text-violet-700 bg-violet-50 border-violet-200',
+  found: 'text-sky-700 bg-sky-50 border-sky-200',
+  review: 'text-amber-700 bg-amber-50 border-amber-200',
+  missing: 'text-rose-700 bg-rose-50 border-rose-200',
+};
+
+function ObjectsPanel({ instance }) {
+  const objs = aggregateObjects(instance);
+  return (
+    <div className="w-60 shrink-0 rounded-2xl border border-slate-200 bg-white p-3">
+      <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-2">Objects created / updated</div>
+      <div className="space-y-2">
+        {Object.entries(objs).map(([name, counts]) => {
+          const parts = Object.entries(counts).filter(([, n]) => n > 0);
+          return (
+            <div key={name} className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-slate-700">{name}</span>
+              <div className="flex flex-wrap gap-1 justify-end">
+                {parts.length === 0
+                  ? <span className="text-[10px] text-slate-300">—</span>
+                  : parts.map(([state, n]) => (
+                    <span key={state} className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${OBJ_TONE[state] || 'text-slate-500 bg-slate-50 border-slate-200'}`}>
+                      {n} {state}
+                    </span>
+                  ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function DbBulkInstanceCard({ instance, onDelete }) {
   const patientIdxs = [...new Set(instance.taskInstances.map(t => t.patientIndex))].sort((a, b) => a - b);
   const total = patientIdxs.length;
@@ -627,6 +697,7 @@ function DbBulkInstanceCard({ instance, onDelete }) {
         <div className="w-fit mx-auto flex flex-col items-center">
           <div className="rounded-full px-6 py-1.5 text-sm font-bold border-2 border-violet-400 bg-violet-50 text-violet-700">START · Excel + order PDFs</div>
           <Arrow />
+          <div className="flex items-start gap-4">
           <div className="relative border-2 border-dashed border-purple-300 rounded-2xl bg-purple-50/20 px-5 py-4 pr-44">
             <LoopArrow />
             <div className="relative z-10">
@@ -661,6 +732,8 @@ function DbBulkInstanceCard({ instance, onDelete }) {
                 {row('wf7-s21')}
               </div>
             </div>
+          </div>
+          <ObjectsPanel instance={instance} />
           </div>
           <Arrow />
           <div className={`rounded-full px-6 py-1.5 text-sm font-bold border-2 ${allDone ? 'border-green-400 bg-green-50 text-green-700' : 'border-slate-300 bg-white text-slate-400'}`}>
@@ -932,6 +1005,8 @@ export default function Orchestrator() {
   const [filter, setFilter] = useState('all');
   const [tab, setTab] = useState('instances');
   const [showActiveTasks, setShowActiveTasks] = useState(false);
+  const [live, setLive] = useState(true);
+  const [lastSync, setLastSync] = useState(null);
 
   async function refresh() {
     setUsers(getUsers());
@@ -939,6 +1014,7 @@ export default function Orchestrator() {
       const dbRuns = await fetchWorkflowRuns();
       setInstances(dbRuns.map(dbRunToInstance));
       setDbError(null);
+      setLastSync(new Date());
     } catch (err) {
       setInstances([]);
       setDbError(err.message);
@@ -968,6 +1044,16 @@ export default function Orchestrator() {
 
   useEffect(() => { refresh(); }, []);
 
+  // Live polling: re-render the orchestrator every 2.5s so you can watch the run
+  // progress without hitting refresh. Pauses when the tab is hidden.
+  useEffect(() => {
+    if (!live) return undefined;
+    const id = setInterval(() => {
+      if (!document.hidden) refresh();
+    }, 2500);
+    return () => clearInterval(id);
+  }, [live]);
+
   const running = instances.filter(i => i.status === 'running');
   const completed = instances.filter(i => i.status === 'completed');
   const totalActiveActions = running.reduce((s, inst) => s + inst.taskInstances.reduce((ts, t) => ts + t.actionInstances.filter(a => a.status === 'active').length, 0), 0);
@@ -987,10 +1073,28 @@ export default function Orchestrator() {
           <h1 className="text-2xl font-bold text-slate-800">Orchestrator</h1>
           <p className="text-sm text-slate-500 mt-1">Runs workflows from triggers, routes & auto-assigns tasks to people</p>
         </div>
-        <button onClick={refresh} className="flex items-center gap-2 px-3 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50">
-          <RefreshCw size={14} /> Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setLive(v => !v)}
+            title={live ? 'Live updates on (every 2.5s)' : 'Live updates paused'}
+            className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg border transition-colors ${live ? 'border-green-300 bg-green-50 text-green-700' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+          >
+            <span className="relative flex h-2 w-2">
+              {live && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-70" />}
+              <span className={`relative inline-flex rounded-full h-2 w-2 ${live ? 'bg-green-500' : 'bg-slate-400'}`} />
+            </span>
+            {live ? 'Live' : 'Paused'}
+          </button>
+          <button onClick={refresh} className="flex items-center gap-2 px-3 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50">
+            <RefreshCw size={14} /> Refresh
+          </button>
+        </div>
       </div>
+      {lastSync && (
+        <div className="-mt-4 mb-4 text-[11px] text-slate-400">
+          {live ? 'Live · ' : ''}last updated {lastSync.toLocaleTimeString()}
+        </div>
+      )}
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
         <StatCard label="Total Runs" value={instances.length} sub="all time" color="slate" />

@@ -347,6 +347,32 @@ export async function findOrder(orderNumber) {
   return rows[0] || null;
 }
 
+// Admission is identified by patient + Start of Care.
+export async function findAdmission(patientId, soc) {
+  if (!patientId) return null;
+  const sql = getSql();
+  const rows = await sql`
+    SELECT * FROM patient_admissions
+    WHERE patient_id = ${patientId} AND soc IS NOT DISTINCT FROM ${parseDate(soc)}
+    LIMIT 1
+  `;
+  return rows[0] || null;
+}
+
+// Episode is identified within an admission by SOE/EOE.
+export async function findEpisode(admissionId, soe, eoe) {
+  if (!admissionId) return null;
+  const sql = getSql();
+  const rows = await sql`
+    SELECT * FROM patient_episodes
+    WHERE admission_id = ${admissionId}
+      AND soe IS NOT DISTINCT FROM ${parseDate(soe)}
+      AND eoe IS NOT DISTINCT FROM ${parseDate(eoe)}
+    LIMIT 1
+  `;
+  return rows[0] || null;
+}
+
 export async function createPractitionerFromPayload(referencePayload) {
   const sql = getSql();
   const practitioner = referencePayload?.practitioner || {};

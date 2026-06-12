@@ -1,6 +1,8 @@
 import {
   createPgFromPayload,
   createPractitionerFromPayload,
+  findAdmission,
+  findEpisode,
   findHhahByName,
   findOrder,
   findPatient,
@@ -137,10 +139,20 @@ async function evaluateOrderExistence(item) {
 
 async function runPatientWrite(item, retry) {
   try {
+    // Did the admission / episode already exist before this write? Used by the
+    // admission.resolve / episode.resolve steps to report found vs created.
+    const patientBefore = await findPatient(item.patient_payload);
+    const admissionBefore = patientBefore
+      ? await findAdmission(patientBefore.id, item.patient_payload?.admission_details?.SOC)
+      : null;
+    const episodeBefore = admissionBefore
+      ? await findEpisode(admissionBefore.id, item.patient_payload?.admission_details?.SOE, item.patient_payload?.admission_details?.EOE)
+      : null;
+
     const bundle = await writePatientBundle(item);
     const decisions = setDecisions(item, retry
-      ? { patient_retry_success: true, patient_retry_fail: false, patient_write_fail: false, admission_ready: !!bundle.admission?.id, episode_ready: !!bundle.episode?.id }
-      : { patient_write_success: true, patient_write_fail: false, admission_ready: !!bundle.admission?.id, episode_ready: !!bundle.episode?.id });
+      ? { patient_retry_success: true, patient_retry_fail: false, patient_write_fail: false, admission_ready: !!bundle.admission?.id, episode_ready: !!bundle.episode?.id, admission_seen_before: !!admissionBefore, episode_seen_before: !!episodeBefore }
+      : { patient_write_success: true, patient_write_fail: false, admission_ready: !!bundle.admission?.id, episode_ready: !!bundle.episode?.id, admission_seen_before: !!admissionBefore, episode_seen_before: !!episodeBefore });
     await updateItem(item.id, {
       decisions,
       extractionPayload: {
@@ -359,18 +371,34 @@ export const taskRegistry = {
   'patient.create': async ({ item }) => runPatientWrite(item, false),
   'patient.retryWrite': async ({ item }) => runPatientWrite(item, true),
 
-  // Admission and Episode are written as part of the patient bundle; these steps
-  // confirm them so they appear as distinct objects in the workflow + lifecycle.
-  'admission.confirm': async ({ item }) => {
-    const admissionId = item.extraction_payload?.patientBundle?.admissionId || null;
-    const decisions = setDecisions(item, { admission_ready: !!admissionId });
+  // Admission: matched by patient + Start of Care. The patient bundle write
+  // already reused-or-created it; this step reports which happened so the
+  // lifecycle shows "found" vs "created".
+  'admission.resolve': async ({ item }) => {
+    const bundle = item.extraction_payload?.patientBundle || {};
+    const admissionId = bundle.admissionId || null;
+    // Was the admission pre-existing (created_at well before this run) or new?
+    const created = !item.decisions?.admission_seen_before;
+    const decisions = setDecisions(item, {
+      admission_ready: !!admissionId,
+      admission_exists: !!admissionId && !created,
+      admission_created: !!admissionId && created,
+    });
     await updateItem(item.id, { decisions });
-    return { ok: !!admissionId, output: { admissionId, soc: item.patient_payload?.admission_details?.SOC } };
+    return { ok: !!admissionId, output: { admissionId, soc: item.patient_payload?.admission_details?.SOC, action: created ? 'created' : 'reused' } };
   },
 
-  'episode.confirm': async ({ item }) => {
-    const episodeId = item.extraction_payload?.patientBundle?.episodeId || null;
-    const decisions = setDecisions(item, { episode_ready: !!episodeId });
+  // Episode: matched within the admission by SOE/EOE — reused if it exists, else
+  // a new episode is created and the order will attach to it.
+  'episode.resolve': async ({ item }) => {
+    const bundle = item.extraction_payload?.patientBundle || {};
+    const episodeId = bundle.episodeId || null;
+    const created = !item.decisions?.episode_seen_before;
+    const decisions = setDecisions(item, {
+      episode_ready: !!episodeId,
+      episode_exists: !!episodeId && !created,
+      episode_created: !!episodeId && created,
+    });
     await updateItem(item.id, { decisions });
     return {
       ok: !!episodeId,
@@ -378,6 +406,7 @@ export const taskRegistry = {
         episodeId,
         soe: item.patient_payload?.admission_details?.SOE,
         eoe: item.patient_payload?.admission_details?.EOE,
+        action: created ? 'created' : 'reused',
       },
     };
   },
@@ -487,8 +516,8 @@ export function objectLifecycle(item) {
     physicianGroup: d.pg_missing_blocks_patient ? 'in-review' : ref(d.pg_exists, d.pg_not_exists),
     practitioner: ref(d.practitioner_exists, d.practitioner_not_exists),
     hhah: ref(d.hhah_exists, d.hhah_not_exists),
-    admission: d.admission_ready ? 'created' : 'pending',
-    episode: d.episode_ready ? 'created' : 'pending',
+    admission: d.admission_created ? 'created' : d.admission_exists ? 'found' : d.admission_ready ? 'created' : 'pending',
+    episode: d.episode_created ? 'created' : d.episode_exists ? 'found' : d.episode_ready ? 'created' : 'pending',
     order: d.order_write_success || d.order_retry_success ? (d.order_exists ? 'updated' : 'created')
       : d.order_exists ? 'found' : d.order_not_exists ? 'missing' : 'pending',
   };
