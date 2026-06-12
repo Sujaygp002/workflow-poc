@@ -642,9 +642,7 @@ function DbBulkInstanceCard({ instance, onDelete }) {
                 <Arrow small />
                 {row('wf7-s6', 'wf7-s7', 'create if NPI missing')}
                 <Arrow small />
-                {row('wf7-s8', 'wf7-s9', 'create if PG missing')}
-                <Arrow small />
-                {row('wf7-s10')}
+                {row('wf7-s8', 'wf7-s9', 'review if PG missing')}
                 <Arrow small />
                 {row('wf7-s12')}
                 <Arrow small />

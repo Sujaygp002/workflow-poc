@@ -350,13 +350,6 @@ export const taskRegistry = {
     return { ok: true, output: { exists: !!pg, pg } };
   },
 
-  'refs.checkHhahByName': async ({ item }) => {
-    const hhah = await findHhahByName(item.reference_payload?.HHAH?.name);
-    const decisions = setDecisions(item, { hhah_exists: !!hhah, hhah_not_exists: !hhah });
-    await updateItem(item.id, { decisions });
-    return { ok: true, output: { exists: !!hhah, hhah } };
-  },
-
   'refs.recheckAll': async ({ item }) => {
     const result = await markReferenceDecisions(item);
     return { ok: result.decisions.reference_records_ready, output: result };

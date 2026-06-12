@@ -121,21 +121,13 @@ export const WF7_DEFINITION = {
       preReq: ['wf7-s8'],
     },
     {
-      id: 'wf7-s10',
-      actor: 'system',
-      taskKey: 'refs.checkHhahByName',
-      name: 'Check HHAH',
-      description: 'Confirm the home health agency exists. HHAH is always present via the HHAH login context, so no creation step is needed.',
-      preReq: ['wf7-s8', 'wf7-s9'],
-    },
-    {
       id: 'wf7-s12',
       actor: 'system',
       taskKey: 'refs.recheckAll',
       name: 'Confirm Reference Records',
       description: 'Confirm practitioner and PG are available before patient write (HHAH comes from the login context).',
       condition: 'reference_records_ready',
-      preReq: ['wf7-s10'],
+      preReq: ['wf7-s8', 'wf7-s9'],
     },
     {
       id: 'wf7-s13',
