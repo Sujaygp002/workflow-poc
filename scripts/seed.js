@@ -1,5 +1,5 @@
 import { getSql } from '../api/_lib/db.js';
-import { SEEDED_USERS, WF7_DEFINITION } from '../api/_lib/workflowDefinition.js';
+import { SEEDED_USERS, WORKFLOW_DEFINITIONS } from '../api/_lib/workflowDefinition.js';
 import {
   createHhahFromPayload,
   findHhahByName,
@@ -102,9 +102,11 @@ async function main() {
   for (const user of SEEDED_USERS) {
     await upsertUser(user);
   }
-  await upsertWorkflowDefinition(WF7_DEFINITION, 1);
+  for (const definition of WORKFLOW_DEFINITIONS) {
+    await upsertWorkflowDefinition(definition, 1);
+  }
   await seedReferenceData();
-  console.log('seeded users, wf7, and reference records');
+  console.log('seeded users, workflow definitions, and reference records');
 }
 
 main().catch((error) => {

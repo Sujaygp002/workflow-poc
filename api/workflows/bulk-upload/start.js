@@ -9,9 +9,11 @@ import {
   createTaskRunsForItem,
   createWorkflowItem,
   createWorkflowRun,
+  findWorkflowRunBySourceLabel,
   findHhahByName,
   findStatisticalAreaByName,
   getActiveWorkflow,
+  getRunItems,
   getRunWithDefinition,
   insertUploadedDocument,
   listTaskRunsForRun,
@@ -75,6 +77,66 @@ async function pdfsFromZip(zipFile) {
   }
 
   return extracted;
+}
+
+async function startSigningRunsForWrittenOrders({ sourceRunId, uploadedPdfs = [] }) {
+  const signingWorkflow = await getActiveWorkflow('wf-signing');
+  if (!signingWorkflow) return [];
+
+  const items = await getRunItems(sourceRunId);
+  const pdfsByOrderNumber = Object.fromEntries(uploadedPdfs.map((pdf) => [orderNumberFromPdfName(pdf.fileName), pdf]));
+  const started = [];
+
+  for (const item of items) {
+    const orderId = item.extraction_payload?.orderId;
+    if (!orderId) continue;
+
+    const orderNumber = item.order_payload?.order_info?.order_number || item.order_key || orderId;
+    const sourceLabel = `signing:${orderId}`;
+    const existing = await findWorkflowRunBySourceLabel('wf-signing', sourceLabel);
+    if (existing) continue;
+
+    const pdf = pdfsByOrderNumber[orderNumberFromPdfName(`${orderNumber}.pdf`)] || null;
+    const signingRun = await createWorkflowRun({
+      workflowId: signingWorkflow.id,
+      workflowVersion: signingWorkflow.version,
+      sourceLabel,
+      totalItems: 1,
+      inputSummary: {
+        sourceRunId,
+        sourceItemId: item.id,
+        orderId,
+        orderNumber,
+        trigger: 'order_document_ready',
+      },
+    });
+    const signingItem = await createWorkflowItem({
+      runId: signingRun.id,
+      itemIndex: 0,
+      patientPayload: item.patient_payload,
+      orderPayload: item.order_payload,
+      referencePayload: item.reference_payload,
+      extractionPayload: {
+        sourceRunId,
+        sourceItemId: item.id,
+        orderId,
+        pdf: pdf ? {
+          fileName: pdf.fileName,
+          blobUrl: pdf.blobUrl,
+          blobPath: pdf.blobPath,
+        } : {},
+      },
+    });
+    await createTaskRunsForItem({
+      runId: signingRun.id,
+      itemId: signingItem.id,
+      steps: signingWorkflow.definition.steps,
+    });
+    await runWorkflowAutomation({ runId: signingRun.id, definition: signingWorkflow.definition, concurrency: 1 });
+    started.push(signingRun.id);
+  }
+
+  return started;
 }
 
 async function startFromMultipart(req) {
@@ -157,10 +219,11 @@ async function startFromMultipart(req) {
       pdfsByOrderNumber: Object.fromEntries(uploadedPdfs.map((pdf) => [orderNumberFromPdfName(pdf.fileName), pdf])),
     },
   });
+  const signingRunIds = await startSigningRunsForWrittenOrders({ sourceRunId: run.id, uploadedPdfs });
 
   const refreshed = await getRunWithDefinition(run.id);
   const tasks = await listTaskRunsForRun(run.id);
-  return { run: refreshed, tasks, inputSummary: parsed.summary };
+  return { run: refreshed, tasks, inputSummary: { ...parsed.summary, signingRunsStarted: signingRunIds.length }, signingRunIds };
 }
 
 async function startFromJson(req) {
@@ -198,9 +261,10 @@ async function startFromJson(req) {
   }
 
   await runWorkflowAutomation({ runId: run.id, definition: workflow.definition });
+  const signingRunIds = await startSigningRunsForWrittenOrders({ sourceRunId: run.id, uploadedPdfs: [] });
   const refreshed = await getRunWithDefinition(run.id);
   const tasks = await listTaskRunsForRun(run.id);
-  return { run: refreshed, tasks, inputSummary: { joinedRows: body.items.length, mode: 'json' } };
+  return { run: refreshed, tasks, inputSummary: { joinedRows: body.items.length, mode: 'json', signingRunsStarted: signingRunIds.length }, signingRunIds };
 }
 
 export default async function handler(req, res) {

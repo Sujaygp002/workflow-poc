@@ -95,6 +95,15 @@ export async function runItemAutomation({ definition, itemId, context = {} }) {
       }
 
       const result = await fn({ item: freshItem, step, task, context });
+      if (result.waiting) {
+        await updateTask(task.id, {
+          status: 'active',
+          output: result.output ?? result,
+          errorMessage: null,
+        });
+        changed = true;
+        break;
+      }
       await updateTask(task.id, {
         status: result.ok === false ? 'failed' : 'completed',
         output: result.output ?? result,

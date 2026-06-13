@@ -1,13 +1,9 @@
 import {
-  createPgFromPayload,
-  createPractitionerFromPayload,
   findAdmission,
   findEpisode,
   findHhahByName,
   findOrder,
   findPatient,
-  findPgByName,
-  findPractitionerByNpi,
   insertAiExtraction,
   updateItem,
   writeOrderBundle,
@@ -23,7 +19,6 @@ const REQUIRED_FIELDS = [
   ['patient.admission_details.MRN', (item) => item.patient_payload?.admission_details?.MRN],
   ['patient.patient_info.sex', (item) => item.patient_payload?.patient_info?.sex],
   ['patient.personal_information.address.street', (item) => item.patient_payload?.personal_information?.address?.street],
-  ['patient.admission_details.PG.name', (item) => item.reference_payload?.PG?.name],
   ['patient.admission_details.HHAH.name', (item) => item.reference_payload?.HHAH?.name],
   ['patient.admission_details.SOC', (item) => item.patient_payload?.admission_details?.SOC],
   ['patient.admission_details.EOC', (item) => item.patient_payload?.admission_details?.EOC],
@@ -32,7 +27,6 @@ const REQUIRED_FIELDS = [
   ['order.order_info.order_number', (item) => item.order_payload?.order_info?.order_number],
   ['order.order_info.order_type', (item) => item.order_payload?.order_info?.order_type],
   ['order.order_info.order_date', (item) => item.order_payload?.order_info?.order_date],
-  ['order.order_admission_details.billing_provider.NPI', (item) => item.reference_payload?.practitioner?.NPI],
 ];
 
 function mergeDeep(target, source) {
@@ -112,26 +106,16 @@ function findPdfForOrder(item, context) {
 }
 
 async function checkAllReferences(item) {
-  const practitioner = await findPractitionerByNpi(item.reference_payload?.practitioner?.NPI);
-  const pg = await findPgByName(item.reference_payload?.PG?.name);
   const hhah = await findHhahByName(item.reference_payload?.HHAH?.name);
-  return { practitioner, pg, hhah };
+  return { hhah };
 }
 
 async function markReferenceDecisions(item) {
   const refs = await checkAllReferences(item);
   const decisions = setDecisions(item, {
-    practitioner_exists: !!refs.practitioner,
-    practitioner_not_exists: !refs.practitioner,
-    pg_exists: !!refs.pg,
-    pg_not_exists: !refs.pg,
-    // Lisa: a missing PG blocks patient creation and routes the row to review.
-    pg_missing_blocks_patient: !refs.pg,
-    needs_manual_review: !refs.pg,
     hhah_exists: !!refs.hhah,
     hhah_not_exists: !refs.hhah,
-    // Patient may only be written once the PG exists (HHAH/practitioner optional here).
-    reference_records_ready: !!refs.pg,
+    upload_context_ready: true,
   });
   await updateItem(item.id, { decisions });
   return { refs, decisions };
@@ -266,9 +250,18 @@ export async function evaluateCondition(condition, item) {
     await updateItem(item.id, { decisions });
     return decisions[condition] === true;
   }
-  if (condition.startsWith('practitioner_') || condition.startsWith('pg_') || condition.startsWith('hhah_') || condition === 'reference_records_ready') {
+  if (condition === 'upload_context_ready') {
+    const decisions = setDecisions(item, { upload_context_ready: true });
+    await updateItem(item.id, { decisions });
+    return true;
+  }
+  if (condition.startsWith('hhah_')) {
     const { decisions } = await markReferenceDecisions(item);
     return decisions[condition] === true;
+  }
+  if (['document_ready_for_signing', 'document_not_ready_for_signing', 'signed_within_48h', 'signing_overdue'].includes(condition)) {
+    const known = item.decisions || {};
+    return known[condition] === true;
   }
 
   return false;
@@ -394,26 +387,16 @@ export const taskRegistry = {
     }
   },
 
-  'refs.checkPractitionerByNpi': async ({ item }) => {
-    const practitioner = await findPractitionerByNpi(item.reference_payload?.practitioner?.NPI);
-    const decisions = setDecisions(item, {
-      practitioner_exists: !!practitioner,
-      practitioner_not_exists: !practitioner,
-    });
+  'refs.confirmUploadContext': async ({ item }) => {
+    const decisions = setDecisions(item, { upload_context_ready: true });
     await updateItem(item.id, { decisions });
-    return { ok: true, output: { exists: !!practitioner, practitioner } };
-  },
-
-  'refs.checkPgByName': async ({ item }) => {
-    const pg = await findPgByName(item.reference_payload?.PG?.name);
-    const decisions = setDecisions(item, { pg_exists: !!pg, pg_not_exists: !pg });
-    await updateItem(item.id, { decisions });
-    return { ok: true, output: { exists: !!pg, pg } };
-  },
-
-  'refs.recheckAll': async ({ item }) => {
-    const result = await markReferenceDecisions(item);
-    return { ok: result.decisions.reference_records_ready, output: result };
+    return {
+      ok: true,
+      output: {
+        hhahName: item.reference_payload?.HHAH?.name || null,
+        uploadContextReady: true,
+      },
+    };
   },
 
   'dates.checkAdmission': async ({ item }) => {
@@ -514,49 +497,6 @@ export const taskRegistry = {
     return { ok: true, output: { filled: true } };
   },
 
-  'human.createPractitioner': async ({ item, payload }) => {
-    const referencePayload = mergeDeep(item.reference_payload, { practitioner: payload?.practitioner || {} });
-    const practitioner = await createPractitionerFromPayload(referencePayload);
-    const decisions = setDecisions(item, { practitioner_exists: true, practitioner_not_exists: false });
-    await updateItem(item.id, { referencePayload, decisions });
-    return { ok: true, output: { practitioner } };
-  },
-
-  'human.createPg': async ({ item, payload }) => {
-    const referencePayload = mergeDeep(item.reference_payload, { PG: payload?.PG || {} });
-    const pg = await createPgFromPayload(referencePayload);
-    const decisions = setDecisions(item, { pg_exists: true, pg_not_exists: false });
-    await updateItem(item.id, { referencePayload, decisions });
-    return { ok: true, output: { pg } };
-  },
-
-  // Missing PG blocks patient creation. A human reviews the row and supplies the
-  // correct PG; only then is the block cleared and the patient may be created.
-  'human.reviewMissingPg': async ({ item, payload }) => {
-    const referencePayload = mergeDeep(item.reference_payload, { PG: payload?.PG || {} });
-    const pgName = cleanString(referencePayload?.PG?.name);
-    if (!pgName) {
-      // Still no PG after review — keep the row blocked and in review.
-      const decisions = setDecisions(item, {
-        pg_exists: false,
-        pg_not_exists: true,
-        pg_missing_blocks_patient: true,
-        needs_manual_review: true,
-      });
-      await updateItem(item.id, { referencePayload, decisions });
-      return { ok: false, output: { blocked: true, reason: 'Physician Group still missing' } };
-    }
-    const pg = await createPgFromPayload(referencePayload);
-    const decisions = setDecisions(item, {
-      pg_exists: true,
-      pg_not_exists: false,
-      pg_missing_blocks_patient: false,
-      needs_manual_review: false,
-    });
-    await updateItem(item.id, { referencePayload, decisions });
-    return { ok: true, output: { pg, reviewed: true } };
-  },
-
   'human.fillAdmissionDates': async ({ item, payload }) => {
     const patientPayload = confidenceConfirmed(mergeDeep(item.patient_payload, payload?.patient || {}));
     const orderPayload = syncOrderAdmissionDates(item.order_payload, patientPayload);
@@ -594,22 +534,86 @@ export const taskRegistry = {
     });
     return { ok: true, output: { reviewed: true } };
   },
+
+  'signing.reviewReadiness': async ({ item }) => {
+    const hasOrderNumber = hasValue(item.order_payload?.order_info?.order_number);
+    const hasPdf = hasValue(item.extraction_payload?.pdf?.blobUrl) || hasValue(item.extraction_payload?.pdfBlobUrl);
+    const ready = hasOrderNumber && hasPdf;
+    const decisions = setDecisions(item, {
+      document_ready_for_signing: ready,
+      document_not_ready_for_signing: !ready,
+    });
+    await updateItem(item.id, { decisions });
+    return { ok: true, output: { ready, hasOrderNumber, hasPdf } };
+  },
+
+  'signing.fixDocument': async ({ item, payload }) => {
+    const orderPayload = payload?.order ? mergeDeep(item.order_payload, payload.order) : item.order_payload;
+    const extractionPayload = payload?.pdf
+      ? mergeDeep(item.extraction_payload, { pdf: payload.pdf })
+      : item.extraction_payload;
+    const ready = hasValue(orderPayload?.order_info?.order_number)
+      && (hasValue(extractionPayload?.pdf?.blobUrl) || hasValue(extractionPayload?.pdfBlobUrl));
+    const decisions = setDecisions(item, {
+      document_ready_for_signing: ready,
+      document_not_ready_for_signing: !ready,
+    });
+    await updateItem(item.id, { orderPayload, extractionPayload, decisions });
+    return { ok: ready, output: { ready } };
+  },
+
+  'signing.sendToPhysician': async ({ item }) => {
+    const decisions = setDecisions(item, {
+      signing_sent_to_physician: true,
+      signing_sent_at: new Date().toISOString(),
+    });
+    await updateItem(item.id, { decisions });
+    return { ok: true, output: { sent: true } };
+  },
+
+  'signing.checkSignedWithin48h': async ({ item }) => {
+    const signed = Boolean(item.order_payload?.order_status?.order_signed_date || item.order_payload?.order_status?.signed);
+    const sentAt = item.decisions?.signing_sent_at ? new Date(item.decisions.signing_sent_at) : new Date();
+    const deadlinePassed = Date.now() - sentAt.getTime() >= 48 * 60 * 60 * 1000;
+    const decisions = setDecisions(item, {
+      signed_within_48h: signed,
+      signing_overdue: !signed && deadlinePassed,
+    });
+    await updateItem(item.id, { decisions });
+    if (!signed && !deadlinePassed) {
+      return { ok: true, waiting: true, output: { waiting: true, signedWithin48h: false, deadlinePassed } };
+    }
+    return { ok: true, output: { signedWithin48h: signed, deadlinePassed } };
+  },
+
+  'signing.updateOrderSigned': async ({ item }) => {
+    const orderPayload = mergeDeep(item.order_payload, {
+      order_status: {
+        order_status: 'signed',
+        signed: true,
+        order_signed_date: item.order_payload?.order_status?.order_signed_date || new Date().toISOString().slice(0, 10),
+      },
+    });
+    await updateItem(item.id, { orderPayload, decisions: setDecisions(item, { signing_status_updated: true }) });
+    return { ok: true, output: { orderStatus: 'signed' } };
+  },
+
+  'signing.emailPhysicianReminder': async ({ item }) => {
+    await updateItem(item.id, { decisions: setDecisions(item, { physician_reminder_email_sent: true }) });
+    return { ok: true, output: { emailLogged: true } };
+  },
 };
 
 // Lisa: the lifecycle view shows object existence/creation status for the
-// diagram's objects (Patient, PG, Practitioner, HHAH, Admission, Episode, Order)
+// diagram's workflow objects (Patient, Admission, Episode, Order)
 // rather than field-level changes. Derived from the item's decision flags.
 export function objectLifecycle(item) {
   const d = item.decisions || {};
-  const ref = (exists, notExists, created) =>
-    created ? 'created' : exists ? 'found' : notExists ? 'missing' : 'pending';
   return {
     patient: d.needs_manual_review ? 'in-review'
       : d.patient_write_success || d.patient_retry_success ? (d.patient_exists ? 'updated' : 'created')
       : d.patient_exists ? 'found'
       : d.patient_not_exists ? 'missing' : 'pending',
-    physicianGroup: d.pg_missing_blocks_patient ? 'in-review' : ref(d.pg_exists, d.pg_not_exists),
-    practitioner: ref(d.practitioner_exists, d.practitioner_not_exists),
     admission: d.admission_created ? 'created' : d.admission_exists ? 'found' : d.admission_ready ? 'created' : 'pending',
     episode: d.episode_created ? 'created' : d.episode_exists ? 'found' : d.episode_ready ? 'created' : 'pending',
     order: d.order_write_success || d.order_retry_success ? (d.order_exists ? 'updated' : 'created')

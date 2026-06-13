@@ -51,8 +51,8 @@ runtime and DB), so prefer build/lint for verification.
 - The `wf7` workflow steps are referenced by stepId. IDs are intentionally
   non-contiguous (`wf7-s1`..`wf7-s27`; `wf7-s22`/`wf7-s23` were retired). The DB
   bulk renderer maps the visible steps explicitly in `row(...)` calls.
-- Condition/branch logic: a step's `conditionExpr` gates it (e.g. `practitioner_not_exists`,
-  `ai_extraction_fail`). Side branches are not always NO/human: derive the branch label
+- Condition/branch logic: a step's `conditionExpr` gates it (e.g. `ai_extraction_fail`,
+  `admission_dates_missing`). Side branches are not always NO/human: derive the branch label
   from the branch task's condition. For example, `admission_dates_missing` means YES goes
   to manual dates, while `patient_exists` means YES goes to Update Patient and NO goes to
   Create Patient.
@@ -65,6 +65,13 @@ runtime and DB), so prefer build/lint for verification.
 ## Change Log
 
 Newest first. Add an entry for each change made by Claude Code.
+
+- **2026-06-13** — Added the revised three-trigger workflow shape. New DB workflow
+  definitions: `wf-area-onboarding` starts from onboarding success and monitors daily HHAH
+  uploads; `wf-signing` starts after order document readiness and handles readiness review,
+  physician send, 48-hour signature check, signed-status update, and overdue email logging.
+  wf7 no longer branches on PG/practitioner existence or creates/reviews those records;
+  upload processing now confirms only HHAH/upload context before patient/order writes.
 
 - **2026-06-13** — Added area-based intake orchestration. New migration
   `003_area_intake.sql` adds statistical areas, area-HHAH mappings, area intake checks,
@@ -127,9 +134,8 @@ Newest first. Add an entry for each change made by Claude Code.
     reuse-or-create by SOE/EOE was already keyed; `computeEpisodeStatus` (eligible =
     485 + active F2F within 6mo of F2F order_date; billable = all orders signed);
     `getPatientTree`/`listPatients` surface `latest_episode_status`.
-  - Workflow: PG missing now **blocks the row → human review** (`human.reviewMissingPg`,
-    `pg_missing_blocks_patient`), no longer auto-creates; `reference_records_ready` gates
-    on PG. Added `objectLifecycle()` for the lifecycle view.
+  - Workflow at that time: PG missing blocked the row for human review; later revised on
+    2026-06-13 to remove PG/practitioner workflow gates entirely.
   - UI: `HhhLogin` shows episode + patient latest eligible/billable status; `WorkBucket`
     record card shows an object-lifecycle strip (found/missing/created/updated/in-review).
 

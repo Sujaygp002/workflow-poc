@@ -13,7 +13,12 @@
   - Seeded area: `Boise-Ada Metro Intake`.
   - Area links to expected HHAHs and tracks whether each HHAH uploaded within the daily 24-hour window.
   - Missing uploads create logged notification records in the DB; real email delivery can be wired later.
+- Added three trigger layers:
+  - Trigger 1: onboarding successful starts the ongoing area monitor.
+  - Trigger 2: HHAH uploads Excel + PDF ZIP, which starts wf7.
+  - Trigger 3: order document ready starts the signing follow-up workflow.
 - Upload workflow processing now runs patient instances in parallel instead of stopping the whole run on the first blocked patient. A blocked patient waits on human work while other patients continue.
+- wf7 no longer checks/branches on physician group or practitioner existence. PG/practitioner data can still be stored if present, but missing PG/NPI will not create a workflow task or block patient/order processing.
 
 ## HHH Portal
 
@@ -54,7 +59,7 @@
 - `POST /api/area-intake`
   - Runs the simulated 24-hour area check and creates logged missing-upload notification records.
 - `GET /api/workflows`
-  - Returns active DB workflow definitions for visualization.
+  - Returns active DB workflow definitions for visualization: area onboarding monitor, bulk upload, and document signing follow-up.
 - `GET /api/workflow-runs`
   - Returns workflow run history with task runs.
 - `GET /api/work-items?userId=u1`
@@ -69,6 +74,7 @@
 ## Frontend Changes
 
 - `/triggers` is back in FlowPOC and starts the DB-backed bulk upload trigger.
+- `/triggers` now shows the three trigger concepts: onboarding successful, HHAH upload, and order document ready/signing.
 - `/builder/workflows` now pulls only DB workflow definitions and no longer shows local dummy workflows.
 - `/orchestrator` now shows only DB workflow runs and renders wf7 as one aggregate loop body instead of one repeated flow per patient/order row.
 - `/orchestrator` now includes an Area Intake Monitor above workflow runs:
@@ -76,6 +82,7 @@
   - Shows expected HHAHs.
   - Shows received/missing upload status.
   - Shows 24-hour check status and missing-upload notification status.
+  - Shows onboarding successful as the top starter with separate upload-trigger and notification-trigger lanes.
   - Includes a POC button to simulate the 24-hour check.
 - `/orchestrator` wf7 cards now show patient-parallel orchestration buckets:
   - blocked patients,
@@ -94,6 +101,7 @@
 - Worker task cards show matched order PDF side-by-side with the record.
 - Missing fields are highlighted and can be entered before completing the human task.
 - wf7 now treats Admission and Episode as explicit objects through the date-check branches only: duplicate standalone Admission/Episode reuse-create workflow boxes were removed, and object found/created status is captured during patient write.
+- `wf-signing` starts after a written order has an uploaded document. It checks signing readiness, routes document fixes to a human when needed, sends to physician, waits for the 48-hour signature check, then updates signed status or logs an overdue physician email.
 - `/hhh-login` is a standalone route without the builder sidebar and is not shown inside FlowPOC navigation.
 - `/hhh-login` includes patient and order browsing after upload; order detail opens the matched PDF instead of JSON.
 

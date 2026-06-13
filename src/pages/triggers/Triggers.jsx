@@ -3,18 +3,22 @@ import { AlertCircle, CheckCircle2, FileArchive, FileSpreadsheet, Play, RefreshC
 import { startBulkUploadRun } from '../../lib/workflowApi';
 
 const CONDITIONS = [
+  'onboarding_successful',
+  'upload_received_within_24h',
+  'upload_missing_after_24h',
   'excel_row_complete',
   'excel_row_incomplete',
-  'practitioner_not_exists',
-  'pg_not_exists',
-  'reference_records_ready',
+  'upload_context_ready',
   'admission_dates_missing',
   'episode_dates_missing',
   'patient_exists',
   'patient_not_exists',
   'order_exists',
   'order_not_exists',
-  'area_upload_missing',
+  'document_ready_for_signing',
+  'document_not_ready_for_signing',
+  'signed_within_48h',
+  'signing_overdue',
   'notification_sent',
 ];
 
@@ -77,6 +81,24 @@ export default function Triggers() {
           <p className="text-sm text-slate-500">Start the DB-backed bulk upload workflow.</p>
         </div>
       </div>
+
+      <section className="mb-4 grid lg:grid-cols-3 gap-3">
+        <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
+          <div className="text-[11px] font-black uppercase tracking-wide text-violet-600">Trigger 1</div>
+          <div className="mt-1 font-bold text-slate-900">Onboarding Successful</div>
+          <p className="mt-1 text-xs text-slate-600">Starts the ongoing area monitor for expected HHAH uploads.</p>
+        </div>
+        <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4">
+          <div className="text-[11px] font-black uppercase tracking-wide text-sky-600">Trigger 2</div>
+          <div className="mt-1 font-bold text-slate-900">HHAH Uploads Documents</div>
+          <p className="mt-1 text-xs text-slate-600">Starts wf7 when Excel + PDF ZIP is uploaded.</p>
+        </div>
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+          <div className="text-[11px] font-black uppercase tracking-wide text-emerald-600">Trigger 3</div>
+          <div className="mt-1 font-bold text-slate-900">Order Document Ready</div>
+          <p className="mt-1 text-xs text-slate-600">Starts signing follow-up after patient/order creation and document upload.</p>
+        </div>
+      </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5">
         <div className="flex items-start justify-between gap-4">

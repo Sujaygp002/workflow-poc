@@ -545,19 +545,14 @@ function aggregateObjects(instance) {
   }
   const objs = {
     Patient: { created: 0, updated: 0, review: 0 },
-    'Physician Group': { found: 0, created: 0, review: 0 },
-    Practitioner: { found: 0, created: 0 },
     'Admission Object': { found: 0, created: 0 },
     'Episode Object': { found: 0, created: 0 },
     Order: { created: 0, updated: 0 },
   };
   for (const d of Object.values(byPatient)) {
-    if (d.needs_manual_review || d.pg_missing_blocks_patient) objs['Physician Group'].review += 1;
-    else if (d.pg_exists) objs['Physician Group'].found += 1;
     if (d.patient_write_success && d.patient_exists) objs.Patient.updated += 1;
     else if (d.patient_write_success || d.patient_retry_success) objs.Patient.created += 1;
     if (d.needs_manual_review) objs.Patient.review += 1;
-    if (d.practitioner_exists) objs.Practitioner.found += 1;
     if (d.admission_created) objs['Admission Object'].created += 1; else if (d.admission_exists || d.admission_ready) objs['Admission Object'].found += 1;
     if (d.episode_created) objs['Episode Object'].created += 1; else if (d.episode_exists || d.episode_ready) objs['Episode Object'].found += 1;
     if (d.order_write_success && d.order_exists) objs.Order.updated += 1;
@@ -711,6 +706,18 @@ function PatientParallelLanes({ lanes }) {
 }
 
 function AreaIntakePanel({ areas, loadingAreaId, onRunCheck }) {
+  const triggerLane = (title, subtitle, condition, tone) => (
+    <div className={`rounded-xl border p-3 ${tone}`}>
+      <div className="text-[10px] font-black uppercase tracking-wide opacity-70">Trigger lane</div>
+      <div className="mt-1 text-sm font-black">{title}</div>
+      <div className="mt-1 text-xs opacity-80">{subtitle}</div>
+      <div className="mt-2 inline-flex items-center gap-1 rounded-full border border-white/70 bg-white/70 px-2 py-0.5 font-mono text-[10px]">
+        <span className="inline-block h-2 w-2 rotate-45 border border-amber-500 bg-white" />
+        {condition}
+      </div>
+    </div>
+  );
+
   if (!areas.length) {
     return (
       <section className="mb-5 rounded-2xl border border-slate-200 bg-white p-4">
@@ -724,7 +731,26 @@ function AreaIntakePanel({ areas, loadingAreaId, onRunCheck }) {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-sm font-bold text-slate-800">Area Intake Monitor</h2>
-          <p className="mt-1 text-xs text-slate-500">Daily 24-hour area check. Missing HHAHs get a notification workflow; late uploads still start wf7 normally.</p>
+          <p className="mt-1 text-xs text-slate-500">Onboarding starts the ongoing monitor. Upload and missing-upload notification triggers run independently.</p>
+        </div>
+      </div>
+      <div className="mt-3 rounded-xl border border-violet-200 bg-violet-50/50 p-3">
+        <div className="mx-auto w-fit rounded-full border-2 border-violet-300 bg-white px-4 py-1.5 text-sm font-black text-violet-700">
+          START · Onboarding Successful
+        </div>
+        <div className="mt-3 grid md:grid-cols-2 gap-3">
+          {triggerLane(
+            'Upload Trigger',
+            'Runs wf7 when an HHAH uploads Excel + PDF ZIP.',
+            'upload_received_within_24h',
+            'border-sky-200 bg-sky-50 text-sky-800',
+          )}
+          {triggerLane(
+            'Notification Trigger',
+            'Runs when an expected HHAH has not uploaded within 24 hours.',
+            'upload_missing_after_24h',
+            'border-rose-200 bg-rose-50 text-rose-800',
+          )}
         </div>
       </div>
       <div className="mt-3 grid lg:grid-cols-2 gap-3">
@@ -1000,10 +1026,6 @@ function DbBulkInstanceCard({ instance, onDelete }) {
                 {row('wf7-s2')}
                 <Arrow small />
                 {row('wf7-s3', 'wf7-s5', 'missing data fallback')}
-                <Arrow small />
-                {row('wf7-s6', 'wf7-s7', 'create if NPI missing')}
-                <Arrow small />
-                {row('wf7-s8', 'wf7-s9', 'review if PG missing')}
                 <Arrow small />
                 {row('wf7-s12')}
                 <Arrow small />
