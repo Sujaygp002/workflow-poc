@@ -66,6 +66,13 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-14** — Mega-task boxes now render with a `TASK-` prefix (e.g. "TASK-HHAH Upload
+  Monitor", "TASK-Update Patient Object") — applied once in `MegaTaskNode` (`boxName`), so the
+  box title, info popover title, and "Inside …" label all pick it up across Orchestrator +
+  Workflows page. Renamed `wf7` workflow name "Bulk Upload Patient & Order" → "update patients
+  objects" and its first mega-group "Updating Patient Object" → "Update Patient Object".
+  Reseeded.
+
 - **2026-06-14** — Added `sample-4-artifacts/` — a broad wf7 test set (18 patient rows /
   22 order rows / 23 joined) covering 20+ scenarios: signed vs unsigned PDFs, missing
   SOC / SOE-EOE, duplicate order, PG-change record fork, new patient, no-matched-PDF,

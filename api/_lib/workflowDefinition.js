@@ -71,7 +71,7 @@ export const WF_AREA_ONBOARDING_DEFINITION = {
 
 export const WF7_DEFINITION = {
   id: 'wf7',
-  name: 'Bulk Upload Patient & Order',
+  name: 'update patients objects',
   description:
     'Ingest an uploaded Excel workbook and related order PDFs. For each patient-order row, parse Excel, use AI extraction when fields are missing, validate upload context, then create/update patient, admission object, episode object, and order records. A human reviews and confirms each assembled record.',
   trigger: {
@@ -91,7 +91,7 @@ export const WF7_DEFINITION = {
   megaGroups: [
     {
       id: 'wf7-g1',
-      name: 'Updating Patient Object',
+      name: 'Update Patient Object',
       info: 'Parses the Excel workbook, extracts any missing fields from order PDFs (AI + human), confirms HHAH upload context, then checks/creates/updates the Patient Unit and Patient Record.',
       stepIds: ['wf7-s1', 'wf7-s2', 'wf7-s3', 'wf7-s4', 'wf7-s5', 'wf7-s12', 'wf7-s10', 'wf7-s14', 'wf7-s11', 'wf7-s30', 'wf7-s13', 'wf7-s15', 'wf7-s16'],
     },

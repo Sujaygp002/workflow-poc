@@ -218,7 +218,9 @@ export function MegaTaskNode({ definition, tasks = [], megaTask, name, info, ste
   const [infoOpen, setInfoOpen] = useState(false);
 
   const innerSteps = steps || definition.steps || [];
-  const boxName = name || megaTask?.name || definition.name;
+  const rawName = name || megaTask?.name || definition.name;
+  // Mega-task boxes are prefixed "TASK-" to read as a single collapsed task.
+  const boxName = `TASK-${rawName}`;
   const boxInfo = info || megaTask?.info || definition.description;
   const innerIds = new Set(innerSteps.map((s) => s.id));
   // (n) = total times any inner task ran across this group's steps.
