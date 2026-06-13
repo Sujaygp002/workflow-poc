@@ -9,11 +9,9 @@ import {
   createTaskRunsForItem,
   createWorkflowItem,
   createWorkflowRun,
-  findWorkflowRunBySourceLabel,
   findHhahByName,
   findStatisticalAreaByName,
   getActiveWorkflow,
-  getRunItems,
   getRunWithDefinition,
   insertUploadedDocument,
   listTaskRunsForRun,
@@ -77,74 +75,6 @@ async function pdfsFromZip(zipFile) {
   }
 
   return extracted;
-}
-
-async function startSigningRunsForWrittenOrders({ sourceRunId, uploadedPdfs = [] }) {
-  const signingWorkflow = await getActiveWorkflow('wf-signing');
-  if (!signingWorkflow) return [];
-
-  const items = await getRunItems(sourceRunId);
-  const pdfsByOrderNumber = Object.fromEntries(uploadedPdfs.map((pdf) => [orderNumberFromPdfName(pdf.fileName), pdf]));
-  const seenOrderIds = new Set();
-  const eligible = [];
-
-  for (const item of items) {
-    if (item.extraction_payload?.orderSkipped) continue;
-    const orderId = item.extraction_payload?.orderId;
-    if (!orderId) continue;
-    if (seenOrderIds.has(orderId)) continue;
-    seenOrderIds.add(orderId);
-    eligible.push(item);
-  }
-
-  const started = await Promise.all(eligible.map(async (item) => {
-    const orderId = item.extraction_payload.orderId;
-    const orderNumber = item.order_payload?.order_info?.order_number || item.order_key || orderId;
-    const sourceLabel = `signing:${orderId}`;
-    const existing = await findWorkflowRunBySourceLabel('wf-signing', sourceLabel);
-    if (existing) return null;
-
-    const pdf = pdfsByOrderNumber[orderNumberFromPdfName(`${orderNumber}.pdf`)] || null;
-    const signingRun = await createWorkflowRun({
-      workflowId: signingWorkflow.id,
-      workflowVersion: signingWorkflow.version,
-      sourceLabel,
-      totalItems: 1,
-      inputSummary: {
-        sourceRunId,
-        sourceItemId: item.id,
-        orderId,
-        orderNumber,
-        trigger: 'order_document_ready',
-      },
-    });
-    const signingItem = await createWorkflowItem({
-      runId: signingRun.id,
-      itemIndex: 0,
-      patientPayload: item.patient_payload,
-      orderPayload: item.order_payload,
-      referencePayload: item.reference_payload,
-      extractionPayload: {
-        sourceRunId,
-        sourceItemId: item.id,
-        orderId,
-        pdf: pdf ? {
-          fileName: pdf.fileName,
-          blobUrl: pdf.blobUrl,
-          blobPath: pdf.blobPath,
-        } : {},
-      },
-    });
-    await createTaskRunsForItem({
-      runId: signingRun.id,
-      itemId: signingItem.id,
-      steps: signingWorkflow.definition.steps,
-    });
-    await runWorkflowAutomation({ runId: signingRun.id, definition: signingWorkflow.definition, concurrency: 1 });
-    return signingRun.id;
-  }));
-
-  return started.filter(Boolean);
 }
 
 function pdfMetadataForItem(item, pdfsByOrderNumber) {
@@ -242,11 +172,9 @@ async function startFromMultipart(req) {
       pdfsByOrderNumber,
     },
   });
-  const signingRunIds = await startSigningRunsForWrittenOrders({ sourceRunId: run.id, uploadedPdfs });
-
   const refreshed = await getRunWithDefinition(run.id);
   const tasks = await listTaskRunsForRun(run.id);
-  return { run: refreshed, tasks, inputSummary: { ...parsed.summary, signingRunsStarted: signingRunIds.length }, signingRunIds };
+  return { run: refreshed, tasks, inputSummary: { ...parsed.summary } };
 }
 
 async function startFromJson(req) {
@@ -284,10 +212,9 @@ async function startFromJson(req) {
   }
 
   await runWorkflowAutomation({ runId: run.id, definition: workflow.definition });
-  const signingRunIds = await startSigningRunsForWrittenOrders({ sourceRunId: run.id, uploadedPdfs: [] });
   const refreshed = await getRunWithDefinition(run.id);
   const tasks = await listTaskRunsForRun(run.id);
-  return { run: refreshed, tasks, inputSummary: { joinedRows: body.items.length, mode: 'json', signingRunsStarted: signingRunIds.length }, signingRunIds };
+  return { run: refreshed, tasks, inputSummary: { joinedRows: body.items.length, mode: 'json' } };
 }
 
 export default async function handler(req, res) {

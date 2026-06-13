@@ -58,6 +58,14 @@ export const WF_AREA_ONBOARDING_DEFINITION = {
       condition: 'notification_sent',
       preReq: ['area-s4'],
     },
+    {
+      id: 'area-s6',
+      actor: 'system',
+      taskKey: 'area.waitForHhahUpload',
+      name: 'Wait for HHAH to Upload (24h limit)',
+      description: 'Hold the monitor open for up to 24 hours waiting for each expected HHAH to upload Excel + PDF ZIP. When an HHAH uploads, Trigger 2 (HHAH Uploads Documents) fires independently and starts a new wf7 run for that upload.',
+      preReq: ['area-s2', 'area-s3', 'area-s5'],
+    },
   ],
 };
 

@@ -2,12 +2,18 @@ import { getSql } from '../api/_lib/db.js';
 import { SEEDED_USERS, WORKFLOW_DEFINITIONS } from '../api/_lib/workflowDefinition.js';
 import {
   createHhahFromPayload,
+  createTaskRunsForItem,
+  createWorkflowItem,
+  createWorkflowRun,
   findHhahByName,
+  findWorkflowRunBySourceLabel,
+  getActiveWorkflow,
   linkHhahToArea,
   upsertStatisticalArea,
   upsertUser,
   upsertWorkflowDefinition,
 } from '../api/_lib/repositories.js';
+import { runWorkflowAutomation } from '../api/_lib/workflowEngine.js';
 import { normalizeName, normalizeNpi } from '../api/_lib/normalizers.js';
 
 async function seedReferenceData() {
@@ -98,6 +104,38 @@ async function seedReferenceData() {
   }
 }
 
+async function seedAreaOnboardingRun() {
+  const sourceLabel = 'area-onboarding:boise-ada-metro-intake';
+  const existing = await findWorkflowRunBySourceLabel('wf-area-onboarding', sourceLabel);
+  if (existing) return;
+
+  const workflow = await getActiveWorkflow('wf-area-onboarding');
+  if (!workflow) return;
+
+  const run = await createWorkflowRun({
+    workflowId: workflow.id,
+    workflowVersion: workflow.version,
+    sourceLabel,
+    totalItems: 1,
+    inputSummary: { trigger: 'onboarding_successful', area: 'Boise-Ada Metro Intake' },
+  });
+  const item = await createWorkflowItem({
+    runId: run.id,
+    itemIndex: 0,
+    patientPayload: {},
+    orderPayload: {},
+    referencePayload: {},
+    extractionPayload: { area: 'Boise-Ada Metro Intake', trigger: 'onboarding_successful' },
+  });
+  await createTaskRunsForItem({
+    runId: run.id,
+    itemId: item.id,
+    steps: workflow.definition.steps,
+  });
+  // Run automation so the early system steps complete; area-s6 (wait) stays running.
+  await runWorkflowAutomation({ runId: run.id, definition: workflow.definition });
+}
+
 async function main() {
   for (const user of SEEDED_USERS) {
     await upsertUser(user);
@@ -106,6 +144,7 @@ async function main() {
     await upsertWorkflowDefinition(definition, 1);
   }
   await seedReferenceData();
+  await seedAreaOnboardingRun();
   console.log('seeded users, workflow definitions, and reference records');
 }
 

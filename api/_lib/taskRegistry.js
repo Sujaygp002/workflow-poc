@@ -304,6 +304,12 @@ export async function evaluateCondition(condition, item) {
     await updateItem(item.id, { decisions });
     return true;
   }
+  // Area-onboarding conditions: onboarding_successful is always true for the seeded run;
+  // upload_received / upload_missing / notification_sent are driven by actual area state.
+  if (condition === 'onboarding_successful') return true;
+  if (condition === 'upload_received_within_24h') return item.decisions?.upload_received_within_24h === true;
+  if (condition === 'upload_missing_after_24h') return item.decisions?.upload_missing_after_24h === true;
+  if (condition === 'notification_sent') return item.decisions?.notification_sent === true;
   if (condition.startsWith('hhah_')) {
     const { decisions } = await markReferenceDecisions(item);
     return decisions[condition] === true;
@@ -749,6 +755,14 @@ export const taskRegistry = {
     await updateItem(item.id, { decisions: setDecisions(item, { physician_reminder_email_sent: true }) });
     return { ok: true, output: { emailLogged: true } };
   },
+
+  // ── Area Onboarding / Monitor tasks ──────────────────────────────────────
+  'area.onboardingSuccess': async () => ({ ok: true, output: { started: true } }),
+  'area.monitorExpectedUploads': async () => ({ ok: true, output: { monitoring: true } }),
+  'area.continueUploadWorkflow': async () => ({ ok: true, output: { continued: true } }),
+  'area.sendMissingUploadNotification': async () => ({ ok: true, output: { notified: true } }),
+  'area.recordNotificationStatus': async () => ({ ok: true, output: { recorded: true } }),
+  'area.waitForHhahUpload': async () => ({ ok: true, output: { waiting: true } }),
 };
 
 // Lisa: the lifecycle view shows object existence/creation status for the

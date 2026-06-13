@@ -1,31 +1,44 @@
 import { useEffect, useState } from 'react';
-import { ChevronDown, ChevronUp, Clock, GitBranch, RefreshCw } from 'lucide-react';
-import WorkflowFlowChart, { nodesFromWorkflow } from '../../components/WorkflowFlowChart';
+import { ChevronDown, ChevronUp, GitBranch, RefreshCw } from 'lucide-react';
 import { dbWorkflowToWorkflow, fetchWorkflowDefinitions } from '../../lib/workflowApi';
+import {
+  Connector,
+  TriggerChainConnector,
+  WorkflowFlow,
+} from '../../components/WorkflowDefinitionFlow';
 
-const typeBadgeCls = {
-  task: 'bg-violet-100 text-violet-700',
-  conditional: 'bg-amber-100 text-amber-700',
-  loop: 'bg-purple-100 text-purple-700',
+// Trigger number and colour for each workflow id in the chain.
+const TRIGGER_META = {
+  'wf-area-onboarding': { num: 1, color: 'violet' },
+  'wf7':                { num: 2, color: 'sky' },
+  'wf-signing':         { num: 3, color: 'emerald' },
 };
-const typeIcon = { task: '▸', conditional: '◆', loop: '↻' };
+
+const TRIGGER_COLOR = {
+  violet:  { badge: 'bg-violet-100 text-violet-700 border-violet-200', ring: 'border-violet-200' },
+  sky:     { badge: 'bg-sky-100 text-sky-700 border-sky-200',          ring: 'border-sky-200' },
+  emerald: { badge: 'bg-emerald-100 text-emerald-700 border-emerald-200', ring: 'border-emerald-200' },
+};
 
 function WorkflowCard({ wf }) {
   const [showFlow, setShowFlow] = useState(true);
   const steps = wf.steps || [];
-  const counts = steps.reduce((acc, step) => {
-    const type = step.type || 'task';
-    acc[type] = (acc[type] || 0) + 1;
-    return acc;
-  }, {});
+  const meta = TRIGGER_META[wf.id];
+  const col = meta ? TRIGGER_COLOR[meta.color] : null;
 
   return (
-    <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
+    <div className={`bg-white rounded-xl border shadow-sm overflow-hidden ${col?.ring || 'border-slate-200'}`}>
       <div className="p-4">
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
+              {meta && (
+                <span className={`text-[10px] font-black uppercase tracking-wide border rounded-full px-2 py-0.5 ${col.badge}`}>
+                  Trigger {meta.num}
+                </span>
+              )}
               <span className="font-semibold text-slate-800">{wf.name}</span>
+              <span className="font-mono text-[11px] text-slate-400">{wf.id}</span>
               <span className="text-xs px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-100 font-medium">
                 DB saved
               </span>
@@ -33,21 +46,13 @@ function WorkflowCard({ wf }) {
             {wf.description && <p className="text-sm text-slate-500 mt-1">{wf.description}</p>}
             <div className="flex items-center gap-2 mt-2 flex-wrap">
               <span className="text-xs text-slate-400">{steps.length} steps</span>
-              {['task', 'conditional', 'loop'].filter(type => counts[type]).map(type => (
-                <span key={type} className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${typeBadgeCls[type]}`}>
-                  {typeIcon[type]} {counts[type]}
-                </span>
-              ))}
-              {wf.createdAt && (
-                <span className="flex items-center gap-1 text-xs text-slate-400">
-                  <Clock size={10} />
-                  {new Date(wf.createdAt).toLocaleDateString()}
-                </span>
+              {wf.trigger?.type && (
+                <span className="text-[11px] font-mono text-slate-400">trigger: {wf.trigger.type}</span>
               )}
             </div>
           </div>
           <button
-            onClick={() => setShowFlow((value) => !value)}
+            onClick={() => setShowFlow((v) => !v)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${showFlow ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-slate-600 border-slate-200 hover:border-violet-300'}`}
           >
             <GitBranch size={13} /> Flow {showFlow ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
@@ -56,13 +61,26 @@ function WorkflowCard({ wf }) {
       </div>
 
       {showFlow && (
-        <div className="border-t border-slate-100 bg-slate-50/40">
-          <WorkflowFlowChart nodes={nodesFromWorkflow(wf)} />
+        <div className="border-t border-slate-100 bg-slate-50/40 overflow-x-auto p-4">
+          <div className="mx-auto w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">
+            START · {wf.trigger?.id || wf.trigger?.type || 'trigger'}
+          </div>
+          <Connector />
+          {/* tasks=[] → static definition view with no live run counts */}
+          <WorkflowFlow definition={wf} tasks={[]} />
+          <div className="mx-auto mt-1 w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">END</div>
         </div>
       )}
     </div>
   );
 }
+
+// Chain order for the Workflows page.
+const CHAIN_ORDER = ['wf-area-onboarding', 'wf7', 'wf-signing'];
+const CHAIN_CONNECTOR = {
+  'wf7':        { triggerNum: 2, label: 'HHAH Uploads Documents' },
+  'wf-signing': { triggerNum: 3, label: 'Document Signing Follow-up' },
+};
 
 export default function WorkflowList() {
   const [workflows, setWorkflows] = useState([]);
@@ -85,12 +103,16 @@ export default function WorkflowList() {
 
   useEffect(() => { refresh(); }, []);
 
+  const byId = Object.fromEntries(workflows.map((wf) => [wf.id, wf]));
+  const chained = CHAIN_ORDER.map((id) => byId[id]).filter(Boolean);
+  const extras = workflows.filter((wf) => !CHAIN_ORDER.includes(wf.id));
+
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800">Workflow</h1>
-          <p className="text-sm text-slate-500 mt-1">DB-saved production workflow definition.</p>
+          <h1 className="text-2xl font-bold text-slate-800">Workflows</h1>
+          <p className="text-sm text-slate-500 mt-1">DB-saved workflow definitions shown as the trigger chain.</p>
         </div>
         <button onClick={refresh} className="flex items-center gap-2 px-3 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50">
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh
@@ -109,8 +131,26 @@ export default function WorkflowList() {
           <p>No DB workflow definition is available.</p>
         </div>
       ) : (
-        <div className="grid gap-3">
-          {workflows.map((workflow) => <WorkflowCard key={`${workflow.id}-${workflow.version || 1}`} wf={workflow} />)}
+        <div>
+          {/* Trigger chain: T1 → T2 → T3 */}
+          {chained.map((wf) => (
+            <div key={wf.id}>
+              {CHAIN_CONNECTOR[wf.id] && (
+                <TriggerChainConnector
+                  triggerNum={CHAIN_CONNECTOR[wf.id].triggerNum}
+                  label={CHAIN_CONNECTOR[wf.id].label}
+                />
+              )}
+              <WorkflowCard wf={wf} />
+            </div>
+          ))}
+
+          {/* Any extra workflows outside the main chain */}
+          {extras.length > 0 && (
+            <div className="mt-4 grid gap-3">
+              {extras.map((wf) => <WorkflowCard key={wf.id} wf={wf} />)}
+            </div>
+          )}
         </div>
       )}
     </div>

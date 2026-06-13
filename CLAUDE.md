@@ -66,6 +66,57 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-13** — Workflows page updated to use the same flowchart renderer as the Orchestrator.
+  Extracted shared components (`ACTOR`, `actorOf`, `stepStats`, `DecisionDiamond`, `StepInfo`,
+  `StepNode`, `Connector`, `WorkflowFlow`, `TriggerChainConnector`) into new
+  `src/components/WorkflowDefinitionFlow.jsx`. Orchestrator now imports from there instead of
+  defining them inline. `WorkflowList.jsx` rebuilt: dropped the old `WorkflowFlowChart`/
+  `nodesFromWorkflow` adapter; now renders each workflow with the same decision-diamond flowchart
+  and the T1 → T2 → T3 trigger chain connectors. Each card shows a Trigger N badge, workflow id,
+  step count, trigger type, and the full step flowchart with START/END caps.
+
+- **2026-06-13** — Wired three-workflow trigger chain in Orchestrator; area-onboarding now a live run.
+  - Added `area-s6` ("Wait for HHAH to Upload (24h limit)") as the final step of `wf-area-onboarding`,
+    with preReqs `[area-s2, area-s3, area-s5]` — the step that bridges to Trigger 2.
+  - Added all `area.*` task implementations to `taskRegistry.js`; added area condition handling
+    (`onboarding_successful`, `upload_received_within_24h`, `upload_missing_after_24h`,
+    `notification_sent`) to `evaluateCondition`.
+  - `seed.js` now creates a `wf-area-onboarding` workflow run (source label
+    `area-onboarding:boise-ada-metro-intake`, idempotent) and runs its automation so it
+    appears in the Orchestrator as a live running run, not a static panel.
+  - Orchestrator rebuilt: removed `AreaIntakePanel` (static); replaced with `AreaIntakeSubPanel`
+    embedded inside the `wf-area-onboarding` run card (area monitor data shows inside Trigger 1
+    run). Added `TriggerChainConnector` (violet pill: "after end → Trigger N · Name") between
+    groups. Runs are now rendered in chain order: `wf-area-onboarding` (T1) →
+    `TriggerChainConnector(2, "HHAH Uploads Documents")` → `wf7` runs (T2) →
+    `TriggerChainConnector(3, "Document Signing Follow-up")` → `wf-signing` runs (T3).
+  DB reset + reseed applied.
+
+- **2026-06-13** — Fixed Document Signing Follow-up trigger timing and bulk structure.
+  Previously `startSigningRunsForWrittenOrders` was called immediately after `runWorkflowAutomation`
+  in `start.js`, launching N separate `wf-signing` runs (one per order) before the
+  `human.reviewRecord` step even ran. Fixed:
+  - Removed `startSigningRunsForWrittenOrders` from `start.js` entirely.
+  - Added `startBulkSigningRun(wf7RunId)` to `workflowEngine.js`: creates **one** `wf-signing`
+    run (source label `signing-bulk:<runId>`, idempotent) with one item per written
+    non-duplicate order, mirroring how wf7 is a bulk run.
+  - The trigger fires inside `completeHumanTask` only when `task_key === 'human.reviewRecord'`
+    AND all items in the wf7 run are completed/skipped — i.e. after every row has been reviewed.
+  - Patient Unit + Patient Record are both created in `patient.create` (`wf7-s14`) via
+    `writePatientBundle`, which calls `writePatientUnit` first then inserts/upserts the
+    Patient Record pointing at the unit. Step name already says "Create Patient Unit + Record".
+
+- **2026-06-13** — DB reset (full wipe via `npm run db:reset` + `npm run db:seed`) and
+  created `sample-3-artifacts/` with 4 targeted wf7 test scenarios:
+  - **Carla Nguyen** (MRN-910) — SOC blank → exercises `human.fillAdmissionDates` branch.
+  - **David Park** (MRN-920) — full happy path with 2 orders (O-9201, O-9202).
+  - **Fatima Hassan** (MRN-930) — order O-9301 submitted twice → exercises `order.skipDuplicate`.
+  - **Grace Kim** (MRN-940) — same unit (name+DOB+MRN), two rows with different PG
+    ("Cascades Physician Group" then "Pacific Northwest Partners") → exercises `record.create`
+    PG-change fork (new Patient Record under same Patient Unit).
+  Files: `hhh_upload_set3.xlsx` (Sheet1 = 5 patient rows, Sheet2 = 7 order rows) +
+  `hhh_order_pdfs_set3.zip` (6 PDFs: O-9101, O-9201, O-9202, O-9301, O-9401, O-9402).
+
 - **2026-06-13** — Fixed wf7 execution gaps before push/deploy verification.
   Patient write now commits only the Patient Unit + Patient Record; `admission.resolve`
   writes/reuses the Admission after admission-date checks, and `episode.resolve`
