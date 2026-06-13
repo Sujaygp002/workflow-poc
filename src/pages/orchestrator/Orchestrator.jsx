@@ -10,6 +10,7 @@ import {
   Connector,
   MegaGroupFlow,
   MegaTaskNode,
+  RunObjectSidebar,
   TriggerChainConnector,
   WorkflowFlow,
 } from '../../components/WorkflowDefinitionFlow';
@@ -128,23 +129,26 @@ function RunCard({ run, onDelete, areas, loadingAreaId, onRunCheck }) {
         </div>
       </div>
       {open && (
-        <div className="overflow-x-auto p-4">
-          <div className="mx-auto w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">
-            START · {definition.trigger?.id || 'trigger'}
+        <div className="flex flex-col gap-4 p-4 lg:flex-row lg:items-start">
+          <div className="min-w-0 flex-1 overflow-x-auto">
+            <div className="mx-auto w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">
+              START · {definition.trigger?.id || 'trigger'}
+            </div>
+            <Connector />
+            {definition.megaGroups ? (
+              <MegaGroupFlow definition={definition} tasks={tasks} />
+            ) : definition.megaTask ? (
+              <MegaTaskNode definition={definition} tasks={tasks} megaTask={definition.megaTask} />
+            ) : (
+              <WorkflowFlow definition={definition} tasks={tasks} />
+            )}
+            <Connector />
+            <div className="mx-auto mt-1 w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">END</div>
+            {isAreaOnboarding && areas && areas.length > 0 && (
+              <AreaIntakeSubPanel areas={areas} loadingAreaId={loadingAreaId} onRunCheck={onRunCheck} />
+            )}
           </div>
-          <Connector />
-          {definition.megaGroups ? (
-            <MegaGroupFlow definition={definition} tasks={tasks} />
-          ) : definition.megaTask ? (
-            <MegaTaskNode definition={definition} tasks={tasks} megaTask={definition.megaTask} />
-          ) : (
-            <WorkflowFlow definition={definition} tasks={tasks} />
-          )}
-          <Connector />
-          <div className="mx-auto mt-1 w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">END</div>
-          {isAreaOnboarding && areas && areas.length > 0 && (
-            <AreaIntakeSubPanel areas={areas} loadingAreaId={loadingAreaId} onRunCheck={onRunCheck} />
-          )}
+          <RunObjectSidebar run={run} />
         </div>
       )}
     </div>

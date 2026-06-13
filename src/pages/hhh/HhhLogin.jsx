@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Activity, ArrowLeft, Building2, CheckCircle2, ChevronRight, ExternalLink, FileArchive, FileSpreadsheet, FileText, GitBranch, Loader2, Lock, RefreshCw, Upload, UserRound } from 'lucide-react';
-import { fetchOrders, fetchPatientTree, fetchPatients, startBulkUploadRun } from '../../lib/workflowApi';
+import { Activity, ArrowLeft, BellRing, Building2, CheckCircle2, ChevronRight, ExternalLink, FileArchive, FileSpreadsheet, FileText, GitBranch, Loader2, Lock, RefreshCw, Upload, UserRound } from 'lucide-react';
+import { fetchAreaIntakeStatus, fetchOrders, fetchPatientTree, fetchPatients, startBulkUploadRun } from '../../lib/workflowApi';
 
 const DEFAULT_AREA_NAME = 'Boise-Ada Metro Intake';
 const DEFAULT_AREA_TYPE = 'metro_statistical_area';
@@ -229,12 +229,46 @@ function LoginPanel({ onLogin }) {
   );
 }
 
+// Notifications pushed to the HHAH from the Area Upload Monitor (Record Notification
+// Status step). Shows missing-upload reminders for this HHAH.
+function NotificationBanner({ notifications }) {
+  if (!notifications.length) return null;
+  return (
+    <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+      <div className="flex items-center gap-2">
+        <BellRing size={18} className="text-amber-600" />
+        <h2 className="text-sm font-black uppercase tracking-wide text-amber-700">
+          Notifications ({notifications.length})
+        </h2>
+      </div>
+      <div className="mt-3 space-y-2">
+        {notifications.map((n) => (
+          <div key={n.id} className="rounded-xl border border-amber-200 bg-white px-4 py-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm font-bold text-slate-800">
+                {n.message || 'Your documents have not been uploaded yet. Please upload your Excel + PDF ZIP.'}
+              </div>
+              <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-black uppercase text-amber-700">
+                {n.notification_type || 'missing upload'}
+              </span>
+            </div>
+            <div className="mt-1 text-xs text-slate-500">
+              {n.hhah_name ? `${n.hhah_name} · ` : ''}{n.sent_at ? new Date(n.sent_at).toLocaleString() : 'pending'}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export default function HhhLogin() {
   const [loggedIn, setLoggedIn] = useState(() => sessionStorage.getItem('hhh_logged_in') === 'true');
   const [workbook, setWorkbook] = useState(null);
   const [zip, setZip] = useState(null);
   const [patients, setPatients] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [notifications, setNotifications] = useState([]);
   const [selectedPatient, setSelectedPatient] = useState(null);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [selectedTree, setSelectedTree] = useState(null);
@@ -247,9 +281,18 @@ export default function HhhLogin() {
   async function refreshPatients() {
     setLoadingPatients(true);
     try {
-      const [nextPatients, nextOrders] = await Promise.all([fetchPatients(), fetchOrders()]);
+      const [nextPatients, nextOrders, areas] = await Promise.all([
+        fetchPatients(),
+        fetchOrders(),
+        fetchAreaIntakeStatus().catch(() => []),
+      ]);
       setPatients(nextPatients);
       setOrders(nextOrders);
+      // Surface notifications addressed to this HHAH login.
+      const mine = (areas || [])
+        .flatMap((area) => area.notifications || [])
+        .filter((n) => !n.hhah_name || n.hhah_name === DEFAULT_HHAH_NAME);
+      setNotifications(mine);
       setError('');
     } catch (err) {
       setError(err.message);
@@ -341,6 +384,7 @@ export default function HhhLogin() {
       </header>
 
       <main className="max-w-7xl mx-auto px-6 py-6 space-y-5">
+        <NotificationBanner notifications={notifications} />
         <div className="grid md:grid-cols-4 gap-3">
           <Metric label="Patients" value={patients.length} />
           <Metric label="Admissions" value={totals.admissions} />

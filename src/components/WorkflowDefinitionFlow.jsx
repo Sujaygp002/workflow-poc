@@ -5,7 +5,7 @@
 //   { id, name, actor, taskKey, condition, preReq, description }
 // as a vertical top-down flowchart with decision diamonds, actor-coloured boxes,
 // and ⓘ info popovers.
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { ArrowDown, Bot, Cog, User, Clock, Info, CheckCircle2, Circle, AlertCircle } from 'lucide-react';
 
 // ── Actor styling ─────────────────────────────────────
@@ -294,6 +294,119 @@ export function MegaGroupFlow({ definition, tasks = [] }) {
         );
       })}
     </div>
+  );
+}
+
+// ── Per-object created/updated/existing aggregation ───
+// Reduces a run's task rows (each carries the item's `decisions`) into per-object
+// counts. One vote per distinct item (item_index). Mirrors WorkBucket lifecycle.
+//
+// Returns ordered rows of { object, created, updated, existed } per workflow type.
+function classifyObject(object, d = {}) {
+  switch (object) {
+    case 'Patient Unit':
+      if (d.unit_not_exists || (d.patient_not_exists && (d.patient_write_success || d.patient_retry_success))) return 'created';
+      if (d.unit_exists || d.patient_exists) return d.unit_only_changed ? 'updated' : 'existed';
+      return null;
+    case 'Patient Record':
+      if (d.record_created || d.patient_not_exists) return 'created';
+      if (d.record_context_changed) return 'created';
+      if (d.record_updated || d.unit_only_changed) return 'updated';
+      if (d.patient_exists) return 'existed';
+      return null;
+    case 'Admission Object':
+      if (d.admission_created) return 'created';
+      if (d.admission_exists) return 'existed';
+      if (d.admission_ready) return 'created';
+      return null;
+    case 'Episode Object':
+      if (d.episode_created) return 'created';
+      if (d.episode_exists) return 'existed';
+      if (d.episode_ready) return 'created';
+      return null;
+    case 'Order':
+      if (d.order_write_success || d.order_retry_success) return 'created';
+      if (d.order_skipped_duplicate || d.order_exists) return 'existed';
+      return null;
+    case 'Order Signed':
+      if (d.signed_within_48h) return 'updated';
+      if (d.signing_overdue) return 'existed';
+      return null;
+    case 'Notification':
+      if (d.notification_sent) return 'created';
+      return null;
+    default:
+      return null;
+  }
+}
+
+const OBJECTS_BY_WORKFLOW = {
+  wf7: ['Patient Unit', 'Patient Record', 'Admission Object', 'Episode Object', 'Order'],
+  'wf-signing': ['Order Signed'],
+  'wf-area-onboarding': ['Notification'],
+};
+
+// `existedLabel` distinguishes the pre-trigger "already exist" column wording.
+export function runObjectStats(run) {
+  const objects = OBJECTS_BY_WORKFLOW[run.workflow_id];
+  if (!objects) return null;
+  const tasks = run.tasks || [];
+  // Collapse to one decisions object per distinct item.
+  const byItem = new Map();
+  for (const t of tasks) {
+    if (t.item_index === undefined || t.item_index === null) continue;
+    if (!byItem.has(t.item_index)) byItem.set(t.item_index, t.decisions || {});
+  }
+  const items = [...byItem.values()];
+  const rows = objects.map((object) => {
+    let created = 0; let updated = 0; let existed = 0;
+    for (const d of items) {
+      const state = classifyObject(object, d);
+      if (state === 'created') created += 1;
+      else if (state === 'updated') updated += 1;
+      else if (state === 'existed') existed += 1;
+    }
+    return { object, created, updated, existed };
+  });
+  return rows;
+}
+
+// ── Run object side box ───────────────────────────────
+// A compact created / updated grid per object type, plus a "before trigger"
+// summary of how many already existed.
+export function RunObjectSidebar({ run }) {
+  const rows = runObjectStats(run);
+  if (!rows) return null;
+  const anyExisted = rows.some((r) => r.existed > 0);
+  return (
+    <aside className="w-60 shrink-0 rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
+      <div className="mb-2 text-[11px] font-black uppercase tracking-wide text-slate-400">Objects this run</div>
+      <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-2 gap-y-1">
+        <span className="text-[10px] font-black uppercase text-slate-400">object</span>
+        <span className="text-[10px] font-black uppercase text-emerald-600 text-center">created</span>
+        <span className="text-[10px] font-black uppercase text-violet-600 text-center">updated</span>
+        {rows.map((r) => (
+          <Fragment key={r.object}>
+            <span className="truncate text-[11px] font-semibold text-slate-700">{r.object}</span>
+            <span className="rounded bg-emerald-50 px-2 py-0.5 text-center text-xs font-black text-emerald-700">{r.created}</span>
+            <span className="rounded bg-violet-50 px-2 py-0.5 text-center text-xs font-black text-violet-700">{r.updated}</span>
+          </Fragment>
+        ))}
+      </div>
+      {anyExisted && (
+        <div className="mt-3 border-t border-slate-200 pt-2">
+          <div className="text-[10px] font-black uppercase tracking-wide text-slate-400">before trigger</div>
+          <div className="mt-1 space-y-0.5">
+            {rows.filter((r) => r.existed > 0).map((r) => (
+              <div key={r.object} className="flex items-center justify-between text-[11px]">
+                <span className="text-slate-600">{r.object}</span>
+                <span className="font-bold text-sky-700">{r.existed} already exist</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </aside>
   );
 }
 

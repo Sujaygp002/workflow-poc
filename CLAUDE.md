@@ -66,6 +66,21 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-14** — Added a per-run **object created/updated side box** and surfaced
+  missing-upload **notifications on the HHAH login page**.
+  - `WorkflowDefinitionFlow.jsx`: new `runObjectStats(run)` aggregates each run's task-row
+    `decisions` (one vote per distinct `item_index`) into per-object created/updated/existed
+    counts via `classifyObject` (mirrors the WorkBucket lifecycle rules). New `RunObjectSidebar`
+    renders a created|updated grid plus a "before trigger — N already exist" summary. Object
+    sets per workflow: `wf7` = Patient Unit / Patient Record / Admission / Episode / Order;
+    `wf-signing` = Order Signed; `wf-area-onboarding` = Notification.
+  - Orchestrator `RunCard` body is now a flex row: flowchart on the left, `RunObjectSidebar`
+    on the right (stacks on narrow screens).
+  - `HhhLogin.jsx`: `refreshPatients` also calls `fetchAreaIntakeStatus`, filters notifications
+    to this HHAH (`Boise Home Health`), and renders a `NotificationBanner` (amber, bell icon)
+    at the top of the dashboard — this is where the **Record Notification Status** step's
+    missing-upload reminders appear.
+
 - **2026-06-14** — Collapsed Trigger 2 (`wf7`) and Trigger 3 (`wf-signing`) into mega-tasks,
   matching the Trigger 1 treatment.
   - `wf7`: trigger id renamed `trigger-7` → `upload-patient-order-documents` (START cap now
