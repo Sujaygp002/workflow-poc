@@ -66,6 +66,14 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-14** — Pulled the missing-upload notification OUT of the area mega-task.
+  `WF_AREA_ONBOARDING_DEFINITION.megaTask` gained `innerStepIds` (`area-s2/s3/s5/s6` stay
+  inside TASK-HHAH Upload Monitor) and `outsideStepIds` (`area-s4`). `MegaTaskNode` now renders
+  any `outsideStepIds` as standalone `StepNode` boxes after the mega-task, each gated by a
+  `DecisionDiamond` from its condition. Flow reads:
+  `START → TASK-HHAH Upload Monitor → [upload missing after 24h?] → Notification Trigger —
+  Missing Upload → END`. Execution order is unchanged (visual grouping only). Reseeded.
+
 - **2026-06-14** — Fixed the mega-task `(n)` count + preloaded demo inputs.
   - `(n)` now counts **distinct items (instances)** a task processed (items with ≥1 ran step
     in the group), not the number of inner step-runs. The HHAH Upload Monitor reads 3 (one per

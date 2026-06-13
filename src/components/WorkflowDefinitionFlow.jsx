@@ -217,7 +217,18 @@ export function MegaTaskNode({ definition, tasks = [], megaTask, name, info, ste
   const [open, setOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
 
-  const innerSteps = steps || definition.steps || [];
+  const allSteps = definition.steps || [];
+  const stepsById = Object.fromEntries(allSteps.map((s) => [s.id, s]));
+  // Inner steps: explicit `steps` prop (mega-group) > megaTask.innerStepIds > all steps.
+  const innerSteps = steps
+    || (megaTask?.innerStepIds
+      ? megaTask.innerStepIds.map((id) => stepsById[id]).filter(Boolean)
+      : allSteps);
+  // Optional steps pulled OUT of the box, rendered after it (each with a decision
+  // diamond from its condition).
+  const outsideSteps = (megaTask?.outsideStepIds || [])
+    .map((id) => stepsById[id])
+    .filter(Boolean);
   const rawName = name || megaTask?.name || definition.name;
   // Mega-task boxes are prefixed "TASK-" to read as a single collapsed task.
   const boxName = `TASK-${rawName}`;
@@ -281,6 +292,14 @@ export function MegaTaskNode({ definition, tasks = [], megaTask, name, info, ste
           <WorkflowFlow definition={definition} tasks={tasks} steps={innerSteps} />
         </div>
       )}
+      {/* Steps pulled OUTSIDE the box: each gated by a decision diamond from its condition. */}
+      {outsideSteps.map((step) => (
+        <div key={step.id} className="flex w-full flex-col items-center">
+          <Connector />
+          {step.condition && <DecisionDiamond condition={step.condition} downLabel="YES" />}
+          <StepNode step={step} stats={stepStats(tasks, step.id)} />
+        </div>
+      ))}
     </div>
   );
 }

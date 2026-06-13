@@ -14,13 +14,16 @@ export const WF_AREA_ONBOARDING_DEFINITION = {
     upload_missing_after_24h: 'expected HHAH did not upload within 24 hours',
     notification_sent: 'missing-upload notification was sent/logged for the HHAH',
   },
-  // The visible flowchart collapses these steps into one "HHAH Upload Monitor"
-  // mega-task box (see `megaTask` below). The View button on that box expands
-  // this inner sub-task flowchart.
+  // The visible flowchart collapses the monitor steps (innerStepIds) into one
+  // "HHAH Upload Monitor" mega-task box. After it, `outsideStepIds` render as their
+  // own boxes — here area-s4 (Notification — Missing Upload), gated by a decision
+  // diamond from its condition (upload_missing_after_24h).
   megaTask: {
     id: 'area-monitor',
     name: 'HHAH Upload Monitor',
-    info: 'This task checks every onboarded HHAH for whether they have uploaded their documents. If an HHAH has not uploaded, it notifies them.',
+    info: 'This task checks every onboarded HHAH for whether they have uploaded their documents. If an HHAH has not uploaded, the next task notifies them.',
+    innerStepIds: ['area-s2', 'area-s3', 'area-s5', 'area-s6'],
+    outsideStepIds: ['area-s4'],
   },
   steps: [
     {
