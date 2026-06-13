@@ -223,10 +223,14 @@ export function MegaTaskNode({ definition, tasks = [], megaTask, name, info, ste
   const boxName = `TASK-${rawName}`;
   const boxInfo = info || megaTask?.info || definition.description;
   const innerIds = new Set(innerSteps.map((s) => s.id));
-  // (n) = total times any inner task ran across this group's steps.
-  const ran = tasks.filter(
-    (t) => innerIds.has(t.step_id) && t.status !== 'pending' && t.status !== 'skipped',
-  ).length;
+  // (n) = number of distinct items (instances) this task processed — e.g. one per
+  // expected HHAH for the monitor, one per patient/order row for wf7. Counts items
+  // that have at least one ran (non-pending, non-skipped) step inside this group.
+  const ran = new Set(
+    tasks
+      .filter((t) => innerIds.has(t.step_id) && t.status !== 'pending' && t.status !== 'skipped')
+      .map((t) => t.item_id ?? t.item_index),
+  ).size;
   const a = ACTOR.system;
   const Icon = a.icon;
   return (
@@ -237,7 +241,7 @@ export function MegaTaskNode({ definition, tasks = [], megaTask, name, info, ste
           <Icon size={15} className={`mt-0.5 shrink-0 ${a.text}`} />
           <span className={`text-sm font-black leading-tight ${a.text}`}>{boxName}</span>
           <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] font-mono text-slate-500">
-            <span title="times the inner tasks have run">({ran})</span>
+            <span title="instances (items) this task processed">({ran})</span>
             <span className="relative">
               <button
                 type="button"

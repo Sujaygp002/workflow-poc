@@ -113,39 +113,48 @@ async function seedAreaOnboardingRun() {
   const workflow = await getActiveWorkflow('wf-area-onboarding');
   if (!workflow) return;
 
+  // One item per expected HHAH in the area, so the monitor's instance count reads 3.
+  // Boise Home Health is missing its upload (active manual email task); the other
+  // two received their uploads and continue normally.
+  const expectedHhahs = ['Boise Home Health', 'Sunrise Skilled Home Health', 'Treasure Valley Hospice'];
   const run = await createWorkflowRun({
     workflowId: workflow.id,
     workflowVersion: workflow.version,
     sourceLabel,
-    totalItems: 1,
-    inputSummary: { trigger: 'onboarding_successful', area: 'Boise-Ada Metro Intake' },
+    totalItems: expectedHhahs.length,
+    inputSummary: { trigger: 'onboarding_successful', area: 'Boise-Ada Metro Intake', expectedHhahs: expectedHhahs.length },
   });
-  const item = await createWorkflowItem({
-    runId: run.id,
-    itemIndex: 0,
-    patientPayload: {},
-    orderPayload: {},
-    referencePayload: {},
-    extractionPayload: { area: 'Boise-Ada Metro Intake', trigger: 'onboarding_successful' },
-  });
-  // Seed a missing-upload scenario so the manual "Notification Trigger — Missing
-  // Upload" email task (area-s4) surfaces in the worker bucket. Attach the HHAH so
-  // the email composer prefills the recipient.
-  const hhah = await findHhahByName('Boise Home Health');
-  await updateItem(item.id, {
-    decisions: { upload_missing_after_24h: true, upload_received_within_24h: false },
-    referencePayload: hhah
-      ? { HHAH: { name: hhah.name, contact_info: hhah.contact_info || {} } }
-      : { HHAH: { name: 'Boise Home Health' } },
-  });
-  await createTaskRunsForItem({
-    runId: run.id,
-    itemId: item.id,
-    steps: workflow.definition.steps,
-  });
-  // Run automation: system steps complete, area-s4 pauses as an active human task
-  // (manual email send), and area-s6 (wait) stays running.
-  await runWorkflowAutomation({ runId: run.id, definition: workflow.definition });
+
+  for (let i = 0; i < expectedHhahs.length; i += 1) {
+    const name = expectedHhahs[i];
+    const missing = i === 0; // first HHAH (Boise Home Health) is missing its upload
+    const hhah = await findHhahByName(name);
+    const item = await createWorkflowItem({
+      runId: run.id,
+      itemIndex: i,
+      patientPayload: {},
+      orderPayload: {},
+      referencePayload: {},
+      extractionPayload: { area: 'Boise-Ada Metro Intake', trigger: 'onboarding_successful', hhah: name },
+    });
+    await updateItem(item.id, {
+      decisions: missing
+        ? { upload_missing_after_24h: true, upload_received_within_24h: false }
+        : { upload_received_within_24h: true, upload_missing_after_24h: false },
+      referencePayload: hhah
+        ? { HHAH: { name: hhah.name, contact_info: hhah.contact_info || {} } }
+        : { HHAH: { name } },
+    });
+    await createTaskRunsForItem({
+      runId: run.id,
+      itemId: item.id,
+      steps: workflow.definition.steps,
+    });
+  }
+
+  // Run automation: received HHAHs continue normally; the missing one pauses at
+  // area-s4 as an active manual email task.
+  await runWorkflowAutomation({ runId: run.id, definition: workflow.definition, concurrency: expectedHhahs.length });
 }
 
 async function main() {

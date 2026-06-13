@@ -66,6 +66,18 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-14** — Fixed the mega-task `(n)` count + preloaded demo inputs.
+  - `(n)` now counts **distinct items (instances)** a task processed (items with ≥1 ran step
+    in the group), not the number of inner step-runs. The HHAH Upload Monitor reads 3 (one per
+    expected HHAH) instead of 4; wf7/signing read their row/order counts. Generalises to all
+    mega boxes.
+  - seed: the area-onboarding run now creates **one item per expected HHAH** (Boise Home Health
+    = missing → active manual email task; Sunrise + Treasure Valley = received → continue). DB
+    reset + reseeded.
+  - HhhLogin: login form preloads `test123` / `test123` so the user can just click Login; the
+    Bulk Upload form preloads the **sample-4** artifacts (xlsx + unsigned + signed ZIPs, served
+    from `public/sample-4-artifacts/`) with a "✓ filename" hint under each input.
+
 - **2026-06-14** — Mega-task boxes now render with a `TASK-` prefix (e.g. "TASK-HHAH Upload
   Monitor", "TASK-Update Patient Object") — applied once in `MegaTaskNode` (`boxName`), so the
   box title, info popover title, and "Inside …" label all pick it up across Orchestrator +

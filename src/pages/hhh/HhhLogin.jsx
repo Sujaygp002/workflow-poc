@@ -181,8 +181,9 @@ function OrderPdfViewer({ order }) {
 }
 
 function LoginPanel({ onLogin }) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
+  // Demo POC: credentials are preloaded so the user can just click Login.
+  const [username, setUsername] = useState('test123');
+  const [password, setPassword] = useState('test123');
   const [error, setError] = useState('');
 
   function submit(event) {
@@ -306,6 +307,36 @@ export default function HhhLogin() {
     if (loggedIn) refreshPatients();
   }, [loggedIn]);
 
+  // Demo POC: preload the sample-4 artifacts into the upload form so the user can
+  // just click Start Upload. Served from /public/sample-4-artifacts.
+  useEffect(() => {
+    if (!loggedIn) return;
+    let cancelled = false;
+    async function preloadSamples() {
+      const fetchAsFile = async (url, type) => {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`preload ${url} failed`);
+        const blob = await res.blob();
+        return new File([blob], url.split('/').pop(), { type });
+      };
+      try {
+        const [xlsx, unsigned, signed] = await Promise.all([
+          fetchAsFile('/sample-4-artifacts/hhh_upload_set4.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+          fetchAsFile('/sample-4-artifacts/hhh_order_pdfs_unsigned_set4.zip', 'application/zip'),
+          fetchAsFile('/sample-4-artifacts/hhh_order_pdfs_signed_set4.zip', 'application/zip'),
+        ]);
+        if (cancelled) return;
+        setWorkbook((cur) => cur || xlsx);
+        setUnsignedZip((cur) => cur || unsigned);
+        setSignedZip((cur) => cur || signed);
+      } catch {
+        // Preload is best-effort; the user can still choose files manually.
+      }
+    }
+    preloadSamples();
+    return () => { cancelled = true; };
+  }, [loggedIn]);
+
   async function openPatient(patient) {
     setSelectedPatient(patient);
     setSelectedOrder(null);
@@ -406,6 +437,7 @@ export default function HhhLogin() {
                 <FileSpreadsheet size={18} className="text-emerald-600" />
                 <input type="file" accept=".xlsx" onChange={(event) => setWorkbook(event.target.files?.[0] || null)} className="w-full text-sm" />
               </div>
+              {workbook && <div className="mt-1 truncate text-[11px] font-semibold text-emerald-700">✓ {workbook.name}</div>}
             </label>
             <label className="block">
               <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Unsigned order PDFs ZIP</span>
@@ -413,6 +445,7 @@ export default function HhhLogin() {
                 <FileArchive size={18} className="text-amber-600" />
                 <input type="file" accept=".zip" onChange={(event) => setUnsignedZip(event.target.files?.[0] || null)} className="w-full text-sm" />
               </div>
+              {unsignedZip && <div className="mt-1 truncate text-[11px] font-semibold text-amber-700">✓ {unsignedZip.name}</div>}
             </label>
             <label className="block">
               <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Signed order PDFs ZIP</span>
@@ -420,6 +453,7 @@ export default function HhhLogin() {
                 <FileArchive size={18} className="text-emerald-600" />
                 <input type="file" accept=".zip" onChange={(event) => setSignedZip(event.target.files?.[0] || null)} className="w-full text-sm" />
               </div>
+              {signedZip && <div className="mt-1 truncate text-[11px] font-semibold text-emerald-700">✓ {signedZip.name}</div>}
             </label>
             <button disabled={uploading} className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-sky-700 disabled:opacity-60">
               {uploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
