@@ -66,6 +66,16 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-14** — Added `sample-4-artifacts/` — a broad wf7 test set (18 patient rows /
+  22 order rows / 23 joined) covering 20+ scenarios: signed vs unsigned PDFs, missing
+  SOC / SOE-EOE, duplicate order, PG-change record fork, new patient, no-matched-PDF,
+  multiple orders per patient, missing MRN/NPI, six diagnoses, order-only & patient-only
+  rows, missing sex/address, different HHAH, future-dated order, order-date overrides, and
+  same-name/different-MRN distinct units. Files: `hhh_upload_set4.xlsx`,
+  `hhh_order_pdfs_unsigned_set4.zip` (14 PDFs), `hhh_order_pdfs_signed_set4.zip` (6 PDFs;
+  O-1009 intentionally has no PDF), plus a `README.md` mapping each row to its scenario.
+  Verified the workbook parses via `parseWorkflowWorkbook` (23 joined rows).
+
 - **2026-06-14** — Split the single order-PDF ZIP into **two uploads: unsigned + signed**.
   Order numbers are unique, so each order's PDF lives in exactly one ZIP.
   - `multipart.js`: returns `unsignedZips` (fields `unsignedZip`/`orderZip`/`zip`…) and
