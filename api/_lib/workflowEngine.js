@@ -188,18 +188,38 @@ async function startBulkSigningRun(wf7RunId) {
     const item = eligible[i];
     const orderNumber = item.order_payload?.order_info?.order_number || item.order_key;
     const pdfMeta = item.extraction_payload?.pdf || {};
+    const isSigned = !!pdfMeta.signed;
+    // If the order's PDF came from the signed ZIP, the order is already signed —
+    // pre-stamp its status so signing.checkSignedWithin48h resolves to signed.
+    const orderPayload = isSigned
+      ? {
+          ...item.order_payload,
+          order_status: {
+            ...(item.order_payload?.order_status || {}),
+            order_status: 'signed',
+            signed: true,
+            order_signed_date:
+              item.order_payload?.order_status?.order_signed_date || new Date().toISOString().slice(0, 10),
+          },
+        }
+      : item.order_payload;
     const signingItem = await createWorkflowItem({
       runId: signingRun.id,
       itemIndex: i,
       patientPayload: item.patient_payload,
-      orderPayload: item.order_payload,
+      orderPayload,
       referencePayload: item.reference_payload,
       extractionPayload: {
         sourceRunId: wf7RunId,
         sourceItemId: item.id,
         orderId: item.extraction_payload?.orderId,
         orderNumber,
-        pdf: { fileName: pdfMeta.fileName || '', blobUrl: pdfMeta.blobUrl || '', blobPath: pdfMeta.blobPath || '' },
+        pdf: {
+          fileName: pdfMeta.fileName || '',
+          blobUrl: pdfMeta.blobUrl || '',
+          blobPath: pdfMeta.blobPath || '',
+          signed: isSigned,
+        },
       },
     });
     await createTaskRunsForItem({

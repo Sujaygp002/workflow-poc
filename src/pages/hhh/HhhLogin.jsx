@@ -265,7 +265,8 @@ function NotificationBanner({ notifications }) {
 export default function HhhLogin() {
   const [loggedIn, setLoggedIn] = useState(() => sessionStorage.getItem('hhh_logged_in') === 'true');
   const [workbook, setWorkbook] = useState(null);
-  const [zip, setZip] = useState(null);
+  const [unsignedZip, setUnsignedZip] = useState(null);
+  const [signedZip, setSignedZip] = useState(null);
   const [patients, setPatients] = useState([]);
   const [orders, setOrders] = useState([]);
   const [notifications, setNotifications] = useState([]);
@@ -330,7 +331,8 @@ export default function HhhLogin() {
     try {
       const result = await startBulkUploadRun({
         workbook,
-        orderZip: zip,
+        unsignedZip,
+        signedZip,
         sourceLabel: workbook.name,
         areaName: DEFAULT_AREA_NAME,
         areaType: DEFAULT_AREA_TYPE,
@@ -396,13 +398,13 @@ export default function HhhLogin() {
           <div className="flex items-start justify-between gap-4">
             <div>
               <h2 className="text-lg font-bold text-slate-900">Bulk Upload</h2>
-              <p className="text-sm text-slate-500 mt-1">Upload one Excel workbook. Put order PDFs in a ZIP where each PDF filename is the order number.</p>
+              <p className="text-sm text-slate-500 mt-1">Upload one Excel workbook plus two order PDF ZIPs — unsigned (to be signed) and signed. Each PDF filename is its order number; an order number appears in only one ZIP.</p>
             </div>
             <a href="/worker" className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">
               <Activity size={15} /> Worker buckets
             </a>
           </div>
-          <form onSubmit={uploadBatch} className="mt-4 grid lg:grid-cols-[1fr_1fr_auto] gap-3 items-end">
+          <form onSubmit={uploadBatch} className="mt-4 grid lg:grid-cols-[1fr_1fr_1fr_auto] gap-3 items-end">
             <label className="block">
               <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Patient + order Excel</span>
               <div className="mt-1 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
@@ -411,10 +413,17 @@ export default function HhhLogin() {
               </div>
             </label>
             <label className="block">
-              <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Order PDFs ZIP</span>
+              <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Unsigned order PDFs ZIP</span>
               <div className="mt-1 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                 <FileArchive size={18} className="text-amber-600" />
-                <input type="file" accept=".zip" onChange={(event) => setZip(event.target.files?.[0] || null)} className="w-full text-sm" />
+                <input type="file" accept=".zip" onChange={(event) => setUnsignedZip(event.target.files?.[0] || null)} className="w-full text-sm" />
+              </div>
+            </label>
+            <label className="block">
+              <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Signed order PDFs ZIP</span>
+              <div className="mt-1 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <FileArchive size={18} className="text-emerald-600" />
+                <input type="file" accept=".zip" onChange={(event) => setSignedZip(event.target.files?.[0] || null)} className="w-full text-sm" />
               </div>
             </label>
             <button disabled={uploading} className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-sky-700 disabled:opacity-60">

@@ -57,7 +57,7 @@ async function resolveAreaUploadContext(fields = {}, body = {}) {
   };
 }
 
-async function pdfsFromZip(zipFile) {
+async function pdfsFromZip(zipFile, signed = false) {
   const zipBuffer = await fs.readFile(zipFile.filepath);
   const zip = await JSZip.loadAsync(zipBuffer);
   const extracted = [];
@@ -70,7 +70,8 @@ async function pdfsFromZip(zipFile) {
       originalFilename: name.split('/').pop(),
       mimetype: 'application/pdf',
       size: buffer.byteLength,
-      sourceZip: zipFile.originalFilename || 'orders.zip',
+      sourceZip: zipFile.originalFilename || (signed ? 'signed.zip' : 'orders.zip'),
+      signed,
     });
   }
 
@@ -81,17 +82,20 @@ function pdfMetadataForItem(item, pdfsByOrderNumber) {
   const orderNumber = item.orderPayload?.order_info?.order_number;
   const pdf = orderNumber ? pdfsByOrderNumber[orderNumberFromPdfName(`${orderNumber}.pdf`)] : null;
   if (!pdf) return {};
+  // Order numbers are unique, so each order's PDF is in EITHER the signed or the
+  // unsigned ZIP. `signed` flags which one matched.
   return {
     fileName: pdf.fileName,
     blobUrl: pdf.blobUrl,
     blobPath: pdf.blobPath,
     documentId: pdf.document?.id || null,
     sourceZip: pdf.sourceZip || null,
+    signed: !!pdf.signed,
   };
 }
 
 async function startFromMultipart(req) {
-  const { fields, workbook, pdfs, zips } = await parseMultipart(req);
+  const { fields, workbook, pdfs, unsignedZips, signedZips } = await parseMultipart(req);
   if (!workbook) throw new Error('Upload requires a .xlsx workbook field named "workbook".');
 
   const workflow = await ensureWorkflow();
@@ -121,8 +125,14 @@ async function startFromMultipart(req) {
     uploadedPdfs.push(withPdfOrderKey({ ...uploaded, fileName: pdf.originalFilename, document }));
   }
 
-  for (const zip of zips) {
-    const extractedPdfs = await pdfsFromZip(zip);
+  // Unsigned ZIP(s) = order PDFs to be sent for signature; signed ZIP(s) = already
+  // signed PDFs. Order numbers are unique, so an order's PDF is in only one of them.
+  const zipSets = [
+    ...unsignedZips.map((zip) => ({ zip, signed: false })),
+    ...signedZips.map((zip) => ({ zip, signed: true })),
+  ];
+  for (const { zip, signed } of zipSets) {
+    const extractedPdfs = await pdfsFromZip(zip, signed);
     for (const pdf of extractedPdfs) {
       const uploaded = await uploadPdfBufferToBlob(pdf, run.id);
       const document = await insertUploadedDocument({
@@ -137,6 +147,7 @@ async function startFromMultipart(req) {
         ...uploaded,
         fileName: pdf.originalFilename,
         sourceZip: pdf.sourceZip,
+        signed: pdf.signed,
         document,
       }));
     }

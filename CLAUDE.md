@@ -66,6 +66,23 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-14** — Split the single order-PDF ZIP into **two uploads: unsigned + signed**.
+  Order numbers are unique, so each order's PDF lives in exactly one ZIP.
+  - `multipart.js`: returns `unsignedZips` (fields `unsignedZip`/`orderZip`/`zip`…) and
+    `signedZips` (`signedZip`/`signedZips`) instead of one `zips`.
+  - `bulk-upload/start.js`: `pdfsFromZip(zip, signed)` tags each extracted PDF; processes both
+    ZIP sets; `pdfMetadataForItem` now records `signed` on `extraction_payload.pdf`.
+  - `workflowEngine.startBulkSigningRun`: when an order's matched PDF is `signed`, pre-stamps
+    the signing item's `order_status` to signed so `signing.checkSignedWithin48h` resolves to
+    `signed_within_48h` (no overdue email). Carries `pdf.signed` onto the signing item.
+  - `workflowApi.startBulkUploadRun`: accepts `unsignedZip` + `signedZip` (keeps `orderZip` as
+    a back-compat alias → unsigned). `dbWorkItemToAction` surfaces `pdf.signed`.
+  - HhhLogin + Triggers upload forms: two ZIP file inputs (Unsigned / Signed). WorkBucket
+    PdfPanel shows a signed/unsigned badge.
+  - sample-3-artifacts: replaced `hhh_order_pdfs_set3.zip` with
+    `hhh_order_pdfs_unsigned_set3.zip` (O-9101/9201/9301/9401) and
+    `hhh_order_pdfs_signed_set3.zip` (O-9202/9402).
+
 - **2026-06-14** — Hardcoded Gmail SMTP credentials as fallbacks in `config.js`
   (`SMTP_HOST/PORT/SECURE/USER/PASS/FROM`), matching the existing DB/Gemini/Blob convention,
   so the deployed app sends emails without Vercel env vars. Env vars still override. Real

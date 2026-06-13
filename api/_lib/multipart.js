@@ -21,17 +21,27 @@ export async function parseMultipart(req) {
     ...asArray(files.pdf),
     ...asArray(files.documents),
   ].filter((file) => String(file.originalFilename || '').toLowerCase().endsWith('.pdf'));
-  const zips = [
+  const isZip = (file) => String(file.originalFilename || '').toLowerCase().endsWith('.zip');
+  // Unsigned order PDFs (to be sent for signature).
+  const unsignedZips = [
+    ...asArray(files.unsignedZip),
+    ...asArray(files.unsignedZips),
     ...asArray(files.orderZip),
     ...asArray(files.orderZips),
     ...asArray(files.zip),
     ...asArray(files.zips),
-  ].filter((file) => String(file.originalFilename || '').toLowerCase().endsWith('.zip'));
+  ].filter(isZip);
+  // Already-signed order PDFs.
+  const signedZips = [
+    ...asArray(files.signedZip),
+    ...asArray(files.signedZips),
+  ].filter(isZip);
 
   return {
     fields,
     workbook,
     pdfs,
-    zips,
+    unsignedZips,
+    signedZips,
   };
 }

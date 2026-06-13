@@ -247,12 +247,19 @@ function MissingFieldsEditor({ item, patch, setPatch, missingFields }) {
 }
 
 function PdfPanel({ item }) {
-  const pdfUrl = item.dbPayload?.pdf?.url;
+  const pdf = item.dbPayload?.pdf || {};
+  const pdfUrl = pdf.url;
+  const isSigned = pdf.signed === true;
   return (
     <div className="rounded-xl border border-slate-200 bg-white overflow-hidden min-h-[620px]">
       <div className="px-3 py-2 border-b border-slate-100 flex items-center gap-2">
         <FileText size={15} className="text-slate-400" />
-        <span className="text-sm font-semibold text-slate-700">{item.dbPayload?.pdf?.fileName || 'Order PDF'}</span>
+        <span className="text-sm font-semibold text-slate-700">{pdf.fileName || 'Order PDF'}</span>
+        {(pdf.fileName || pdfUrl) && (
+          <span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] font-black uppercase ${isSigned ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+            {isSigned ? 'signed' : 'unsigned'}
+          </span>
+        )}
       </div>
       {pdfUrl ? (
         <iframe title="Order PDF" src={pdfUrl} className="w-full h-[580px] bg-slate-50" />

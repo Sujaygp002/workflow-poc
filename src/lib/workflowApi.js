@@ -1,6 +1,9 @@
 export async function startBulkUploadRun({
   workbook,
   pdfs = [],
+  unsignedZip = null,
+  signedZip = null,
+  // Back-compat alias: orderZip == unsigned order PDFs.
   orderZip = null,
   sourceLabel,
   areaId,
@@ -12,7 +15,9 @@ export async function startBulkUploadRun({
   const form = new FormData();
   form.append('workbook', workbook);
   pdfs.forEach((pdf) => form.append('pdfs', pdf));
-  if (orderZip) form.append('orderZip', orderZip);
+  const unsigned = unsignedZip || orderZip;
+  if (unsigned) form.append('unsignedZip', unsigned);
+  if (signedZip) form.append('signedZip', signedZip);
   if (sourceLabel) form.append('sourceLabel', sourceLabel);
   if (areaId) form.append('areaId', areaId);
   if (hhahId) form.append('hhahId', hhahId);
@@ -222,8 +227,9 @@ export function dbWorkItemToAction(item) {
       decisions: item.decisions,
       missingFields: item.output?.missingFields || [],
       pdf: {
-        fileName: item.pdf_file_name,
-        url: item.pdf_blob_url,
+        fileName: item.pdf_file_name || item.extraction_payload?.pdf?.fileName,
+        url: item.pdf_blob_url || item.extraction_payload?.pdf?.blobUrl,
+        signed: item.extraction_payload?.pdf?.signed === true,
       },
     },
   };

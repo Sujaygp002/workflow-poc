@@ -37,9 +37,11 @@ function DiamondCondition({ label }) {
 
 export default function Triggers() {
   const workbookRef = useRef(null);
-  const zipRef = useRef(null);
+  const unsignedZipRef = useRef(null);
+  const signedZipRef = useRef(null);
   const [workbook, setWorkbook] = useState(null);
-  const [zip, setZip] = useState(null);
+  const [unsignedZip, setUnsignedZip] = useState(null);
+  const [signedZip, setSignedZip] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -56,7 +58,8 @@ export default function Triggers() {
     try {
       const result = await startBulkUploadRun({
         workbook,
-        orderZip: zip,
+        unsignedZip,
+        signedZip,
         sourceLabel: workbook.name,
         areaName: DEFAULT_AREA_NAME,
         areaType: DEFAULT_AREA_TYPE,
@@ -121,7 +124,7 @@ export default function Triggers() {
           {CONDITIONS.map((condition) => <DiamondCondition key={condition} label={condition} />)}
         </div>
 
-        <form onSubmit={fireTrigger} className="mt-5 grid lg:grid-cols-[1fr_1fr_auto] gap-3 items-end">
+        <form onSubmit={fireTrigger} className="mt-5 grid lg:grid-cols-[1fr_1fr_1fr_auto] gap-3 items-end">
           <label className="block">
             <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Patient + order Excel</span>
             <button
@@ -136,16 +139,29 @@ export default function Triggers() {
           </label>
 
           <label className="block">
-            <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Order PDFs ZIP</span>
+            <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Unsigned order PDFs ZIP</span>
             <button
               type="button"
-              onClick={() => zipRef.current?.click()}
+              onClick={() => unsignedZipRef.current?.click()}
               className="mt-1 w-full flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-left"
             >
               <FileArchive size={18} className="text-amber-600" />
-              <span className="text-sm text-slate-700 truncate">{zip?.name || 'Choose .zip file'}</span>
+              <span className="text-sm text-slate-700 truncate">{unsignedZip?.name || 'Choose .zip file'}</span>
             </button>
-            <input ref={zipRef} type="file" accept=".zip" className="hidden" onChange={(event) => setZip(event.target.files?.[0] || null)} />
+            <input ref={unsignedZipRef} type="file" accept=".zip" className="hidden" onChange={(event) => setUnsignedZip(event.target.files?.[0] || null)} />
+          </label>
+
+          <label className="block">
+            <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Signed order PDFs ZIP</span>
+            <button
+              type="button"
+              onClick={() => signedZipRef.current?.click()}
+              className="mt-1 w-full flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-left"
+            >
+              <FileArchive size={18} className="text-emerald-600" />
+              <span className="text-sm text-slate-700 truncate">{signedZip?.name || 'Choose .zip file'}</span>
+            </button>
+            <input ref={signedZipRef} type="file" accept=".zip" className="hidden" onChange={(event) => setSignedZip(event.target.files?.[0] || null)} />
           </label>
 
           <button disabled={uploading} className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-violet-700 disabled:opacity-60">
