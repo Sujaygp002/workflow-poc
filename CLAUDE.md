@@ -66,6 +66,15 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-14** — Collapsed `wf-area-onboarding` from 6 steps to 1 (`area.uploadMonitor`).
+  Trigger changed from `onboarding_success` to `time_interval` (every 10 seconds). The single
+  "HHAH Upload Monitor" step encapsulates all internal actions (check HHAHs, send notification
+  to HHAH login page, wait for next tick) as `monitorActions` metadata. Orchestrator run card
+  now shows a "View" button that toggles the HHAH upload status detail panel (previously always
+  visible); button label changes to "Hide" when open. The START cap shows "every 10s" for
+  time-triggered workflows. Removed the 6 old area task stubs and their 4 `evaluateCondition`
+  branches from `taskRegistry.js`.
+
 - **2026-06-13** — Workflows page updated to use the same flowchart renderer as the Orchestrator.
   Extracted shared components (`ACTOR`, `actorOf`, `stepStats`, `DecisionDiamond`, `StepInfo`,
   `StepNode`, `Connector`, `WorkflowFlow`, `TriggerChainConnector`) into new

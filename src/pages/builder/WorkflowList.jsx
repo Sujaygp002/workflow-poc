@@ -47,7 +47,9 @@ function WorkflowCard({ wf }) {
             <div className="flex items-center gap-2 mt-2 flex-wrap">
               <span className="text-xs text-slate-400">{steps.length} steps</span>
               {wf.trigger?.type && (
-                <span className="text-[11px] font-mono text-slate-400">trigger: {wf.trigger.type}</span>
+                <span className="text-[11px] font-mono text-slate-400">
+                  trigger: {wf.trigger.type}{wf.trigger.intervalSeconds ? ` · every ${wf.trigger.intervalSeconds}s` : ''}
+                </span>
               )}
             </div>
           </div>
@@ -63,7 +65,7 @@ function WorkflowCard({ wf }) {
       {showFlow && (
         <div className="border-t border-slate-100 bg-slate-50/40 overflow-x-auto p-4">
           <div className="mx-auto w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">
-            START · {wf.trigger?.id || wf.trigger?.type || 'trigger'}
+            START · {wf.trigger?.intervalSeconds ? `every ${wf.trigger.intervalSeconds}s` : (wf.trigger?.id || wf.trigger?.type || 'trigger')}
           </div>
           <Connector />
           {/* tasks=[] → static definition view with no live run counts */}

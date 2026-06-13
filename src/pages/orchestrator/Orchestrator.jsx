@@ -17,7 +17,7 @@ function AreaIntakeSubPanel({ areas, loadingAreaId, onRunCheck }) {
   if (!areas.length) return null;
   return (
     <div className="mt-4 border-t border-slate-100 pt-4">
-      <div className="mb-2 text-[11px] font-black uppercase tracking-wide text-slate-400">Area Intake Status</div>
+      <div className="mb-2 text-[11px] font-black uppercase tracking-wide text-slate-400">Monitor Detail — HHAH Upload Status</div>
       <div className="grid gap-3 lg:grid-cols-2">
         {areas.map((area) => {
           const status = area.check?.status || 'monitoring';
@@ -68,10 +68,10 @@ function AreaIntakeSubPanel({ areas, loadingAreaId, onRunCheck }) {
                 type="button"
                 onClick={() => onRunCheck(area.id)}
                 disabled={loadingAreaId === area.id || missing.length === 0}
-                className="mt-3 inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                className="mt-3 inline-flex items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-bold text-violet-700 hover:bg-violet-100 disabled:opacity-50"
               >
                 <RefreshCw size={12} className={loadingAreaId === area.id ? 'animate-spin' : ''} />
-                Simulate 24h check
+                Send Notification to HHAH Login
               </button>
             </div>
           );
@@ -84,18 +84,23 @@ function AreaIntakeSubPanel({ areas, loadingAreaId, onRunCheck }) {
 // A single workflow run rendered as the clean flowchart, with run summary.
 function RunCard({ run, onDelete, areas, loadingAreaId, onRunCheck }) {
   const [open, setOpen] = useState(true);
+  const [areaDetailOpen, setAreaDetailOpen] = useState(false);
   const definition = run.definition || {};
   const tasks = run.tasks || [];
   const totalManual = tasks.filter((t) => t.status === 'active' && t.actor === 'human').length;
   const totalRan = tasks.filter((t) => t.status !== 'pending' && t.status !== 'skipped').length;
   const items = run.total_items || 0;
   const isAreaOnboarding = run.workflow_id === 'wf-area-onboarding';
+  const hasAreaData = isAreaOnboarding && areas && areas.length > 0;
 
   const statusTone = run.status === 'completed'
     ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
     : run.status === 'failed'
       ? 'bg-rose-50 text-rose-700 border-rose-200'
       : 'bg-amber-50 text-amber-700 border-amber-200';
+
+  // Timer interval badge for time-triggered workflows
+  const intervalSeconds = definition.trigger?.intervalSeconds;
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -104,6 +109,11 @@ function RunCard({ run, onDelete, areas, loadingAreaId, onRunCheck }) {
           <div className="flex items-center gap-2">
             <span className="text-base font-black text-slate-800">{definition.name || run.workflow_id}</span>
             <span className="font-mono text-[11px] text-slate-400">{run.workflow_id}</span>
+            {intervalSeconds && (
+              <span className="flex items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-bold text-violet-700">
+                <Clock size={10} /> every {intervalSeconds}s
+              </span>
+            )}
           </div>
           <div className="mt-0.5 text-xs text-slate-500">
             {run.source_label || '—'} · {new Date(run.created_at).toLocaleString()}
@@ -115,6 +125,14 @@ function RunCard({ run, onDelete, areas, loadingAreaId, onRunCheck }) {
           <span className="rounded-full border border-slate-200 px-2.5 py-1 text-[11px] font-semibold text-slate-600">{totalRan} task run(s)</span>
           {totalManual > 0 && (
             <span className="rounded-full border border-pink-200 bg-pink-50 px-2.5 py-1 text-[11px] font-black text-pink-700">{totalManual} manual to do</span>
+          )}
+          {hasAreaData && (
+            <button
+              onClick={() => setAreaDetailOpen((v) => !v)}
+              className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-bold transition-colors ${areaDetailOpen ? 'border-violet-400 bg-violet-600 text-white' : 'border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100'}`}
+            >
+              <Activity size={12} /> {areaDetailOpen ? 'Hide' : 'View'}
+            </button>
           )}
           <button
             onClick={() => onDelete(run)}
@@ -128,12 +146,12 @@ function RunCard({ run, onDelete, areas, loadingAreaId, onRunCheck }) {
       {open && (
         <div className="overflow-x-auto p-4">
           <div className="mx-auto w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">
-            START · {definition.trigger?.id || 'trigger'}
+            START · {intervalSeconds ? `every ${intervalSeconds}s` : (definition.trigger?.id || 'trigger')}
           </div>
           <Connector />
           <WorkflowFlow definition={definition} tasks={tasks} />
           <div className="mx-auto mt-1 w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">END</div>
-          {isAreaOnboarding && areas && areas.length > 0 && (
+          {hasAreaData && areaDetailOpen && (
             <AreaIntakeSubPanel areas={areas} loadingAreaId={loadingAreaId} onRunCheck={onRunCheck} />
           )}
         </div>
