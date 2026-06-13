@@ -196,6 +196,71 @@ export function WorkflowFlow({ definition, tasks = [] }) {
   return <div className="flex flex-col items-center py-2">{rendered}</div>;
 }
 
+// ── Mega-task node ────────────────────────────────────
+// Collapses an entire workflow's steps into ONE box (e.g. "HHAH Upload Monitor").
+// Shows: name, (n) instance/run count, ⓘ info popover, and a "View" button that
+// expands the inner sub-task flowchart below the box.
+export function MegaTaskNode({ definition, tasks = [], megaTask }) {
+  const [open, setOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
+  // (n) = total times any inner task ran across all inner steps.
+  const ran = tasks.filter((t) => t.status !== 'pending' && t.status !== 'skipped').length;
+  const a = ACTOR.system;
+  const Icon = a.icon;
+  return (
+    <div className="flex flex-col items-center">
+      <div className={`relative w-[26rem] max-w-full rounded-xl border-2 ${a.ring} ${a.bg} px-3 py-3 shadow-sm`}>
+        <div className="flex items-start gap-2">
+          <span className={`mt-0.5 shrink-0 rounded-md ${a.badge} px-1.5 py-0.5 text-[9px] font-black uppercase text-white`}>{a.label}</span>
+          <Icon size={15} className={`mt-0.5 shrink-0 ${a.text}`} />
+          <span className={`text-sm font-black leading-tight ${a.text}`}>{megaTask?.name || definition.name}</span>
+          <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] font-mono text-slate-500">
+            <span title="times the inner tasks have run">({ran})</span>
+            <span className="relative">
+              <button
+                type="button"
+                onClick={() => setInfoOpen((v) => !v)}
+                className="flex h-5 w-5 items-center justify-center rounded-full text-slate-400 hover:bg-white/70 hover:text-slate-600"
+                title="What this task does"
+              >
+                <Info size={14} />
+              </button>
+              {infoOpen && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setInfoOpen(false)} />
+                  <div className="absolute right-0 top-6 z-40 w-72 rounded-xl border border-slate-200 bg-white p-3 text-left shadow-xl">
+                    <div className="text-sm font-bold text-slate-800">{megaTask?.name || definition.name}</div>
+                    <div className="mt-1 text-[11px] leading-snug text-slate-600">
+                      {megaTask?.info || definition.description}
+                    </div>
+                  </div>
+                </>
+              )}
+            </span>
+          </span>
+        </div>
+        <div className="mt-2 flex justify-center">
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className={`flex items-center gap-1.5 rounded-lg border px-3 py-1 text-xs font-bold transition-colors ${open ? 'border-sky-400 bg-sky-600 text-white' : 'border-sky-200 bg-white text-sky-700 hover:bg-sky-50'}`}
+          >
+            {open ? 'Hide tasks' : 'View'} {open ? '▲' : '▼'}
+          </button>
+        </div>
+      </div>
+      {open && (
+        <div className="mt-2 w-full rounded-2xl border-2 border-dashed border-sky-200 bg-sky-50/40 p-3">
+          <div className="mb-1 text-center text-[10px] font-black uppercase tracking-wide text-sky-400">
+            Inside HHAH Upload Monitor
+          </div>
+          <WorkflowFlow definition={definition} tasks={tasks} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── "after end →" chain connector between trigger-chain workflows ──
 export function TriggerChainConnector({ triggerNum, label }) {
   return (

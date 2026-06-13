@@ -8,6 +8,7 @@ import {
 } from '../../lib/workflowApi';
 import {
   Connector,
+  MegaTaskNode,
   TriggerChainConnector,
   WorkflowFlow,
 } from '../../components/WorkflowDefinitionFlow';
@@ -131,7 +132,12 @@ function RunCard({ run, onDelete, areas, loadingAreaId, onRunCheck }) {
             START · {definition.trigger?.id || 'trigger'}
           </div>
           <Connector />
-          <WorkflowFlow definition={definition} tasks={tasks} />
+          {isAreaOnboarding ? (
+            <MegaTaskNode definition={definition} tasks={tasks} megaTask={definition.megaTask} />
+          ) : (
+            <WorkflowFlow definition={definition} tasks={tasks} />
+          )}
+          <Connector />
           <div className="mx-auto mt-1 w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">END</div>
           {isAreaOnboarding && areas && areas.length > 0 && (
             <AreaIntakeSubPanel areas={areas} loadingAreaId={loadingAreaId} onRunCheck={onRunCheck} />
@@ -324,16 +330,21 @@ export default function Orchestrator() {
             <RunCard key={run.id} run={run} {...runCardProps} />
           ))}
 
-          {/* ── Trigger 2: HHAH Uploads Documents (wf7) ── */}
+          {/* ── Trigger 2: HHAH Uploads Documents (wf7) — independent, not chained from Trigger 1 ── */}
           {wf7Runs.filter(filterRun).length > 0 && (
-            <>
-              <TriggerChainConnector triggerNum={2} label="HHAH Uploads Documents" />
+            <div className="mt-8">
+              <div className="mb-3 flex items-center gap-2">
+                <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-black uppercase tracking-wide text-sky-700">
+                  Trigger 2 · HHAH Uploads Documents
+                </span>
+                <span className="text-[11px] text-slate-400">fires independently when an HHAH uploads</span>
+              </div>
               <div className="space-y-4">
                 {wf7Runs.filter(filterRun).map((run) => (
                   <RunCard key={run.id} run={run} {...runCardProps} />
                 ))}
               </div>
-            </>
+            </div>
           )}
 
           {/* ── Trigger 3: Document Signing Follow-up ── */}

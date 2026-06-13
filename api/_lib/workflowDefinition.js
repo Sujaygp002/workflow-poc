@@ -8,28 +8,26 @@ export const WF_AREA_ONBOARDING_DEFINITION = {
     type: 'onboarding_success',
   },
   conditions: {
-    onboarding_successful: 'statistical area and expected HHAHs are configured',
     upload_received_within_24h: 'expected HHAH uploaded Excel + PDF ZIP within 24 hours',
     upload_missing_after_24h: 'expected HHAH did not upload within 24 hours',
     notification_sent: 'missing-upload notification was sent/logged for the HHAH',
   },
+  // The visible flowchart collapses these steps into one "HHAH Upload Monitor"
+  // mega-task box (see `megaTask` below). The View button on that box expands
+  // this inner sub-task flowchart.
+  megaTask: {
+    id: 'area-monitor',
+    name: 'HHAH Upload Monitor',
+    info: 'This task checks every onboarded HHAH for whether they have uploaded their documents. If an HHAH has not uploaded, it notifies them.',
+  },
   steps: [
-    {
-      id: 'area-s1',
-      actor: 'system',
-      taskKey: 'area.onboardingSuccess',
-      name: 'Onboarding Successful',
-      description: 'Area/HHAH onboarding is complete; start the daily intake monitor.',
-      condition: 'onboarding_successful',
-      preReq: [],
-    },
     {
       id: 'area-s2',
       actor: 'system',
       taskKey: 'area.monitorExpectedUploads',
       name: 'Monitor Expected HHAH Uploads',
       description: 'Track each expected HHAH in the selected micro/metro statistical area for the daily upload window.',
-      preReq: ['area-s1'],
+      preReq: [],
     },
     {
       id: 'area-s3',

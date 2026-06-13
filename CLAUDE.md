@@ -66,6 +66,23 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-14** — Reframed Trigger 1 (`wf-area-onboarding`) as a single mega-task and cut the
+  T1→T2 chain link.
+  - Removed the **Onboarding Successful** step (`area-s1` / `area.onboardingSuccess`) and the
+    `onboarding_successful` condition from the workflow definition and `taskRegistry.js`.
+  - Added a `megaTask` descriptor (`id`, `name: 'HHAH Upload Monitor'`, `info`) to
+    `WF_AREA_ONBOARDING_DEFINITION`. The remaining steps (`area-s2`..`area-s6`) are now the
+    *inner* steps; `area-s2` preReq cleared to `[]`.
+  - New `MegaTaskNode` in `WorkflowDefinitionFlow.jsx`: renders the whole area workflow as ONE
+    SYS box showing the task name, an `(n)` inner-run count, an ⓘ popover ("checks every
+    onboarded HHAH for uploads; notifies those who haven't"), and a **View** button that expands
+    the inner sub-task flowchart (`WorkflowFlow`) in a dashed panel.
+  - Orchestrator + Workflows page both render area-onboarding via `MegaTaskNode` (gated on
+    `definition.megaTask`); other workflows still use `WorkflowFlow`.
+  - **Cut the Trigger 1 → Trigger 2 connector.** wf7 now renders under a standalone
+    "Trigger 2 · HHAH Uploads Documents — fires independently" section header instead of a
+    `TriggerChainConnector`. Trigger 2 → Trigger 3 chain is unchanged.
+
 - **2026-06-13** — Workflows page updated to use the same flowchart renderer as the Orchestrator.
   Extracted shared components (`ACTOR`, `actorOf`, `stepStats`, `DecisionDiamond`, `StepInfo`,
   `StepNode`, `Connector`, `WorkflowFlow`, `TriggerChainConnector`) into new

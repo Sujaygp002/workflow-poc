@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, GitBranch, RefreshCw } from 'lucide-react';
 import { dbWorkflowToWorkflow, fetchWorkflowDefinitions } from '../../lib/workflowApi';
 import {
   Connector,
+  MegaTaskNode,
   TriggerChainConnector,
   WorkflowFlow,
 } from '../../components/WorkflowDefinitionFlow';
@@ -67,7 +68,12 @@ function WorkflowCard({ wf }) {
           </div>
           <Connector />
           {/* tasks=[] → static definition view with no live run counts */}
-          <WorkflowFlow definition={wf} tasks={[]} />
+          {wf.megaTask ? (
+            <MegaTaskNode definition={wf} tasks={[]} megaTask={wf.megaTask} />
+          ) : (
+            <WorkflowFlow definition={wf} tasks={[]} />
+          )}
+          <Connector />
           <div className="mx-auto mt-1 w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">END</div>
         </div>
       )}
@@ -76,10 +82,15 @@ function WorkflowCard({ wf }) {
 }
 
 // Chain order for the Workflows page.
+// Trigger 1 (area monitor) is NOT chained to Trigger 2 — it runs independently
+// and only notifies HHAHs. Trigger 2 → Trigger 3 remains a real chain.
 const CHAIN_ORDER = ['wf-area-onboarding', 'wf7', 'wf-signing'];
 const CHAIN_CONNECTOR = {
-  'wf7':        { triggerNum: 2, label: 'HHAH Uploads Documents' },
   'wf-signing': { triggerNum: 3, label: 'Document Signing Follow-up' },
+};
+// Workflows that begin a new standalone chain (shown with a section divider, not a connector).
+const STANDALONE_HEADER = {
+  'wf7': { triggerNum: 2, label: 'HHAH Uploads Documents', note: 'fires independently when an HHAH uploads' },
 };
 
 export default function WorkflowList() {
@@ -132,9 +143,17 @@ export default function WorkflowList() {
         </div>
       ) : (
         <div>
-          {/* Trigger chain: T1 → T2 → T3 */}
+          {/* Trigger 1 standalone · Trigger 2 → Trigger 3 chain */}
           {chained.map((wf) => (
             <div key={wf.id}>
+              {STANDALONE_HEADER[wf.id] && (
+                <div className="mt-8 mb-3 flex items-center gap-2">
+                  <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-black uppercase tracking-wide text-sky-700">
+                    Trigger {STANDALONE_HEADER[wf.id].triggerNum} · {STANDALONE_HEADER[wf.id].label}
+                  </span>
+                  <span className="text-[11px] text-slate-400">{STANDALONE_HEADER[wf.id].note}</span>
+                </div>
+              )}
               {CHAIN_CONNECTOR[wf.id] && (
                 <TriggerChainConnector
                   triggerNum={CHAIN_CONNECTOR[wf.id].triggerNum}
