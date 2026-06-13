@@ -9,6 +9,7 @@ import {
   findWorkflowRunBySourceLabel,
   getActiveWorkflow,
   linkHhahToArea,
+  updateItem,
   upsertStatisticalArea,
   upsertUser,
   upsertWorkflowDefinition,
@@ -127,12 +128,23 @@ async function seedAreaOnboardingRun() {
     referencePayload: {},
     extractionPayload: { area: 'Boise-Ada Metro Intake', trigger: 'onboarding_successful' },
   });
+  // Seed a missing-upload scenario so the manual "Notification Trigger — Missing
+  // Upload" email task (area-s4) surfaces in the worker bucket. Attach the HHAH so
+  // the email composer prefills the recipient.
+  const hhah = await findHhahByName('Boise Home Health');
+  await updateItem(item.id, {
+    decisions: { upload_missing_after_24h: true, upload_received_within_24h: false },
+    referencePayload: hhah
+      ? { HHAH: { name: hhah.name, contact_info: hhah.contact_info || {} } }
+      : { HHAH: { name: 'Boise Home Health' } },
+  });
   await createTaskRunsForItem({
     runId: run.id,
     itemId: item.id,
     steps: workflow.definition.steps,
   });
-  // Run automation so the early system steps complete; area-s6 (wait) stays running.
+  // Run automation: system steps complete, area-s4 pauses as an active human task
+  // (manual email send), and area-s6 (wait) stays running.
   await runWorkflowAutomation({ runId: run.id, definition: workflow.definition });
 }
 

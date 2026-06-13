@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { AlertCircle, ArrowLeft, CheckCircle2, Clock, FileText, Inbox, Loader2, RefreshCw } from 'lucide-react';
+import { AlertCircle, ArrowLeft, CheckCircle2, Clock, FileText, Inbox, Loader2, Mail, RefreshCw } from 'lucide-react';
 import { getUsers } from '../../store';
 import { completeDbWorkItem, dbWorkItemToAction, fetchWorkItems } from '../../lib/workflowApi';
 
@@ -265,17 +265,82 @@ function PdfPanel({ item }) {
   );
 }
 
+// Manual missing-upload email composer (area.sendMissingUploadNotification).
+// The person sends the email here; the system then posts the on-page notification.
+function MissingUploadEmailPanel({ item, onSend, loading }) {
+  const hhah = item.dbPayload?.references?.HHAH || {};
+  const defaultTo = hhah.contact_info?.email || '';
+  const hhahName = hhah.name || item.dbPayload?.area || 'the HHAH';
+  const [to, setTo] = useState(defaultTo);
+  const [subject, setSubject] = useState('Missing daily intake upload');
+  const [body, setBody] = useState(
+    `Hi ${hhahName},\n\nWe have not received your daily Excel + PDF ZIP upload within the 24-hour window. Please upload your documents as soon as possible.\n\nThank you.`,
+  );
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+        <span className="font-bold">{hhahName}</span> has not uploaded within 24 hours. Send the missing-upload email below. The system will also post a notification to the HHAH login page.
+      </div>
+      <label className="block">
+        <span className="text-xs font-bold uppercase tracking-wide text-slate-500">To</span>
+        <input
+          value={to}
+          onChange={(e) => setTo(e.target.value)}
+          placeholder="hhah email address"
+          className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+        />
+      </label>
+      <label className="block">
+        <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Subject</span>
+        <input
+          value={subject}
+          onChange={(e) => setSubject(e.target.value)}
+          className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+        />
+      </label>
+      <label className="block">
+        <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Message</span>
+        <textarea
+          rows={6}
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          className="mt-1 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+        />
+      </label>
+      <button
+        onClick={() => onSend({ recipient: to, subject, notes: body })}
+        disabled={loading}
+        className="inline-flex items-center gap-2 rounded-xl bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {loading ? <Loader2 size={16} className="animate-spin" /> : <Mail size={16} />}
+        {loading ? 'Sending...' : 'Send email & continue'}
+      </button>
+    </div>
+  );
+}
+
 function ActionCard({ item, onComplete }) {
   const [open, setOpen] = useState(false);
   const [notes, setNotes] = useState('');
   const [patch, setPatch] = useState(() => buildInitialPatch(item));
   const [loading, setLoading] = useState(false);
   const missingFields = item.dbPayload?.missingFields || [];
+  const isMissingUploadEmail = item.taskKind === 'area.sendMissingUploadNotification';
 
   async function handleComplete() {
     setLoading(true);
     try {
       await onComplete(item, notes, payloadForSubmit(patch));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSendEmail(payload) {
+    setLoading(true);
+    try {
+      await onComplete(item, payload.notes, payload);
     } finally {
       setLoading(false);
     }
@@ -316,31 +381,35 @@ function ActionCard({ item, onComplete }) {
 
       {open && (
         <div className="border-t border-slate-100 bg-slate-50/50 p-4">
-          <div className="grid xl:grid-cols-[minmax(0,1fr)_520px] gap-4">
-            <div className="space-y-3">
-              <RecordSummary item={item} missingFields={missingFields} />
-              <MissingFieldsEditor item={item} patch={patch} setPatch={setPatch} missingFields={missingFields} />
-              <label className="block">
-                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Notes</span>
-                <textarea
-                  className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 resize-none bg-white"
-                  rows={3}
-                  value={notes}
-                  onChange={(event) => setNotes(event.target.value)}
-                  placeholder="Add review notes or values found in the PDF."
-                />
-              </label>
-              <button
-                onClick={handleComplete}
-                disabled={loading}
-                className="inline-flex items-center gap-2 px-4 py-2.5 bg-green-600 text-white rounded-xl hover:bg-green-700 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {loading ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
-                {loading ? 'Saving...' : 'Save fields & continue'}
-              </button>
+          {isMissingUploadEmail ? (
+            <MissingUploadEmailPanel item={item} onSend={handleSendEmail} loading={loading} />
+          ) : (
+            <div className="grid xl:grid-cols-[minmax(0,1fr)_520px] gap-4">
+              <div className="space-y-3">
+                <RecordSummary item={item} missingFields={missingFields} />
+                <MissingFieldsEditor item={item} patch={patch} setPatch={setPatch} missingFields={missingFields} />
+                <label className="block">
+                  <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Notes</span>
+                  <textarea
+                    className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 resize-none bg-white"
+                    rows={3}
+                    value={notes}
+                    onChange={(event) => setNotes(event.target.value)}
+                    placeholder="Add review notes or values found in the PDF."
+                  />
+                </label>
+                <button
+                  onClick={handleComplete}
+                  disabled={loading}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 bg-green-600 text-white rounded-xl hover:bg-green-700 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {loading ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+                  {loading ? 'Saving...' : 'Save fields & continue'}
+                </button>
+              </div>
+              <PdfPanel item={item} />
             </div>
-            <PdfPanel item={item} />
-          </div>
+          )}
         </div>
       )}
     </div>

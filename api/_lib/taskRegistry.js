@@ -758,8 +758,21 @@ export const taskRegistry = {
   // ── Area Upload Monitor tasks ────────────────────────────────────────────
   'area.monitorExpectedUploads': async () => ({ ok: true, output: { monitoring: true } }),
   'area.continueUploadWorkflow': async () => ({ ok: true, output: { continued: true } }),
-  'area.sendMissingUploadNotification': async () => ({ ok: true, output: { notified: true } }),
-  'area.recordNotificationStatus': async () => ({ ok: true, output: { recorded: true } }),
+  // Manual: a person sends the missing-upload email to the HHAH, then the system
+  // posts the on-page notification (area.recordNotificationStatus) right after.
+  'area.sendMissingUploadNotification': async ({ item, payload }) => {
+    const decisions = setDecisions(item, { notification_sent: true });
+    await updateItem(item.id, { decisions });
+    return {
+      ok: true,
+      output: {
+        email_sent: true,
+        recipient: payload?.recipient || item.reference_payload?.HHAH?.contact_info?.email || '',
+        notes: payload?.notes || '',
+      },
+    };
+  },
+  'area.recordNotificationStatus': async () => ({ ok: true, output: { recorded: true, posted_to_login_page: true } }),
   'area.waitForHhahUpload': async () => ({ ok: true, output: { waiting: true } }),
 };
 

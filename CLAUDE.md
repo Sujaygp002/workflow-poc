@@ -66,6 +66,20 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-14** — Made **Notification Trigger — Missing Upload** (`area-s4`) a manual task.
+  - `area-s4` actor `system` → `human`: a person now sends the missing-upload **email** to the
+    HHAH. Its task fn (`area.sendMissingUploadNotification`) records `email_sent` + the
+    `notification_sent` decision so `area-s5` proceeds.
+  - `area-s5` (Record Notification Status, system) still posts the **on-page notification** to
+    the HHAH login page (existing `missing_upload_notifications` mechanism via the area check),
+    as before.
+  - WorkBucket: new `MissingUploadEmailPanel` (To/Subject/Message + "Send email & continue")
+    renders for `area.sendMissingUploadNotification` instead of the patient/order
+    RecordSummary/PdfPanel. `Mail` icon added.
+  - seed: the seeded area run now carries `upload_missing_after_24h: true` and a Boise Home
+    Health HHAH reference, so the manual email task surfaces (area-s2 completed, area-s3
+    skipped, **area-s4 active/human**, area-s5/s6 pending). DB reset + reseeded.
+
 - **2026-06-14** — Added a per-run **object created/updated side box** and surfaced
   missing-upload **notifications on the HHAH login page**.
   - `WorkflowDefinitionFlow.jsx`: new `runObjectStats(run)` aggregates each run's task-row
