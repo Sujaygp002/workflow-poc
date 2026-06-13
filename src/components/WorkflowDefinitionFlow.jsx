@@ -150,8 +150,9 @@ export function Connector() {
 // Conditional steps get a decision diamond; adjacent mutual-exclusive siblings
 // (same preReq + both conditional) render side-by-side under one diamond.
 // `tasks` is an array of task-run rows for live stats; pass [] for static view.
-export function WorkflowFlow({ definition, tasks = [] }) {
-  const steps = definition.steps || [];
+// `steps` overrides definition.steps (used to render a mega-group's subset).
+export function WorkflowFlow({ definition, tasks = [], steps: stepsOverride }) {
+  const steps = stepsOverride || definition.steps || [];
   const rendered = [];
 
   for (let i = 0; i < steps.length; i += 1) {
@@ -197,23 +198,33 @@ export function WorkflowFlow({ definition, tasks = [] }) {
 }
 
 // ── Mega-task node ────────────────────────────────────
-// Collapses an entire workflow's steps into ONE box (e.g. "HHAH Upload Monitor").
-// Shows: name, (n) instance/run count, ⓘ info popover, and a "View" button that
-// expands the inner sub-task flowchart below the box.
-export function MegaTaskNode({ definition, tasks = [], megaTask }) {
+// Collapses a set of steps into ONE box (e.g. "HHAH Upload Monitor",
+// "Updating Patient Object"). Shows: name, (n) inner-run count, ⓘ info popover,
+// and a "View" button that expands the inner sub-task flowchart below the box.
+//
+// Accepts either a `megaTask` ({name, info}) for whole-definition collapse, or
+// explicit `name`/`info`/`steps` for a single group within a multi-group workflow.
+export function MegaTaskNode({ definition, tasks = [], megaTask, name, info, steps }) {
   const [open, setOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
-  // (n) = total times any inner task ran across all inner steps.
-  const ran = tasks.filter((t) => t.status !== 'pending' && t.status !== 'skipped').length;
+
+  const innerSteps = steps || definition.steps || [];
+  const boxName = name || megaTask?.name || definition.name;
+  const boxInfo = info || megaTask?.info || definition.description;
+  const innerIds = new Set(innerSteps.map((s) => s.id));
+  // (n) = total times any inner task ran across this group's steps.
+  const ran = tasks.filter(
+    (t) => innerIds.has(t.step_id) && t.status !== 'pending' && t.status !== 'skipped',
+  ).length;
   const a = ACTOR.system;
   const Icon = a.icon;
   return (
-    <div className="flex flex-col items-center">
+    <div className="flex w-full flex-col items-center">
       <div className={`relative w-[26rem] max-w-full rounded-xl border-2 ${a.ring} ${a.bg} px-3 py-3 shadow-sm`}>
         <div className="flex items-start gap-2">
           <span className={`mt-0.5 shrink-0 rounded-md ${a.badge} px-1.5 py-0.5 text-[9px] font-black uppercase text-white`}>{a.label}</span>
           <Icon size={15} className={`mt-0.5 shrink-0 ${a.text}`} />
-          <span className={`text-sm font-black leading-tight ${a.text}`}>{megaTask?.name || definition.name}</span>
+          <span className={`text-sm font-black leading-tight ${a.text}`}>{boxName}</span>
           <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] font-mono text-slate-500">
             <span title="times the inner tasks have run">({ran})</span>
             <span className="relative">
@@ -229,10 +240,8 @@ export function MegaTaskNode({ definition, tasks = [], megaTask }) {
                 <>
                   <div className="fixed inset-0 z-30" onClick={() => setInfoOpen(false)} />
                   <div className="absolute right-0 top-6 z-40 w-72 rounded-xl border border-slate-200 bg-white p-3 text-left shadow-xl">
-                    <div className="text-sm font-bold text-slate-800">{megaTask?.name || definition.name}</div>
-                    <div className="mt-1 text-[11px] leading-snug text-slate-600">
-                      {megaTask?.info || definition.description}
-                    </div>
+                    <div className="text-sm font-bold text-slate-800">{boxName}</div>
+                    <div className="mt-1 text-[11px] leading-snug text-slate-600">{boxInfo}</div>
                   </div>
                 </>
               )}
@@ -252,11 +261,38 @@ export function MegaTaskNode({ definition, tasks = [], megaTask }) {
       {open && (
         <div className="mt-2 w-full rounded-2xl border-2 border-dashed border-sky-200 bg-sky-50/40 p-3">
           <div className="mb-1 text-center text-[10px] font-black uppercase tracking-wide text-sky-400">
-            Inside HHAH Upload Monitor
+            Inside {boxName}
           </div>
-          <WorkflowFlow definition={definition} tasks={tasks} />
+          <WorkflowFlow definition={definition} tasks={tasks} steps={innerSteps} />
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Mega-group flow ───────────────────────────────────
+// Renders a workflow whose steps are partitioned into `megaGroups` as a vertical
+// chain of MegaTaskNode boxes, one per group, with connectors between them.
+export function MegaGroupFlow({ definition, tasks = [] }) {
+  const groups = definition.megaGroups || [];
+  const stepsById = Object.fromEntries((definition.steps || []).map((s) => [s.id, s]));
+  return (
+    <div className="flex w-full flex-col items-center">
+      {groups.map((group, idx) => {
+        const groupSteps = (group.stepIds || []).map((id) => stepsById[id]).filter(Boolean);
+        return (
+          <div key={group.id} className="flex w-full flex-col items-center">
+            {idx > 0 && <Connector />}
+            <MegaTaskNode
+              definition={definition}
+              tasks={tasks}
+              name={group.name}
+              info={group.info}
+              steps={groupSteps}
+            />
+          </div>
+        );
+      })}
     </div>
   );
 }

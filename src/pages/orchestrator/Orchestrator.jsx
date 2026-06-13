@@ -8,6 +8,7 @@ import {
 } from '../../lib/workflowApi';
 import {
   Connector,
+  MegaGroupFlow,
   MegaTaskNode,
   TriggerChainConnector,
   WorkflowFlow,
@@ -132,7 +133,9 @@ function RunCard({ run, onDelete, areas, loadingAreaId, onRunCheck }) {
             START · {definition.trigger?.id || 'trigger'}
           </div>
           <Connector />
-          {isAreaOnboarding ? (
+          {definition.megaGroups ? (
+            <MegaGroupFlow definition={definition} tasks={tasks} />
+          ) : definition.megaTask ? (
             <MegaTaskNode definition={definition} tasks={tasks} megaTask={definition.megaTask} />
           ) : (
             <WorkflowFlow definition={definition} tasks={tasks} />

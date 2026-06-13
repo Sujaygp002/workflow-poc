@@ -73,7 +73,7 @@ export const WF7_DEFINITION = {
   description:
     'Ingest an uploaded Excel workbook and related order PDFs. For each patient-order row, parse Excel, use AI extraction when fields are missing, validate upload context, then create/update patient, admission object, episode object, and order records. A human reviews and confirms each assembled record.',
   trigger: {
-    id: 'trigger-7',
+    id: 'upload-patient-order-documents',
     type: 'file_upload',
     inputs: {
       workbook: { accepted: ['.xlsx'] },
@@ -84,6 +84,22 @@ export const WF7_DEFINITION = {
     over: 'patient_order_row',
     until: 'last patient & last order',
   },
+  // The visible flowchart collapses the steps into these two mega-task boxes.
+  // Each box has a View button that expands its inner sub-task flowchart.
+  megaGroups: [
+    {
+      id: 'wf7-g1',
+      name: 'Updating Patient Object',
+      info: 'Parses the Excel workbook, extracts any missing fields from order PDFs (AI + human), confirms HHAH upload context, then checks/creates/updates the Patient Unit and Patient Record.',
+      stepIds: ['wf7-s1', 'wf7-s2', 'wf7-s3', 'wf7-s4', 'wf7-s5', 'wf7-s12', 'wf7-s10', 'wf7-s14', 'wf7-s11', 'wf7-s30', 'wf7-s13', 'wf7-s15', 'wf7-s16'],
+    },
+    {
+      id: 'wf7-g2',
+      name: 'Update Admission, Episode, Order',
+      info: 'Checks/creates the Admission (by SOC), the Episode (by SOE/EOE), and the Order (by order number, skipping duplicates), then a human reviews the assembled Patient → Admission → Episode → Orders.',
+      stepIds: ['wf7-s24', 'wf7-s25', 'wf7-s31', 'wf7-s26', 'wf7-s27', 'wf7-s32', 'wf7-s17', 'wf7-s28', 'wf7-s29', 'wf7-s18', 'wf7-s19', 'wf7-s20', 'wf7-s21'],
+    },
+  ],
   conditions: {
     excel_row_complete: 'required Excel fields exist for patient, admission object, episode object, order, and HHAH upload context',
     excel_row_incomplete: 'one or more required Excel fields are missing',
@@ -394,6 +410,13 @@ export const WF_SIGNING_DEFINITION = {
     document_not_ready_for_signing: 'document is missing fields or PDF readiness checks',
     signed_within_48h: 'physician signed the document within 48 hours',
     signing_overdue: 'physician has not signed within 48 hours',
+  },
+  // The visible flowchart collapses all steps into one "Review Document For Signing"
+  // mega-task box. The View button expands the inner sub-task flowchart.
+  megaTask: {
+    id: 'sign-monitor',
+    name: 'Review Document For Signing',
+    info: 'Reviews whether the order document is ready for signing, sends it to the physician, waits up to 48 hours, then either marks the order signed or emails the physician an overdue reminder.',
   },
   steps: [
     {

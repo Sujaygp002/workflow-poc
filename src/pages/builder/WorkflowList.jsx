@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, GitBranch, RefreshCw } from 'lucide-react';
 import { dbWorkflowToWorkflow, fetchWorkflowDefinitions } from '../../lib/workflowApi';
 import {
   Connector,
+  MegaGroupFlow,
   MegaTaskNode,
   TriggerChainConnector,
   WorkflowFlow,
@@ -68,7 +69,9 @@ function WorkflowCard({ wf }) {
           </div>
           <Connector />
           {/* tasks=[] → static definition view with no live run counts */}
-          {wf.megaTask ? (
+          {wf.megaGroups ? (
+            <MegaGroupFlow definition={wf} tasks={[]} />
+          ) : wf.megaTask ? (
             <MegaTaskNode definition={wf} tasks={[]} megaTask={wf.megaTask} />
           ) : (
             <WorkflowFlow definition={wf} tasks={[]} />

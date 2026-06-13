@@ -66,6 +66,24 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-14** — Collapsed Trigger 2 (`wf7`) and Trigger 3 (`wf-signing`) into mega-tasks,
+  matching the Trigger 1 treatment.
+  - `wf7`: trigger id renamed `trigger-7` → `upload-patient-order-documents` (START cap now
+    reads "upload-patient-order-documents"). Added a `megaGroups` array partitioning the 26
+    steps into TWO mega-task boxes: **Updating Patient Object** (`wf7-s1`..`wf7-s16`: parse,
+    AI/human extraction, upload-context, patient unit/record) and **Update Admission, Episode,
+    Order** (`wf7-s24`..`wf7-s21`: admission/episode/order resolve + final review). Flow is
+    now `start → Updating Patient Object → Update Admission, Episode, Order → end`.
+  - `wf-signing`: added a `megaTask` descriptor; all 6 steps collapse into one **Review
+    Document For Signing** box. Flow is `start → Review Document For Signing → end`.
+  - `WorkflowDefinitionFlow.jsx`: `MegaTaskNode` generalised to accept explicit
+    `name`/`info`/`steps` (not just whole-definition `megaTask`); `WorkflowFlow` gained a
+    `steps` override; new `MegaGroupFlow` renders a `megaGroups` workflow as a vertical chain
+    of mega-task boxes with connectors. Each box keeps the `(n)` inner-run count (scoped to
+    the group's step ids), ⓘ info popover, and View button that expands the inner flowchart.
+  - Orchestrator + Workflows page route: `megaGroups` → `MegaGroupFlow`, `megaTask` →
+    `MegaTaskNode`, else `WorkflowFlow`.
+
 - **2026-06-14** — Reframed Trigger 1 (`wf-area-onboarding`) as a single mega-task and cut the
   T1→T2 chain link.
   - Removed the **Onboarding Successful** step (`area-s1` / `area.onboardingSuccess`) and the
