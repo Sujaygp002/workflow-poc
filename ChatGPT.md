@@ -19,6 +19,12 @@
   - Trigger 3: order document ready starts the signing follow-up workflow.
 - Upload workflow processing now runs patient instances in parallel instead of stopping the whole run on the first blocked patient. A blocked patient waits on human work while other patients continue.
 - wf7 no longer checks/branches on physician group or practitioner existence. PG/practitioner data can still be stored if present, but missing PG/NPI will not create a workflow task or block patient/order processing.
+- Latest wf7 object model:
+  - Patient Unit is the stable person identity keyed by name + DOB + MRN.
+  - Patient Record is the care context keyed by Patient Unit + HHAH + PG.
+  - A changed HHAH/PG creates a new Patient Record under the same Unit; unit-only changes update the existing Unit/Record.
+  - Admission is resolved after SOC is present, and Episode is resolved after SOE/EOE are present.
+  - Duplicate order numbers are skipped and logged; existing orders are not overwritten or deleted.
 
 ## HHH Portal
 
@@ -41,6 +47,7 @@
 - PDF matching rule:
   - PDF filename without `.pdf` must match `order_number` from the order sheet.
   - Example: order number `ORD-1001` should use `ORD-1001.pdf`.
+- Matched PDF metadata is stored on each workflow item as `extraction_payload.pdf`. New orders require both required order fields and a matched PDF before `order.create`; otherwise the row routes to `human.fixOrderFields`.
 - HHH portal uploads are currently scoped to `Boise-Ada Metro Intake` / `Boise Home Health` so the area monitor can show received vs missing uploads.
 
 ## New API Routes
@@ -100,8 +107,9 @@
 - `/worker` and `/worker/bucket/:userId` use the dummy users but show DB-assigned tasks only.
 - Worker task cards show matched order PDF side-by-side with the record.
 - Missing fields are highlighted and can be entered before completing the human task.
-- wf7 now treats Admission and Episode as explicit objects through the date-check branches only: duplicate standalone Admission/Episode reuse-create workflow boxes were removed, and object found/created status is captured during patient write.
+- wf7 now treats Admission and Episode as explicit objects through the date-check branches: `admission.resolve` writes/reuses Admission after SOC is ready, and `episode.resolve` writes/reuses Episode after SOE/EOE are ready.
 - `wf-signing` starts after a written order has an uploaded document. It checks signing readiness, routes document fixes to a human when needed, sends to physician, waits for the 48-hour signature check, then updates signed status or logs an overdue physician email.
+- Skipped duplicate orders do not start `wf-signing`; only newly written orders continue into the signing follow-up.
 - `/hhh-login` is a standalone route without the builder sidebar and is not shown inside FlowPOC navigation.
 - `/hhh-login` includes patient and order browsing after upload; order detail opens the matched PDF instead of JSON.
 
@@ -110,10 +118,9 @@
 - Environment values are currently hardcoded in `api/_lib/config.js` for personal testing.
 - For real production use, move secrets back to environment variables and rotate exposed keys.
 - Vercel Blob is used when `BLOB_READ_WRITE_TOKEN` is configured; otherwise uploads can still run but PDF blob storage is skipped.
-- Verification on 2026-06-13:
+- Verification notes from 2026-06-13:
   - `npm run lint` passed.
   - `npm run build` passed.
-  - `npm run db:migrate` applied `003_area_intake.sql`.
-  - `npm run db:seed` passed.
+  - Migration history was later collapsed into fresh `001_core_intake.sql`; use `npm run db:reset` only when a clean destructive reset is intended, then `npm run db:seed`.
   - Area monitor DB smoke tests passed for all-upload, one-missing, and late-upload-after-notification scenarios.
   - A full 10-patient/30-order DB smoke test was started but stopped because the current per-task Neon round trips were taking too long; temporary rows were cleaned up.

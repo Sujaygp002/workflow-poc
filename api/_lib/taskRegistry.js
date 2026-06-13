@@ -1,11 +1,12 @@
 import {
-  findAdmission,
-  findEpisode,
   findHhahByName,
   findOrder,
   findPatient,
+  findPatientUnit,
   insertAiExtraction,
   updateItem,
+  writeAdmissionBundle,
+  writeEpisodeBundle,
   writeOrderBundle,
   writePatientBundle,
 } from './repositories.js';
@@ -134,14 +135,63 @@ async function evaluateCompleteness(item) {
   };
 }
 
+// "Patient exists" (per complex.drawio) means the PERSON exists — i.e. the
+// stable Patient Unit (name + DOB + MRN) is already in the system. The Record
+// context (Unit + HHAH + PG) is evaluated separately to drive con1/con2.
 async function evaluatePatientExistence(item) {
-  const existing = await findPatient(item.patient_payload);
+  const unit = await findPatientUnit(item.patient_payload);
+  const record = await findPatient(item.patient_payload, item.reference_payload);
   const decisions = setDecisions(item, {
-    patient_exists: !!existing,
-    patient_not_exists: !existing,
+    patient_exists: !!unit,
+    patient_not_exists: !unit,
+    unit_exists: !!unit,
+    unit_not_exists: !unit,
+    record_exists: !!record,
   });
   await updateItem(item.id, { decisions });
-  return existing;
+  return { unit, record };
+}
+
+// When the patient (unit) exists, decide what changed:
+//   con1 — no Record for this HHAH/PG context yet → a NEW record is created.
+//   con2 — a Record for this context already exists → only unit fields changed,
+//          so the existing unit/record is updated.
+async function evaluateRecordChanges(item) {
+  if (item.decisions?.patient_exists === false || item.decisions?.patient_not_exists === true) {
+    const decisions = setDecisions(item, {
+      record_context_changed: false,
+      unit_only_changed: false,
+    });
+    await updateItem(item.id, { decisions });
+    return null;
+  }
+  const record = await findPatient(item.patient_payload, item.reference_payload);
+  const decisions = setDecisions(item, {
+    record_context_changed: !record,
+    unit_only_changed: !!record,
+  });
+  await updateItem(item.id, { decisions });
+  return record;
+}
+
+const ORDER_REQUIRED_FIELDS = [
+  ['order.order_info.order_number', (item) => item.order_payload?.order_info?.order_number],
+  ['order.order_info.order_type', (item) => item.order_payload?.order_info?.order_type],
+  ['order.order_info.order_date', (item) => item.order_payload?.order_info?.order_date],
+];
+
+function missingOrderFields(item) {
+  return ORDER_REQUIRED_FIELDS
+    .filter(([, getter]) => !hasValue(getter(item)))
+    .map(([field]) => field);
+}
+
+// The matched PDF (filename without .pdf == order_number) is required before an
+// order can be created.
+function orderHasMatchedPdf(item) {
+  return hasValue(item.extraction_payload?.pdf?.fileName)
+    || hasValue(item.extraction_payload?.pdf?.blobUrl)
+    || hasValue(item.extraction_payload?.pdfBlobUrl);
 }
 
 async function evaluateOrderExistence(item) {
@@ -156,39 +206,25 @@ async function evaluateOrderExistence(item) {
 
 async function runPatientWrite(item, retry) {
   try {
-    // Did the admission / episode already exist before this write? Used by the
-    // object lifecycle view to report found vs created without separate visual
-    // admission/episode workflow boxes.
-    const patientBefore = await findPatient(item.patient_payload);
-    const admissionBefore = patientBefore
-      ? await findAdmission(patientBefore.id, item.patient_payload?.admission_details?.SOC)
-      : null;
-    const episodeBefore = admissionBefore
-      ? await findEpisode(admissionBefore.id, item.patient_payload?.admission_details?.SOE, item.patient_payload?.admission_details?.EOE)
-      : null;
-
+    const recordBefore = await findPatient(item.patient_payload, item.reference_payload);
     const bundle = await writePatientBundle(item);
-    const objectDecisions = {
-      admission_ready: !!bundle.admission?.id,
-      admission_exists: !!bundle.admission?.id && !!admissionBefore,
-      admission_created: !!bundle.admission?.id && !admissionBefore,
-      episode_ready: !!bundle.episode?.id,
-      episode_exists: !!bundle.episode?.id && !!episodeBefore,
-      episode_created: !!bundle.episode?.id && !episodeBefore,
-      admission_seen_before: !!admissionBefore,
-      episode_seen_before: !!episodeBefore,
+    const recordCreated = item.decisions?.patient_not_exists === true
+      || item.decisions?.record_context_changed === true
+      || !recordBefore;
+    const recordDecisions = {
+      record_created: recordCreated,
+      record_updated: !recordCreated,
     };
     const decisions = setDecisions(item, retry
-      ? { patient_retry_success: true, patient_retry_fail: false, patient_write_fail: false, ...objectDecisions }
-      : { patient_write_success: true, patient_write_fail: false, ...objectDecisions });
+      ? { patient_retry_success: true, patient_retry_fail: false, patient_write_fail: false, ...recordDecisions }
+      : { patient_write_success: true, patient_write_fail: false, ...recordDecisions });
     await updateItem(item.id, {
       decisions,
       extractionPayload: {
         ...(item.extraction_payload || {}),
         patientBundle: {
+          unitId: bundle.unit?.id,
           patientId: bundle.patient?.id,
-          admissionId: bundle.admission?.id,
-          episodeId: bundle.episode?.id,
         },
       },
     });
@@ -211,18 +247,19 @@ async function runOrderWrite(item, retry) {
           episode: { id: item.extraction_payload.patientBundle.episodeId },
         }
       : null;
-    const order = await writeOrderBundle(item, patientBundle);
+    const { order, skipped } = await writeOrderBundle(item, patientBundle);
     const decisions = setDecisions(item, retry
-      ? { order_retry_success: true, order_retry_fail: false, order_write_fail: false }
-      : { order_write_success: true, order_write_fail: false });
+      ? { order_retry_success: true, order_retry_fail: false, order_write_fail: false, order_skipped_duplicate: skipped }
+      : { order_write_success: true, order_write_fail: false, order_skipped_duplicate: skipped });
     await updateItem(item.id, {
       decisions,
       extractionPayload: {
         ...(item.extraction_payload || {}),
         orderId: order?.id,
+        orderSkipped: skipped,
       },
     });
-    return { ok: true, order };
+    return { ok: true, order, output: { orderId: order?.id, skipped } };
   } catch (error) {
     const decisions = setDecisions(item, retry
       ? { order_retry_success: false, order_retry_fail: true }
@@ -237,9 +274,21 @@ export async function evaluateCondition(condition, item) {
   const known = item.decisions || {};
   if (known[condition] !== undefined) return known[condition] === true;
 
-  if (condition === 'patient_exists' || condition === 'patient_not_exists') {
-    const existing = await evaluatePatientExistence(item);
-    return condition === 'patient_exists' ? !!existing : !existing;
+  if (condition === 'patient_exists' || condition === 'patient_not_exists'
+    || condition === 'unit_exists' || condition === 'unit_not_exists') {
+    const { unit } = await evaluatePatientExistence(item);
+    if (condition === 'patient_exists' || condition === 'unit_exists') return !!unit;
+    return !unit;
+  }
+  if (condition === 'record_context_changed' || condition === 'unit_only_changed') {
+    const record = await evaluateRecordChanges(item);
+    return condition === 'record_context_changed' ? !record : !!record;
+  }
+  if (condition === 'order_fields_ready' || condition === 'order_fields_missing') {
+    const ready = missingOrderFields(item).length === 0 && orderHasMatchedPdf(item);
+    const decisions = setDecisions(item, { order_fields_ready: ready, order_fields_missing: !ready });
+    await updateItem(item.id, { decisions });
+    return condition === 'order_fields_ready' ? ready : !ready;
   }
   if (condition === 'order_exists' || condition === 'order_not_exists') {
     const existing = await evaluateOrderExistence(item);
@@ -427,51 +476,149 @@ export const taskRegistry = {
     };
   },
 
-  'patient.update': async ({ item }) => runPatientWrite(item, false),
+  // Check if the patient (the PERSON = Patient Unit by name|DOB|MRN) exists.
+  // Also notes whether a Record for this HHAH/PG context already exists, used to
+  // drive the con1/con2 sub-decision when the patient is found.
+  'patient.resolve': async ({ item }) => {
+    const { unit, record } = await evaluatePatientExistence(item);
+    return {
+      ok: true,
+      output: {
+        unitId: unit?.id || null,
+        recordExists: !!record,
+        action: unit ? 'exists' : 'create',
+        unitKey: item.patient_key,
+      },
+    };
+  },
+
+  // Patient exists → decide what changed (con1: HHAH/PG/practitioner → new
+  // record; con2: only unit fields → update unit).
+  'record.checkChanges': async ({ item }) => {
+    const record = await evaluateRecordChanges(item);
+    return {
+      ok: true,
+      output: {
+        branch: record ? 'con2_unit_only' : 'con1_new_record',
+        hhah: item.reference_payload?.HHAH?.name || null,
+        pg: item.reference_payload?.PG?.name || null,
+      },
+    };
+  },
+
+  // New patient: writes the stable Patient Unit + a Patient Record.
   'patient.create': async ({ item }) => runPatientWrite(item, false),
+  // con1: a NEW Patient Record under the existing Unit (changed HHAH/PG/pract).
+  'record.create': async ({ item }) => runPatientWrite(item, false),
+  // con2: update the existing Patient Unit/Record (only unit fields changed).
+  'patient.update': async ({ item }) => runPatientWrite(item, false),
   'patient.retryWrite': async ({ item }) => runPatientWrite(item, true),
 
   // Admission: matched by patient + Start of Care. The patient bundle write
-  // already reused-or-created it; this step reports which happened so the
-  // lifecycle shows "found" vs "created".
+  // happens after the admission-date gate so missing dates can be fixed before
+  // any admission row is written.
   'admission.resolve': async ({ item }) => {
     const bundle = item.extraction_payload?.patientBundle || {};
-    const admissionId = bundle.admissionId || null;
-    // Was the admission pre-existing (created_at well before this run) or new?
-    const created = !item.decisions?.admission_seen_before;
+    const patientId = bundle.patientId || (await findPatient(item.patient_payload, item.reference_payload))?.id || null;
+    const { admission, existed } = await writeAdmissionBundle(item, patientId);
+    const admissionId = admission?.id || null;
     const decisions = setDecisions(item, {
       admission_ready: !!admissionId,
-      admission_exists: !!admissionId && !created,
-      admission_created: !!admissionId && created,
+      admission_exists: !!admissionId && existed,
+      admission_created: !!admissionId && !existed,
     });
-    await updateItem(item.id, { decisions });
-    return { ok: !!admissionId, output: { admissionId, soc: item.patient_payload?.admission_details?.SOC, action: created ? 'created' : 'reused' } };
+    await updateItem(item.id, {
+      decisions,
+      extractionPayload: {
+        ...(item.extraction_payload || {}),
+        patientBundle: {
+          ...bundle,
+          patientId,
+          admissionId,
+        },
+      },
+    });
+    return { ok: !!admissionId, output: { admissionId, soc: item.patient_payload?.admission_details?.SOC, action: existed ? 'reused' : 'created' } };
   },
 
   // Episode: matched within the admission by SOE/EOE — reused if it exists, else
   // a new episode is created and the order will attach to it.
   'episode.resolve': async ({ item }) => {
     const bundle = item.extraction_payload?.patientBundle || {};
-    const episodeId = bundle.episodeId || null;
-    const created = !item.decisions?.episode_seen_before;
+    const { episode, existed } = await writeEpisodeBundle(item, bundle.admissionId);
+    const episodeId = episode?.id || null;
     const decisions = setDecisions(item, {
       episode_ready: !!episodeId,
-      episode_exists: !!episodeId && !created,
-      episode_created: !!episodeId && created,
+      episode_exists: !!episodeId && existed,
+      episode_created: !!episodeId && !existed,
     });
-    await updateItem(item.id, { decisions });
+    await updateItem(item.id, {
+      decisions,
+      extractionPayload: {
+        ...(item.extraction_payload || {}),
+        patientBundle: {
+          ...bundle,
+          episodeId,
+        },
+      },
+    });
     return {
       ok: !!episodeId,
       output: {
         episodeId,
         soe: item.patient_payload?.admission_details?.SOE,
         eoe: item.patient_payload?.admission_details?.EOE,
-        action: created ? 'created' : 'reused',
+        action: existed ? 'reused' : 'created',
       },
     };
   },
 
-  'order.update': async ({ item }) => runOrderWrite(item, false),
+  // Gate before order create: required order fields + the matched PDF must be
+  // present. Missing → routes to human.fixOrderFields.
+  'order.checkFields': async ({ item }) => {
+    const missing = missingOrderFields(item);
+    const hasPdf = orderHasMatchedPdf(item);
+    const ready = missing.length === 0 && hasPdf;
+    const decisions = setDecisions(item, {
+      order_fields_ready: ready,
+      order_fields_missing: !ready,
+    });
+    await updateItem(item.id, { decisions });
+    return { ok: true, output: { ready, missing, hasPdf } };
+  },
+
+  'human.fixOrderFields': async ({ item, payload }) => {
+    const orderPayload = payload?.order ? mergeDeep(item.order_payload, payload.order) : item.order_payload;
+    const extractionPayload = payload?.pdf
+      ? mergeDeep(item.extraction_payload, { pdf: payload.pdf })
+      : item.extraction_payload;
+    const patched = { ...item, order_payload: orderPayload, extraction_payload: extractionPayload };
+    const missing = missingOrderFields(patched);
+    const hasPdf = orderHasMatchedPdf(patched);
+    const ready = missing.length === 0 && hasPdf;
+    const decisions = setDecisions(item, {
+      order_fields_ready: ready,
+      order_fields_missing: !ready,
+    });
+    await updateItem(item.id, { orderPayload, extractionPayload, decisions });
+    return { ok: ready, output: { ready, missing, hasPdf } };
+  },
+
+  // Duplicate order number: do not write anything. The existing order is left
+  // untouched; the row is marked as a skipped duplicate.
+  'order.skipDuplicate': async ({ item }) => {
+    const existing = await findOrder(item.order_payload?.order_info?.order_number);
+    const decisions = setDecisions(item, {
+      order_skipped_duplicate: true,
+      order_write_success: false,
+    });
+    await updateItem(item.id, {
+      decisions,
+      extractionPayload: { ...(item.extraction_payload || {}), orderId: existing?.id || null, orderSkipped: true },
+    });
+    return { ok: true, output: { skipped: true, existingOrderId: existing?.id || null } };
+  },
+
   'order.create': async ({ item }) => runOrderWrite(item, false),
   'order.retryWrite': async ({ item }) => runOrderWrite(item, true),
 
@@ -610,14 +757,18 @@ export const taskRegistry = {
 export function objectLifecycle(item) {
   const d = item.decisions || {};
   return {
+    unit: d.unit_exists ? 'found' : d.unit_not_exists ? 'created' : 'pending',
     patient: d.needs_manual_review ? 'in-review'
+      : d.record_created ? 'created'
+      : d.record_updated ? 'updated'
       : d.patient_write_success || d.patient_retry_success ? (d.patient_exists ? 'updated' : 'created')
       : d.patient_exists ? 'found'
       : d.patient_not_exists ? 'missing' : 'pending',
     admission: d.admission_created ? 'created' : d.admission_exists ? 'found' : d.admission_ready ? 'created' : 'pending',
     episode: d.episode_created ? 'created' : d.episode_exists ? 'found' : d.episode_ready ? 'created' : 'pending',
-    order: d.order_write_success || d.order_retry_success ? (d.order_exists ? 'updated' : 'created')
-      : d.order_exists ? 'found' : d.order_not_exists ? 'missing' : 'pending',
+    order: d.order_skipped_duplicate ? 'skipped'
+      : d.order_write_success || d.order_retry_success ? 'created'
+      : d.order_exists ? 'skipped' : d.order_not_exists ? 'missing' : 'pending',
   };
 }
 

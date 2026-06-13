@@ -5,6 +5,8 @@ import {
   normalizeNpi,
   parseDate,
   patientKey,
+  recordContextKey,
+  unitKey,
 } from './normalizers.js';
 
 export async function getActiveWorkflow(id) {
@@ -355,9 +357,18 @@ export async function findHhahByName(name) {
   return rows[0] || null;
 }
 
-export async function findPatient(patientPayload) {
+// Find the Patient RECORD for this care context (Unit + HHAH + PG). A different
+// HHAH or PG is a different record, so the reference payload is required to key it.
+export async function findPatient(patientPayload, referencePayload) {
   const sql = getSql();
-  const rows = await sql`SELECT * FROM patients WHERE normalized_patient_key = ${patientKey(patientPayload)} LIMIT 1`;
+  const rows = await sql`SELECT * FROM patients WHERE record_context_key = ${recordContextKey(patientPayload, referencePayload)} LIMIT 1`;
+  return rows[0] || null;
+}
+
+// Find the stable Patient UNIT by identity (name | DOB | MRN).
+export async function findPatientUnit(patientPayload) {
+  const sql = getSql();
+  const rows = await sql`SELECT * FROM patient_units WHERE unit_key = ${unitKey(patientPayload)} LIMIT 1`;
   return rows[0] || null;
 }
 
@@ -485,11 +496,11 @@ export async function writePatientUnit(patient) {
   const sql = getSql();
   const rows = await sql`
     INSERT INTO patient_units (
-      normalized_patient_key, name, dob, mrn, sex,
+      unit_key, name, dob, mrn, sex,
       personal_information, insurance_details, raw_data, updated_at
     )
     VALUES (
-      ${patientKey(patient)},
+      ${unitKey(patient)},
       ${patient.patient_info?.name},
       ${parseDate(patient.patient_info?.DOB)},
       ${patient.admission_details?.MRN},
@@ -499,7 +510,7 @@ export async function writePatientUnit(patient) {
       ${await jsonParam(patient)}::jsonb,
       now()
     )
-    ON CONFLICT (normalized_patient_key)
+    ON CONFLICT (unit_key)
     DO UPDATE SET
       name = EXCLUDED.name,
       dob = EXCLUDED.dob,
@@ -546,15 +557,24 @@ export async function writePatientBundle(item) {
 
   // Stable base layer first, so the patient record can point at its unit.
   const unit = await writePatientUnit(patient);
+  const hhahName = blankToNull(reference?.HHAH?.name);
+  const pgName = blankToNull(reference?.PG?.name);
 
+  // Patient RECORD: a new row per (Unit + HHAH + PG) context. Same context
+  // updates the existing record; a changed HHAH/PG creates a new record.
   const patientRows = await sql`
     INSERT INTO patients (
-      normalized_patient_key, unit_id, name, dob, mrn, sex, age,
+      unit_id, record_context_key, hhah_name, pg_name, agency_id, pg_id,
+      name, dob, mrn, sex, age,
       personal_information, insurance_details, admission_details, raw_data, updated_at
     )
     VALUES (
-      ${patientKey(patient)},
       ${unit?.id || null},
+      ${recordContextKey(patient, reference)},
+      ${hhahName},
+      ${pgName},
+      ${existingHhah?.id || null},
+      ${existingPg?.id || null},
       ${patient.patient_info?.name},
       ${parseDate(patient.patient_info?.DOB)},
       ${patient.admission_details?.MRN},
@@ -566,9 +586,13 @@ export async function writePatientBundle(item) {
       ${await jsonParam(patient)}::jsonb,
       now()
     )
-    ON CONFLICT (normalized_patient_key)
+    ON CONFLICT (record_context_key)
     DO UPDATE SET
       unit_id = COALESCE(patients.unit_id, EXCLUDED.unit_id),
+      hhah_name = COALESCE(EXCLUDED.hhah_name, patients.hhah_name),
+      pg_name = COALESCE(EXCLUDED.pg_name, patients.pg_name),
+      agency_id = COALESCE(EXCLUDED.agency_id, patients.agency_id),
+      pg_id = COALESCE(EXCLUDED.pg_id, patients.pg_id),
       name = EXCLUDED.name,
       dob = EXCLUDED.dob,
       mrn = EXCLUDED.mrn,
@@ -587,12 +611,26 @@ export async function writePatientBundle(item) {
   await linkPatientToPg(storedPatient.id, existingPg?.id || null);
   await linkPatientToPractitioner(storedPatient.id, existingPractitioner?.id || null);
 
+  return { unit, patient: storedPatient };
+}
+
+export async function writeAdmissionBundle(item, patientId) {
+  if (!patientId) throw new Error('Cannot resolve admission before patient record exists');
+
+  const patient = item.patient_payload;
+  const reference = item.reference_payload;
+  const existingPg = await findPgByName(reference?.PG?.name);
+  const existingHhah = await findHhahByName(reference?.HHAH?.name);
+  const existingPractitioner = await findPractitionerByNpi(reference?.practitioner?.NPI);
+  const existingAdmission = await findAdmission(patientId, patient.admission_details?.SOC);
+  const sql = getSql();
+
   const admissionRows = await sql`
     INSERT INTO patient_admissions (
       patient_id, soc, eoc, agency_id, pg_id, care_provider_id, mrn, raw_data, updated_at
     )
     VALUES (
-      ${storedPatient.id},
+      ${patientId},
       ${parseDate(patient.admission_details?.SOC)},
       ${parseDate(patient.admission_details?.EOC)},
       ${existingHhah?.id || null},
@@ -611,12 +649,24 @@ export async function writePatientBundle(item) {
       updated_at = now()
     RETURNING *
   `;
-  const admission = admissionRows[0];
 
+  return { admission: admissionRows[0], existed: !!existingAdmission };
+}
+
+export async function writeEpisodeBundle(item, admissionId) {
+  if (!admissionId) throw new Error('Cannot resolve episode before admission exists');
+
+  const patient = item.patient_payload;
+  const existingEpisode = await findEpisode(
+    admissionId,
+    patient.admission_details?.SOE,
+    patient.admission_details?.EOE,
+  );
+  const sql = getSql();
   const episodeRows = await sql`
     INSERT INTO patient_episodes (admission_id, soe, eoe, diagnosis_codes, raw_data, updated_at)
     VALUES (
-      ${admission.id},
+      ${admissionId},
       ${parseDate(patient.admission_details?.SOE)},
       ${parseDate(patient.admission_details?.EOE)},
       ${await jsonParam(patient.admission_details?.diagnosis_codes || [])}::jsonb,
@@ -631,13 +681,13 @@ export async function writePatientBundle(item) {
     RETURNING *
   `;
 
-  return { patient: storedPatient, admission, episode: episodeRows[0] };
+  return { episode: episodeRows[0], existed: !!existingEpisode };
 }
 
 export async function writeOrderBundle(item, patientBundle) {
   const order = item.order_payload;
   const reference = item.reference_payload;
-  const patient = patientBundle?.patient || await findPatient(item.patient_payload);
+  const patient = patientBundle?.patient || await findPatient(item.patient_payload, reference);
   const pg = await findPgByName(reference?.PG?.name);
   const hhah = await findHhahByName(reference?.HHAH?.name);
   const practitioner = await findPractitionerByNpi(reference?.practitioner?.NPI);
@@ -645,7 +695,15 @@ export async function writeOrderBundle(item, patientBundle) {
   const episode = patientBundle?.episode || null;
   const sql = getSql();
 
+  const orderNumber = blankToNull(order.order_info?.order_number);
   const documentType = blankToNull(order.order_info?.document_type || order.order_info?.order_type);
+
+  // Duplicate-order policy: if this order_number already exists, SKIP it — the
+  // existing order is left completely untouched (no overwrite).
+  const existing = orderNumber ? await findOrder(orderNumber) : null;
+  if (existing) {
+    return { order: existing, skipped: true };
+  }
 
   const rows = await sql`
     INSERT INTO orders (
@@ -653,7 +711,7 @@ export async function writeOrderBundle(item, patientBundle) {
       agency_id, pg_id, billing_provider_id, order_status, order_admission_details, raw_data, updated_at
     )
     VALUES (
-      ${order.order_info?.order_number},
+      ${orderNumber},
       ${blankToNull(order.order_info?.order_type)},
       ${documentType},
       ${parseDate(order.order_info?.order_date)},
@@ -668,30 +726,19 @@ export async function writeOrderBundle(item, patientBundle) {
       ${await jsonParam(order)}::jsonb,
       now()
     )
-    ON CONFLICT (order_number)
-    DO UPDATE SET
-      order_type = COALESCE(EXCLUDED.order_type, orders.order_type),
-      document_type = COALESCE(EXCLUDED.document_type, orders.document_type),
-      order_date = COALESCE(EXCLUDED.order_date, orders.order_date),
-      patient_id = COALESCE(EXCLUDED.patient_id, orders.patient_id),
-      admission_id = COALESCE(EXCLUDED.admission_id, orders.admission_id),
-      episode_id = COALESCE(EXCLUDED.episode_id, orders.episode_id),
-      agency_id = COALESCE(EXCLUDED.agency_id, orders.agency_id),
-      pg_id = COALESCE(EXCLUDED.pg_id, orders.pg_id),
-      billing_provider_id = COALESCE(EXCLUDED.billing_provider_id, orders.billing_provider_id),
-      order_status = orders.order_status || EXCLUDED.order_status,
-      order_admission_details = orders.order_admission_details || EXCLUDED.order_admission_details,
-      raw_data = orders.raw_data || EXCLUDED.raw_data,
-      updated_at = now()
+    ON CONFLICT (order_number) DO NOTHING
     RETURNING *
   `;
   const storedOrder = rows[0];
+  if (!storedOrder) {
+    return { order: await findOrder(orderNumber), skipped: true };
+  }
 
   // Order's billing provider is also a direct patient↔practitioner link.
   await linkPatientToPractitioner(patient?.id || null, practitioner?.id || null, 'billing_provider');
   await linkPatientToPg(patient?.id || null, pg?.id || null);
 
-  return storedOrder;
+  return { order: storedOrder, skipped: false };
 }
 
 // ── Episode status (computed, never stored) ──────────────
@@ -751,6 +798,9 @@ export async function listPatients() {
       p.dob,
       p.mrn,
       p.sex,
+      p.hhah_name,
+      p.pg_name,
+      p.unit_id,
       p.updated_at,
       COUNT(DISTINCT a.id)::int AS admission_count,
       COUNT(DISTINCT e.id)::int AS episode_count,

@@ -99,17 +99,18 @@ function payloadForSubmit(patch) {
 // diagram's objects, derived from the item's decision flags. Mirrors
 // objectLifecycle() on the server.
 function lifecycleFromDecisions(d = {}) {
-  const ref = (exists, notExists) => exists ? 'found' : notExists ? 'missing' : 'pending';
   return {
-    Patient: d.needs_manual_review ? 'in-review'
+    'Patient Unit': d.unit_exists ? 'found' : d.unit_not_exists ? 'created' : 'pending',
+    'Patient Record': d.needs_manual_review ? 'in-review'
+      : d.record_created ? 'created'
+      : d.record_updated ? 'updated'
       : (d.patient_write_success || d.patient_retry_success) ? (d.patient_exists ? 'updated' : 'created')
       : d.patient_exists ? 'found' : d.patient_not_exists ? 'missing' : 'pending',
-    'Physician Group': d.pg_missing_blocks_patient ? 'in-review' : ref(d.pg_exists, d.pg_not_exists),
-    Practitioner: ref(d.practitioner_exists, d.practitioner_not_exists),
     'Admission Object': d.admission_created ? 'created' : d.admission_exists ? 'found' : d.admission_ready ? 'created' : 'pending',
     'Episode Object': d.episode_created ? 'created' : d.episode_exists ? 'found' : d.episode_ready ? 'created' : 'pending',
-    Order: (d.order_write_success || d.order_retry_success) ? (d.order_exists ? 'updated' : 'created')
-      : d.order_exists ? 'found' : d.order_not_exists ? 'missing' : 'pending',
+    Order: d.order_skipped_duplicate ? 'skipped'
+      : (d.order_write_success || d.order_retry_success) ? 'created'
+      : d.order_exists ? 'skipped' : d.order_not_exists ? 'missing' : 'pending',
   };
 }
 
@@ -118,6 +119,7 @@ const LIFECYCLE_TONE = {
   created: 'bg-green-50 text-green-700 border-green-200',
   updated: 'bg-violet-50 text-violet-700 border-violet-200',
   missing: 'bg-rose-50 text-rose-700 border-rose-200',
+  skipped: 'bg-slate-100 text-slate-500 border-slate-300',
   'in-review': 'bg-amber-50 text-amber-700 border-amber-200',
   pending: 'bg-slate-50 text-slate-400 border-slate-200',
 };

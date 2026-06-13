@@ -104,6 +104,16 @@ function splitSqlStatements(sqlText) {
 
 async function main() {
   const sql = getSql();
+  const reset = process.argv.includes('--reset') || process.env.DB_RESET === '1';
+
+  if (reset) {
+    // Clean wipe: drop and recreate the public schema so the fresh single
+    // migration is the only source of truth. Destroys ALL data.
+    console.log('reset: dropping public schema');
+    await sql.query('DROP SCHEMA public CASCADE');
+    await sql.query('CREATE SCHEMA public');
+  }
+
   const files = (await fs.readdir(migrationsDir))
     .filter((file) => file.endsWith('.sql'))
     .sort();

@@ -1,4 +1,5 @@
-import { CheckCircle2, Circle, Lock } from 'lucide-react';
+import { useState } from 'react';
+import { CheckCircle2, Circle, Info, Lock } from 'lucide-react';
 
 // Shared flow-chart renderer used by both the Workflows page (static definition)
 // and the Orchestrator (live instance).
@@ -61,6 +62,47 @@ function ConditionDecision({ label }) {
   );
 }
 
+// Small ⓘ button that reveals a task's full definition (id, actor, description,
+// condition) in a popover.
+function InfoButton({ node }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="relative shrink-0">
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
+        className="flex h-5 w-5 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+        title="Task definition"
+      >
+        <Info size={13} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={(e) => { e.stopPropagation(); setOpen(false); }} />
+          <div className="absolute right-0 top-6 z-40 w-64 rounded-xl border border-slate-200 bg-white p-3 text-left shadow-xl">
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-[10px] text-slate-400">{node.id}</span>
+              {node.actor && (
+                <span className={`rounded px-1 py-0.5 text-[9px] font-bold ${node.actor === 'human' ? 'bg-pink-100 text-pink-600' : node.actor === 'ai' ? 'bg-violet-100 text-violet-600' : 'bg-sky-100 text-sky-600'}`}>
+                  {node.actor === 'human' ? 'HUMAN' : node.actor === 'ai' ? 'AI' : 'SYS'}
+                </span>
+              )}
+            </div>
+            <div className="mt-1 text-sm font-bold text-slate-800">{node.name}</div>
+            {node.description && <div className="mt-1 text-[11px] leading-snug text-slate-600">{node.description}</div>}
+            {(node.conditionExpr || node.condition) && (
+              <div className="mt-2 rounded-lg border border-amber-100 bg-amber-50 px-2 py-1">
+                <div className="text-[9px] font-black uppercase text-amber-600">Runs when</div>
+                <div className="font-mono text-[10px] text-amber-800">{node.conditionExpr || node.condition}</div>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </span>
+  );
+}
+
 // ── Task / loop box — atomic unit (no sub-steps) ───────
 function StepBox({ node }) {
   const live = !!node.status;
@@ -84,20 +126,20 @@ function StepBox({ node }) {
           : 'border-slate-200 bg-white opacity-70';
 
   return (
-    <div className={`border-2 rounded-2xl shadow-sm overflow-hidden w-[220px] ${borderCls}`}>
-      <div className="flex items-center gap-2 px-3 py-2.5">
+    <div className={`border-2 rounded-2xl shadow-sm overflow-visible w-[264px] ${borderCls}`}>
+      <div className="flex items-start gap-2 px-3 py-2.5">
         <span className={`text-xs px-1.5 py-0.5 rounded font-semibold shrink-0 ${typeBadgeCls[node.type]}`}>
           {typeIcon[node.type]}
         </span>
-        <span className={`font-semibold text-sm flex-1 truncate ${skipped ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{node.name}</span>
+        <span className={`font-semibold text-sm flex-1 leading-tight break-words ${skipped ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{node.name}</span>
         {node.actor && !live && (
           <span className={`text-[9px] px-1 py-0.5 rounded font-bold shrink-0 ${node.actor === 'human' ? 'bg-pink-100 text-pink-600' : node.actor === 'ai' ? 'bg-violet-100 text-violet-600' : 'bg-sky-100 text-sky-600'}`}>
             {node.actor === 'human' ? 'HUMAN' : node.actor === 'ai' ? 'AI' : 'SYS'}
           </span>
         )}
-        {live && (skipped
-          ? <span className="text-[10px] text-slate-400 shrink-0 italic">skipped</span>
-          : subStepIcon(node.status))}
+        {live && !skipped && subStepIcon(node.status)}
+        {live && skipped && <span className="text-[10px] text-slate-400 shrink-0 italic">skipped</span>}
+        <InfoButton node={node} />
       </div>
       {node.type === 'loop' && (
         <div className="px-3 py-1 bg-purple-50/60 border-t border-purple-100 text-[10px] font-mono text-purple-700">
@@ -373,6 +415,7 @@ export function nodesFromWorkflow(wf) {
   return steps.map(s => ({
     id: s.id,
     name: s.name,
+    description: s.description || '',
     type: s.type || 'task',
     actor: s.actor || null,
     when: s.when || null,
@@ -398,6 +441,7 @@ export function nodesFromInstance(instance, users = [], taskInstancesOverride = 
   return tis.map(ti => ({
     id: ti.id,
     name: ti.taskName,
+    description: ti.description || '',
     type: ti.type || 'task',
     actor: ti.actor || null,
     condition: ti.condition,

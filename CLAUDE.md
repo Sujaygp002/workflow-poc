@@ -66,6 +66,76 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-13** — Fixed wf7 execution gaps before push/deploy verification.
+  Patient write now commits only the Patient Unit + Patient Record; `admission.resolve`
+  writes/reuses the Admission after admission-date checks, and `episode.resolve`
+  writes/reuses the Episode after episode-date checks. Upload rows now store matched
+  PDF metadata (`extraction_payload.pdf`) so `order.checkFields` really validates
+  the order-number/PDF match instead of inferring readiness from `order_key`. Skipped
+  duplicate orders no longer start signing follow-up runs, same-run duplicate order
+  inserts are conflict-safe, and signing follow-up startup is deduped/concurrent.
+  Record-change branches now stay false unless the original Patient Unit exists.
+  WorkBucket lifecycle now distinguishes a newly created Patient Record from a
+  unit-only update.
+
+- **2026-06-13** — Reordered wf7 to match `complex.drawio.svg` object sequence (26 steps).
+  The flow is now **Patient (Unit+Record) → Admission → Episode → Order → Review**,
+  with date checks folded INTO the admission/episode phases instead of running upfront.
+  - Patient phase: `patient.resolve` (`wf7-s10`, "Check If Patient Exists" by Unit =
+    name+DOB+MRN). NO → `patient.create` (`wf7-s14`, create Unit + Record). YES →
+    `record.checkChanges` (`wf7-s11`) sub-decision: **con1** `record_context_changed`
+    (HHAH/PG/practitioner changed) → `record.create` (`wf7-s30`, new Record under same
+    Unit); **con2** `unit_only_changed` → `patient.update` (`wf7-s13`, update Unit).
+  - Admission phase: `dates.checkAdmission` → `human.fillAdmissionDates` →
+    `admission.resolve` (`wf7-s31`, reuse-by-SOC or create).
+  - Episode phase: `dates.checkEpisode` → `human.fillEpisodeDates` → `episode.resolve`
+    (`wf7-s32`, reuse/update-by-SOE/EOE or create-in-admission).
+  - Order phase unchanged in shape: order-exists → `order.skipDuplicate` (skip+log, per
+    earlier decision — NOT delete-the-row); else `order.checkFields` → `human.fixOrderFields`
+    → `order.create`. Review step renamed to "Review Patient → Admission → Episode → Orders".
+  - taskRegistry: `evaluatePatientExistence` now keys `patient_exists` on the **Unit**
+    (the person), not the record; added `evaluateRecordChanges` for con1/con2. New
+    conditions `record_context_changed` / `unit_only_changed`. `patient.create`,
+    `record.create`, `patient.update` all call `runPatientWrite` (the bundle writes
+    unit+record+admission+episode atomically; the resolve steps surface found-vs-created).
+    Re-seeded wf7. (Verified end-to-end: unit→record→admission→episode created in order,
+    PG change forks a new record under the same unit, duplicate order skipped.)
+
+- **2026-06-13** — Builder/Orchestrator flowchart: task name no longer truncates (wider
+  box, wraps); added an ⓘ info popover (id, actor, taskKey, description, "runs when"
+  condition) to both `WorkflowFlowChart.jsx` StepBox and the new `Orchestrator.jsx`
+  StepNode; wired `description` through `nodesFromWorkflow`/`nodesFromInstance`.
+
+- **2026-06-13** — Clean-slate restructure of the object model + workflow + orchestrator.
+  - **DB reset**: collapsed migrations 001/002/003 into a single fresh `001_core_intake.sql`.
+    Added `npm run db:reset` (`scripts/migrate.js --reset` drops & recreates the public
+    schema). Wiped Neon and re-migrated/seeded from scratch.
+  - **Object model change**: `patient_units` is now keyed by `unit_key` (name|DOB|MRN, the
+    stable identity). `patients` (the Patient **Record**) is now keyed by
+    `record_context_key = unit_key | normalizeName(HHAH) | normalizeName(PG)` and carries
+    `unit_id`, `hhah_name`, `pg_name`, `agency_id`, `pg_id`. A NEW patient record is created
+    when the HHAH or PG changes for the same Unit; same context reuses the record. (Verified
+    end-to-end: same context reuses, PG change forks a new record under the same Unit.)
+  - **Order duplicate policy**: `writeOrderBundle` now SKIPS an order whose `order_number`
+    already exists (returns `{order, skipped:true}`, existing order untouched) instead of
+    ON CONFLICT DO UPDATE overwriting. Decision flag `order_skipped_duplicate`.
+  - **wf7 reshaped** (23 steps): added `unit.resolve` (`wf7-s10`, Check/Create Patient Unit)
+    and `record.resolve` (`wf7-s11`, Check/Create Patient Record) before patient write;
+    renamed patient steps to Update/Create Patient **Record**; order-exists now routes to
+    `order.skipDuplicate` (`wf7-s17`); the new-order path gained `order.checkFields`
+    (`wf7-s28`, requires order fields + matched PDF) and `human.fixOrderFields` (`wf7-s29`)
+    before `order.create`. New conditions: `unit_exists/unit_not_exists`,
+    `order_fields_ready/order_fields_missing`. Trigger 3 (`wf-signing`) is live (seeded).
+  - **`normalizers.js`**: added `unitKey()` and `recordContextKey(patient, reference)`.
+  - **Orchestrator UI rebuilt** (`Orchestrator.jsx`): replaced the three legacy card
+    renderers with one clean top-down flowchart per run (drawio-style: SYS/AI/HUMAN task
+    boxes, amber rotated-square decision diamonds with YES/else arms). Each task node shows
+    `(n)` = times the task ran, and human tasks show a pink `N to do` manual-backlog badge
+    for stuck active tasks; the run header shows a run-level "manual to do" count. Dropped the
+    `store`/`WorkflowFlowChart`/`dbRunToInstance` dependencies from this view.
+  - **WorkBucket lifecycle strip** now shows Patient Unit / Patient Record / Admission /
+    Episode / Order, with an `order = skipped` state for duplicates.
+
 - **2026-06-13** — Added the revised three-trigger workflow shape. New DB workflow
   definitions: `wf-area-onboarding` starts from onboarding success and monitors daily HHAH
   uploads; `wf-signing` starts after order document readiness and handles readiness review,

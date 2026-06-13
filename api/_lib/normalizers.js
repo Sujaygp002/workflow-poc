@@ -23,6 +23,19 @@ export function patientKey(patient) {
   return patientKeyFromParts(patient?.patient_info?.name, patient?.patient_info?.DOB, patient?.admission_details?.MRN);
 }
 
+// Patient UNIT identity (stable): name | DOB | MRN. Same composite the workflow
+// uses to detect the same person regardless of HHAH/PG.
+export function unitKey(patient) {
+  return patientKey(patient);
+}
+
+// Patient RECORD context: a new Record is created when the HHAH or PG changes
+// for the same Unit. Keyed on raw text values so it works even when no DB PG row
+// exists yet. record_context_key = unit_key | normalizeName(HHAH) | normalizeName(PG).
+export function recordContextKey(patient, reference) {
+  return [unitKey(patient), normalizeName(reference?.HHAH?.name), normalizeName(reference?.PG?.name)].join('|');
+}
+
 export function parseDate(value) {
   if (!value) return null;
   if (value instanceof Date && !Number.isNaN(value.getTime())) {

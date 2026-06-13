@@ -1,723 +1,269 @@
 import { useState, useEffect } from 'react';
-import { Activity, ChevronDown, ChevronUp, CheckCircle2, Clock, Circle, AlertCircle, RefreshCw, Lock, ArrowDown, GitBranch, Trash2 } from 'lucide-react';
-import Badge from '../../components/Badge';
-import WorkflowFlowChart, { nodesFromInstance } from '../../components/WorkflowFlowChart';
-import { getUsers, instanceStage } from '../../store';
+import { Activity, CheckCircle2, Circle, AlertCircle, RefreshCw, Trash2, ArrowDown, Bot, Cog, User, Clock, Info } from 'lucide-react';
 import {
-  completeDbWorkItem,
-  dbRunToInstance,
   deleteWorkflowRun,
   fetchAreaIntakeStatus,
   fetchWorkflowRuns,
   runAreaIntakeCheck,
 } from '../../lib/workflowApi';
 
-// Instance lifecycle header: unassigned → assigned → done
-function StageHeader({ stage }) {
-  const stages = ['unassigned', 'assigned', 'done'];
-  const activeIdx = stages.indexOf(stage);
+// ── Actor styling ──────────────────────────────────────────
+// system = sky/blue, AI = violet, human = pink, condition = amber.
+const ACTOR = {
+  system: { ring: 'border-sky-300', bg: 'bg-sky-50', text: 'text-sky-800', badge: 'bg-sky-600', label: 'SYS', icon: Cog },
+  ai: { ring: 'border-violet-300', bg: 'bg-violet-50', text: 'text-violet-800', badge: 'bg-violet-600', label: 'AI', icon: Bot },
+  human: { ring: 'border-pink-300', bg: 'bg-pink-50', text: 'text-pink-800', badge: 'bg-pink-600', label: 'HUMAN', icon: User },
+};
+
+function actorOf(step) {
+  return ACTOR[step.actor] || ACTOR.system;
+}
+
+// Per-step run aggregation, derived from the run's task rows (one per item×step).
+// Returns: total (how many times the task ran), done, active, manual (active human
+// tasks = the stuck backlog needing manual work).
+function stepStats(tasks, stepId) {
+  const rows = tasks.filter((t) => t.step_id === stepId);
+  const done = rows.filter((t) => t.status === 'completed').length;
+  const active = rows.filter((t) => t.status === 'active').length;
+  const failed = rows.filter((t) => t.status === 'failed').length;
+  const ran = rows.filter((t) => t.status !== 'pending' && t.status !== 'skipped').length;
+  return { total: rows.length, ran, done, active, failed };
+}
+
+// Decide a step's live state across all items for the node tint.
+function nodeState(stats) {
+  if (stats.failed) return 'failed';
+  if (stats.active) return 'active';
+  if (stats.done) return 'done';
+  return 'idle';
+}
+
+const STATE_DOT = {
+  failed: <AlertCircle size={13} className="text-rose-500" />,
+  active: <Circle size={13} className="text-amber-500 fill-amber-200" />,
+  done: <CheckCircle2 size={13} className="text-emerald-500" />,
+  idle: <Circle size={13} className="text-slate-300" />,
+};
+
+// Derive the YES/NO branch truth for a condition (mirrors CLAUDE.md rules):
+// for *_missing / *_not_exists / *_fail conditions the YES arm is the exception
+// path, so the diamond reads naturally.
+function conditionLabel(condition) {
+  return (condition || '').replaceAll('_', ' ');
+}
+
+// A decision diamond: the condition sits in a rotated square. The down exit is the
+// branch's own truth (YES when the gated step runs); the right exit is the
+// complement, labelled with the sibling outcome when known.
+function DecisionDiamond({ condition, downLabel = 'YES', rightLabel }) {
   return (
-    <div className="flex items-center gap-1.5 mt-2">
-      {stages.map((s, i) => {
-        const reached = i <= activeIdx;
-        const isCurrent = i === activeIdx;
-        return (
-          <div key={s} className="flex items-center gap-1.5">
-            <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full border transition-colors ${
-              isCurrent
-                ? (s === 'done' ? 'bg-green-100 text-green-700 border-green-200' : 'bg-violet-100 text-violet-700 border-violet-200')
-                : reached ? 'bg-slate-100 text-slate-500 border-slate-200' : 'bg-white text-slate-300 border-slate-100'
-            }`}>
-              {s}
-            </span>
-            {i < stages.length - 1 && (
-              <span className={`text-xs ${i < activeIdx ? 'text-violet-400' : 'text-slate-300'}`}>→</span>
+    <div className="relative flex flex-col items-center my-1">
+      <div className="relative h-20 w-44 flex items-center justify-center">
+        <div className="absolute h-16 w-16 rotate-45 border-2 border-amber-400 bg-amber-50 rounded-sm" />
+        <span className="relative z-10 px-2 text-center text-[10px] font-bold leading-tight text-amber-800">
+          {conditionLabel(condition)}?
+        </span>
+        {rightLabel && (
+          <div className="absolute left-full top-1/2 flex items-center gap-1 -translate-y-1/2 pl-1">
+            <span className="text-[10px] font-black text-slate-400">→ {rightLabel}</span>
+          </div>
+        )}
+      </div>
+      <span className="text-[10px] font-black text-emerald-600">{downLabel} ↓</span>
+    </div>
+  );
+}
+
+// ⓘ popover with the step's full definition.
+function StepInfo({ step }) {
+  const [open, setOpen] = useState(false);
+  const a = actorOf(step);
+  return (
+    <span className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex h-5 w-5 items-center justify-center rounded-full text-slate-400 hover:bg-white/70 hover:text-slate-600"
+        title="Task definition"
+      >
+        <Info size={13} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-6 z-40 w-72 rounded-xl border border-slate-200 bg-white p-3 text-left shadow-xl">
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-[10px] text-slate-400">{step.id}</span>
+              <span className={`rounded ${a.badge} px-1 py-0.5 text-[9px] font-black uppercase text-white`}>{a.label}</span>
+              <span className="font-mono text-[10px] text-slate-400">{step.taskKey}</span>
+            </div>
+            <div className="mt-1 text-sm font-bold text-slate-800">{step.name}</div>
+            {step.description && <div className="mt-1 text-[11px] leading-snug text-slate-600">{step.description}</div>}
+            {step.condition && (
+              <div className="mt-2 rounded-lg border border-amber-100 bg-amber-50 px-2 py-1">
+                <div className="text-[9px] font-black uppercase text-amber-600">Runs when</div>
+                <div className="font-mono text-[10px] text-amber-800">{step.condition}</div>
+              </div>
             )}
           </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function statusIcon(status) {
-  if (status === 'completed') return <CheckCircle2 size={14} className="text-green-500" />;
-  if (status === 'active') return <Circle size={14} className="text-amber-400 fill-amber-100" />;
-  if (status === 'blocked') return <Lock size={12} className="text-slate-300" />;
-  if (status === 'running' || status === 'pending') return <Circle size={14} className="text-amber-400" />;
-  return <AlertCircle size={14} className="text-red-400" />;
-}
-
-function progressBar(done, total) {
-  const pct = total === 0 ? 0 : Math.round((done / total) * 100);
-  return (
-    <div className="flex items-center gap-2">
-      <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-        <div className="h-full bg-violet-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
-      </div>
-      <span className="text-xs text-slate-400 w-8 text-right">{pct}%</span>
-    </div>
-  );
-}
-
-const typeBadgeCls = {
-  task:        'bg-violet-100 text-violet-700',
-  conditional: 'bg-amber-100 text-amber-700',
-  loop:        'bg-purple-100 text-purple-700',
-};
-const typeIcon = { task: '▸', conditional: '◆', loop: '↻' };
-
-// ── Gate between steps (conditional branches / loop set) ──
-function StepGate({ ti }) {
-  if (ti.type === 'conditional') {
-    return (
-      <div className="flex items-start gap-2 px-5 py-1.5">
-        <div className="w-px h-4 bg-slate-200 mx-2 mt-1" />
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-2 px-3 py-1 rounded-full border text-xs font-semibold bg-amber-50 border-amber-200 text-amber-700 w-fit">
-            <span>◆</span><span className="capitalize">{ti.condition}</span>
-            {ti.conditionExpr && <span className="opacity-70 font-mono">{ti.conditionExpr}</span>}
-          </div>
-          {(ti.branches || []).length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {ti.branches.map((b, i) => (
-                <span key={i} className="text-[10px] font-mono px-1.5 py-0.5 rounded border bg-amber-50 border-amber-200 text-amber-700">{b}</span>
-              ))}
-            </div>
-          )}
-        </div>
-        <ArrowDown size={10} className="text-slate-300 mt-1" />
-      </div>
-    );
-  }
-  if (ti.type === 'loop') {
-    return (
-      <div className="flex items-start gap-2 px-5 py-1.5">
-        <div className="w-px h-4 bg-slate-200 mx-2 mt-1" />
-        <div className="flex items-center gap-2 px-3 py-1 rounded-full border text-xs font-semibold bg-purple-50 border-purple-200 text-purple-700 w-fit">
-          <span>↻</span><span>for each in {ti.loopSet}</span>
-          {ti.loopExpr && <span className="opacity-70 font-mono">· {ti.loopExpr}</span>}
-        </div>
-        <ArrowDown size={10} className="text-slate-300 mt-1" />
-      </div>
-    );
-  }
-  return null;
-}
-
-function StepBlock({ ti, tIdx, isLast, users }) {
-  const type = ti.type || 'task';
-  const assignedTo = ti.assignedTo || (ti.actionInstances || [])[0]?.assignedTo;
-  const user = users.find(u => u.id === assignedTo);
-  const skipped = ti.status === 'skipped';
-  const isDone = ti.status === 'completed';
-
-  const borderCls = skipped
-    ? 'border-dashed border-slate-200 bg-slate-50 opacity-60'
-    : isDone ? 'border-green-100 bg-green-50/20' : 'border-slate-200 bg-white';
-
-  return (
-    <>
-      {tIdx > 0 && <StepGate ti={ti} />}
-      <div className={`border rounded-xl overflow-hidden ${borderCls}`}>
-        <div className="flex items-center gap-2 px-4 py-3">
-          <div className="flex items-center justify-center w-5 h-5 rounded-full bg-slate-100 text-slate-500 text-xs font-bold shrink-0">
-            {tIdx + 1}
-          </div>
-          <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${typeBadgeCls[type]}`}>{typeIcon[type]} {type}</span>
-          <span className={`font-medium text-sm flex-1 ${skipped ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{ti.taskName}</span>
-          {skipped ? (
-            <span className="text-xs text-slate-400 italic">skipped</span>
-          ) : user ? (
-            <div className="flex items-center gap-1.5">
-              <div className="w-5 h-5 rounded-full bg-violet-200 flex items-center justify-center text-violet-700 text-xs font-bold shrink-0">{user.name[0]}</div>
-              <span className="text-xs text-slate-500">{user.name}</span>
-            </div>
-          ) : (
-            <span className="text-xs text-slate-400 italic">unassigned</span>
-          )}
-          {!skipped && statusIcon(ti.status)}
-        </div>
-
-        {/* Module results: filled record / validation / SA mapping */}
-        {!skipped && ti.taskKind === 'fill' && ti.formData?.name && (
-          <div className="px-4 py-2 border-t border-slate-100 text-xs text-slate-500">
-            <span className="font-medium text-slate-600">{ti.module}:</span> {ti.formData.name}
-            {ti.formData.zip && <span className="text-slate-400"> · ZIP {ti.formData.zip}</span>}
-          </div>
-        )}
-        {ti.taskKind === 'validate' && ti.validation && (
-          <div className={`px-4 py-2 border-t text-xs ${ti.validation.ok ? 'border-green-100 bg-green-50/40 text-green-700' : 'border-rose-100 bg-rose-50/40 text-rose-700'}`}>
-            {ti.validation.ok
-              ? '✓ all records valid'
-              : <>✗ invalid: {(ti.validation.results || []).filter(r => !r.ok).map(r => `${r.module} (${r.missing.join(', ')})`).join('; ')}</>}
-          </div>
-        )}
-        {ti.taskKind === 'map' && ti.mapping && (
-          <div className="px-4 py-2 border-t border-slate-100 text-xs space-y-0.5">
-            {ti.mapping.map((m, i) => (
-              <div key={i} className="text-slate-600">
-                <span className="font-medium">{m.module}</span> · ZIP {m.zip || '—'} →{' '}
-                {m.sa ? <span className="text-green-700">{m.sa.sa} ({m.sa.county})</span> : <span className="text-rose-600">no SA match</span>}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-      {!isLast && (
-        <div className="flex justify-center py-1">
-          <ArrowDown size={14} className="text-slate-300" />
-        </div>
+        </>
       )}
-    </>
-  );
-}
-
-// ── Bulk upload: ONE loop body + a loop-back arrow ─────
-// The body is drawn once (not per patient). Each step shows aggregate progress
-// across all patients (e.g. 2/3). Human fallback steps hang off a condition on
-// the arrow. No patient names — it's a reusable template that loops.
-
-// Aggregate a base step across all patients: counts by status.
-function aggStep(instance, baseStepId) {
-  const tis = instance.taskInstances.filter(t => t.baseStepId === baseStepId);
-  const total = tis.length;
-  const done = tis.filter(t => t.status === 'completed').length;
-  const active = tis.filter(t => t.status === 'active').length;
-  const skipped = tis.filter(t => t.status === 'skipped').length;
-  const ran = done + active;                 // how many patients actually took this step
-  return { tis, total, done, active, skipped, ran };
-}
-
-function aggDbStep(instance, stepId) {
-  const tis = instance.taskInstances.filter(t => t.stepId === stepId);
-  const total = tis.length;
-  const done = tis.filter(t => t.status === 'completed').length;
-  const active = tis.filter(t => t.status === 'active').length;
-  const skipped = tis.filter(t => t.status === 'skipped').length;
-  const ran = done + active;
-  return { tis, total, done, active, skipped, ran };
-}
-
-// Small actor pill (HUMAN / AI / SYS) used in the "currently at" footer.
-function ActorBadge({ actor }) {
-  const cls = actor === 'human' ? 'bg-pink-100 text-pink-600'
-    : actor === 'ai' ? 'bg-violet-100 text-violet-600'
-    : 'bg-sky-100 text-sky-600';
-  const label = actor === 'human' ? 'HUMAN' : actor === 'ai' ? 'AI' : 'SYS';
-  return <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${cls}`}>{label}</span>;
-}
-
-function StepNode({ name, actor, agg, sub, compact, current }) {
-  const isHuman = actor === 'human';
-  const isAi = actor === 'ai';
-  const allDone = agg.total > 0 && agg.done + agg.skipped === agg.total && agg.done > 0;
-  const anyActive = agg.active > 0;
-  // tone by actor: human = pink, AI = violet, system = sky. Done = green.
-  let tone;
-  if (allDone) {
-    tone = 'border-green-200 bg-green-50/40';
-  } else if (isHuman) {
-    tone = anyActive ? 'border-pink-300 bg-pink-50/60' : 'border-pink-200 bg-pink-50/40';
-  } else if (isAi) {
-    tone = anyActive ? 'border-violet-300 bg-violet-50/70' : 'border-violet-200 bg-violet-50/50';
-  } else {
-    tone = anyActive ? 'border-sky-300 bg-sky-50/70' : 'border-sky-200 bg-sky-50/50';
-  }
-  // "you are here" highlight overrides everything: amber glow + ring
-  if (current) tone = 'border-amber-400 bg-amber-50 ring-4 ring-amber-200/70 shadow-lg';
-  const badgeCls = isHuman ? 'bg-pink-100 text-pink-600' : isAi ? 'bg-violet-100 text-violet-600' : 'bg-sky-100 text-sky-600';
-  const badgeLabel = isHuman ? 'HUMAN' : isAi ? 'AI' : 'SYS';
-  return (
-    <div className={`relative border-2 rounded-xl px-3.5 py-2.5 transition-all ${compact ? 'w-full' : 'w-[300px]'} ${tone}`}>
-      {current && (
-        <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500 text-white shadow flex items-center gap-1 whitespace-nowrap">
-          <span className="relative flex h-1.5 w-1.5">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-70" />
-            <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-white" />
-          </span>
-          YOU ARE HERE
-        </span>
-      )}
-      <div className="flex items-center gap-2">
-        <span className={`text-[9px] px-1 py-0.5 rounded font-bold shrink-0 ${badgeCls}`}>
-          {badgeLabel}
-        </span>
-        <span className="text-[13px] font-semibold text-slate-700 flex-1 leading-tight">{name}</span>
-        <span className={`text-[10px] font-bold tabular-nums shrink-0 ${allDone ? 'text-green-600' : anyActive ? 'text-pink-600' : 'text-slate-400'}`}>
-          {agg.ran}/{agg.total}
-        </span>
-      </div>
-      {sub && <div className="text-[10px] text-slate-400 mt-0.5">{sub}</div>}
-    </div>
-  );
-}
-
-function Arrow({ small }) {
-  return (
-    <div className="flex flex-col items-center select-none my-1">
-      <div className={`w-px ${small ? 'h-3' : 'h-4'} bg-slate-300`} />
-      <svg width="10" height="8" viewBox="0 0 10 8" className="text-slate-300 -mt-px"><path d="M0 0 L5 8 L10 0" fill="currentColor" /></svg>
-    </div>
-  );
-}
-
-// A condition pill on the main flow; when its answer is NO some patients branch
-// to the human box shown in the right column (handled by the grid in the body).
-function ConditionPill({ expr }) {
-  return (
-    <div className="flex flex-col items-center select-none my-1">
-      <div className="w-px h-3 bg-slate-300" />
-      <div className="text-[10px] font-mono px-2 py-0.5 rounded-full border bg-amber-50 border-amber-200 text-amber-700 my-0.5">
-        ◆ {expr}?
-      </div>
-      <div className="flex items-center gap-1">
-        <span className="text-[10px] font-bold text-green-600">YES</span>
-        <svg width="10" height="8" viewBox="0 0 10 8" className="text-slate-300"><path d="M0 0 L5 8 L10 0" fill="currentColor" /></svg>
-      </div>
-    </div>
-  );
-}
-
-function ConditionDiamond({ expr }) {
-  if (!expr) return null;
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 font-mono text-[10px] text-amber-700">
-      <span className="inline-block h-2.5 w-2.5 rotate-45 border border-amber-500 bg-white shrink-0" />
-      {expr}
     </span>
   );
 }
 
-// A real if/else decision shape: a rotated-square diamond holding the condition
-// expression. The down exit can be YES or NO depending on which branch continues
-// through the main column.
-function DecisionDiamond({ expr, active, downLabel = 'YES' }) {
-  const tone = active
-    ? 'border-amber-400 bg-amber-50 ring-4 ring-amber-200/60 shadow'
-    : 'border-amber-300 bg-amber-50';
-  const downTone = downLabel === 'YES'
-    ? 'border-green-200 text-green-600'
-    : 'border-rose-200 text-rose-500';
+// One task node in the flowchart.
+function StepNode({ step, stats }) {
+  const a = actorOf(step);
+  const Icon = a.icon;
+  const state = nodeState(stats);
+  const manual = step.actor === 'human' ? stats.active : 0;
   return (
-    <div className="relative flex h-[88px] w-[300px] items-center justify-center select-none">
-      {/* the diamond */}
-      <div className={`absolute h-[78px] w-[78px] rotate-45 rounded-md border-2 ${tone}`} />
-      <div className="relative z-10 max-w-[180px] px-2 text-center">
-        <div className="text-[9px] font-black uppercase tracking-wide text-amber-600">IF</div>
-        <div className="font-mono text-[10px] leading-tight text-amber-800 break-words">{expr}</div>
+    <div className={`relative w-[24rem] max-w-full rounded-xl border-2 ${a.ring} ${a.bg} px-3 py-2 shadow-sm`}>
+      <div className="flex items-start gap-2">
+        <span className={`mt-0.5 shrink-0 rounded-md ${a.badge} px-1.5 py-0.5 text-[9px] font-black uppercase text-white`}>{a.label}</span>
+        <Icon size={14} className={`mt-0.5 shrink-0 ${a.text}`} />
+        <span className={`text-sm font-bold leading-tight break-words ${a.text}`}>{step.name}</span>
+        {/* run-count in () next to the task */}
+        <span className="ml-auto flex shrink-0 items-center gap-1 text-[11px] font-mono text-slate-500">
+          {STATE_DOT[state]}
+          <span title="times this task has run">({stats.ran})</span>
+          <StepInfo step={step} />
+        </span>
       </div>
-      <span className={`absolute -bottom-0.5 left-1/2 -translate-x-1/2 translate-y-1/2 rounded-full border bg-white px-1.5 text-[9px] font-bold shadow-sm ${downTone}`}>
-        {downLabel}
-      </span>
-    </div>
-  );
-}
-
-// Horizontal connector from the diamond to the side branch. The branch can be
-// YES or NO, and the task can be system or human.
-function BranchArm({ task, branchLabel = 'NO', current }) {
-  const yes = branchLabel === 'YES';
-  const textTone = yes ? 'text-green-600' : 'text-rose-500';
-  const bgTone = yes ? 'bg-green-300' : 'bg-rose-300';
-  const lineTone = yes ? 'text-green-300' : 'text-rose-300';
-  return (
-    <div className="flex h-full items-center">
-      <span className={`mr-1 shrink-0 text-[10px] font-bold ${textTone}`}>{branchLabel}</span>
-      <div className={`h-px w-5 shrink-0 ${bgTone}`} />
-      <svg width="7" height="9" viewBox="0 0 7 9" className={`shrink-0 ${lineTone}`}><path d="M0 0 L7 4.5 L0 9 Z" fill="currentColor" /></svg>
-      <div className="ml-1 flex-1">
-        <StepNode name={task.name} actor={task.actor} agg={task.agg} sub={task.label} compact current={current} />
-      </div>
-    </div>
-  );
-}
-
-function LoopArrow() {
-  return (
-    <div className="pointer-events-none absolute inset-y-12 right-4 w-36 text-purple-400" aria-hidden="true">
-      <svg className="h-full w-full" viewBox="0 0 144 900" preserveAspectRatio="none">
-        <path
-          d="M30 820 C128 690 128 205 38 76"
-          stroke="currentColor"
-          strokeWidth="5"
-          strokeDasharray="16 13"
-          fill="none"
-          strokeLinecap="round"
-        />
-        <path d="M38 76 L66 84 L45 111 Z" fill="currentColor" />
-        <path
-          d="M30 820 L8 820"
-          stroke="currentColor"
-          strokeWidth="5"
-          strokeDasharray="16 13"
-          fill="none"
-          strokeLinecap="round"
-        />
-      </svg>
-      <div className="absolute right-7 top-1/2 -translate-y-1/2 rotate-90 whitespace-nowrap rounded-full border border-purple-200 bg-white/90 px-3 py-1 text-[10px] font-bold uppercase tracking-wide text-purple-700 shadow-sm">
-        repeat next patient/order row
-      </div>
-    </div>
-  );
-}
-
-// The "NO → human" connector that sits in the right column, vertically centred
-// against the condition pill in the main column.
-function NoBranch({ human, noCount, current }) {
-  return (
-    <div className="flex items-center h-full">
-      <span className="text-[10px] font-bold text-rose-500 mr-1 shrink-0">NO</span>
-      <div className="h-px w-5 bg-rose-300 shrink-0" />
-      <svg width="7" height="9" viewBox="0 0 7 9" className="text-rose-300 shrink-0"><path d="M0 0 L7 4.5 L0 9 Z" fill="currentColor" /></svg>
-      <div className="ml-1 flex-1">
-        <StepNode name={human.name} actor="human" agg={human.agg} sub={`${noCount} of ${human.agg.total} fell to a person`} compact current={current} />
-      </div>
-    </div>
-  );
-}
-
-function BulkInstanceCard({ instance, onDelete }) {
-  const patientIdxs = [...new Set(instance.taskInstances.map(t => t.patientIndex))].sort((a, b) => a - b);
-  const total = patientIdxs.length;
-  const byPatient = {};
-  patientIdxs.forEach(i => { byPatient[i] = instance.taskInstances.filter(t => t.patientIndex === i); });
-
-  const live = instance.taskInstances.filter(t => t.status !== 'skipped');
-  const doneTasks = live.filter(t => t.status === 'completed').length;
-  const stage = instanceStage(instance);
-  const donePatients = patientIdxs.filter(i => byPatient[i].filter(t => t.status !== 'skipped').every(t => t.status === 'completed')).length;
-  const curIter = Math.min(donePatients + 1, total);
-  const allDone = instance.status === 'completed';
-
-  // aggregate each base step
-  const p1 = aggStep(instance, 'wf7-p1');
-  const p2 = aggStep(instance, 'wf7-p2');
-  const p3 = aggStep(instance, 'wf7-p3');
-  const o1 = aggStep(instance, 'wf7-o1');
-  const o2 = aggStep(instance, 'wf7-o2');
-  const o3 = aggStep(instance, 'wf7-o3');
-
-  // Where the run currently sits. Prefer an active task; otherwise the last
-  // task that has run (completed) in body order on the active patient.
-  const BODY_ORDER = ['wf7-p1', 'wf7-p2', 'wf7-p3', 'wf7-o1', 'wf7-o2', 'wf7-o3'];
-  const currentStep = (() => {
-    if (allDone) return null;
-    const active = instance.taskInstances.find(t => t.status === 'active');
-    if (active) return active;
-    // fall back to the furthest completed step on the in-progress patient
-    const activePi = patientIdxs.find(i => byPatient[i].some(t => t.status !== 'completed' && t.status !== 'skipped'))
-      ?? patientIdxs.find(i => byPatient[i].some(t => t.status === 'completed'));
-    if (activePi == null) return null;
-    const rows = byPatient[activePi];
-    for (let k = BODY_ORDER.length - 1; k >= 0; k--) {
-      const t = rows.find(r => r.baseStepId === BODY_ORDER[k] && r.status === 'completed');
-      if (t) return t;
-    }
-    return null;
-  })();
-  const currentBase = currentStep?.baseStepId || null;
-
-  return (
-    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-      <div className="flex items-start gap-3 p-4">
-        <div className="mt-0.5">{statusIcon(instance.status)}</div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-semibold text-slate-800">{instance.workflowName}</span>
-            <Badge label={instance.status} type={instance.status} />
-            <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-100">
-              <RefreshCw size={10} /> loop · {donePatients}/{total} patients done
+      <div className="mt-1 flex items-center justify-between gap-2">
+        <span className="font-mono text-[10px] text-slate-400">{step.id}</span>
+        <div className="flex items-center gap-1.5">
+          {stats.done > 0 && <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">{stats.done} done</span>}
+          {/* manual backlog: active human tasks still needing a person */}
+          {manual > 0 && (
+            <span className="flex items-center gap-1 rounded bg-pink-100 px-1.5 py-0.5 text-[10px] font-black text-pink-700">
+              <Clock size={10} /> {manual} to do
             </span>
-          </div>
-          <div className="flex items-center gap-3 mt-1 text-xs text-slate-400">
-            <span className="flex items-center gap-1"><Clock size={10} /> {new Date(instance.launchedAt).toLocaleString()}</span>
-            <span>{doneTasks}/{live.length} steps</span>
-          </div>
-          <StageHeader stage={stage} />
-        </div>
-        <button onClick={() => onDelete(instance)} title="Delete this run"
-          className="shrink-0 p-2 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors">
-          <Trash2 size={15} />
-        </button>
-      </div>
-
-      {/* legend */}
-      <div className="border-t border-slate-100 bg-slate-50/40 px-4 pt-3 flex items-center gap-3 text-[11px] text-slate-500 flex-wrap">
-        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-sky-200 border border-sky-300" /> system (auto)</span>
-        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-pink-200 border border-pink-300" /> human</span>
-        <span className="inline-flex items-center gap-1"><span className="text-amber-500">◆</span> condition</span>
-        <span className="text-slate-400">· counts = patients through that step</span>
-      </div>
-
-      {/* ── ONE loop body, two columns: main flow + human fallbacks ── */}
-      <div className="bg-slate-50/40 px-6 py-6 overflow-x-auto">
-        <div className="w-fit mx-auto flex flex-col items-center">
-          <div className="rounded-full px-6 py-1.5 text-sm font-bold border-2 border-violet-400 bg-violet-50 text-violet-700">START · bulk upload</div>
-          <Arrow />
-
-          {/* loop frame: a flex row — [body grid] + [loop-back rail] */}
-          <div className="flex items-stretch gap-3">
-            <div className="border-2 border-dashed border-purple-300 rounded-2xl bg-purple-50/20 px-5 py-4">
-              <div className="flex items-center justify-center gap-1.5 text-[11px] font-bold text-purple-700 mb-3">
-                <RefreshCw size={12} /> FOR EACH PATIENT {allDone ? '· done' : `· iteration ${curIter} of ${total}`}
-              </div>
-
-              {/* 2-column grid: main column (320px) | human-fallback column (300px) */}
-              <div className="grid items-center gap-x-0" style={{ gridTemplateColumns: '320px 300px' }}>
-                {/* p1 */}
-                <div className="flex justify-center"><StepNode name="Auto-create patient if all fields exist" actor="system" agg={p1} current={currentBase === 'wf7-p1'} /></div>
-                <div />
-                {/* condition + NO→human */}
-                <div className="flex justify-center"><ConditionPill expr="all patient fields exist" /></div>
-                <NoBranch human={{ name: 'Manually create patient (order-PDF ref)', agg: p2 }} noCount={p2.ran} current={currentBase === 'wf7-p2'} />
-                {/* p3 */}
-                <div className="flex justify-center"><StepNode name="Check duplicates · create only if new" actor="system" agg={p3} current={currentBase === 'wf7-p3'} /></div>
-                <div />
-
-                {/* arrow between phases */}
-                <div className="flex justify-center"><Arrow /></div>
-                <div />
-
-                {/* o1 */}
-                <div className="flex justify-center"><StepNode name="Create order on patient / admission / episode" actor="system" agg={o1} current={currentBase === 'wf7-o1'} /></div>
-                <div />
-                {/* condition + NO→human */}
-                <div className="flex justify-center"><ConditionPill expr="admission & episode exist" /></div>
-                <NoBranch human={{ name: 'Create admission / episode / order (order-PDF ref)', agg: o2 }} noCount={o2.ran} current={currentBase === 'wf7-o2'} />
-                {/* o3 */}
-                <div className="flex justify-center"><StepNode name="Check duplicates · create only if new" actor="system" agg={o3} current={currentBase === 'wf7-o3'} /></div>
-                <div />
-              </div>
-
-              <div className="text-center text-[11px] font-medium text-purple-700 mt-3">
-                {allDone ? '✓ last patient & last order reached' : 'more patients? → repeat'}
-              </div>
-            </div>
-
-            {/* loop-back rail down the right side of the frame */}
-            <div className="flex flex-col items-center justify-center py-2">
-              <div className="flex-1 w-px bg-purple-300 border-l-2 border-dashed border-purple-300" />
-              <div className="rotate-180" style={{ writingMode: 'vertical-rl' }}>
-                <span className="text-[10px] font-bold text-purple-600 whitespace-nowrap flex items-center gap-1 py-2">
-                  <RefreshCw size={10} /> repeat for each patient until last
-                </span>
-              </div>
-              <div className="flex-1 w-px bg-purple-300 border-l-2 border-dashed border-purple-300" />
-              <svg width="12" height="9" viewBox="0 0 12 9" className="text-purple-400 -mt-1 rotate-180"><path d="M0 0 L6 9 L12 0 Z" fill="currentColor" /></svg>
-            </div>
-          </div>
-
-          <Arrow />
-          <div className={`rounded-full px-6 py-1.5 text-sm font-bold border-2 ${allDone ? 'border-green-400 bg-green-50 text-green-700' : 'border-slate-300 bg-white text-slate-400'}`}>
-            END {allDone && '· all patients & orders done'}
-          </div>
-        </div>
-      </div>
-
-      {/* where the run is right now (no record / actions here — those live in the Work Bucket) */}
-      {!allDone && currentStep && (
-        <div className="border-t border-slate-100 px-4 py-3 bg-amber-50/40 flex items-center gap-2 text-sm">
-          <span className="relative flex h-2.5 w-2.5">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-60" />
-            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" />
-          </span>
-          <span className="text-slate-500">Currently at:</span>
-          <span className="font-semibold text-slate-700">{currentStep.taskName}</span>
-          <ActorBadge actor={currentStep.actor} />
-          {currentStep.actor === 'human' && (
-            <span className="text-[11px] text-slate-400">— waiting on a person in the Work Bucket</span>
           )}
+          {stats.failed > 0 && <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-700">{stats.failed} failed</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Connector() {
+  return <ArrowDown size={16} className="my-0.5 text-slate-300" />;
+}
+
+// Render a whole workflow definition as a vertical flowchart with decision
+// diamonds. Conditional steps get a diamond above them; consecutive steps that
+// share the same preReq + are mutually-exclusive branches render as sibling arms.
+function WorkflowFlow({ definition, tasks }) {
+  const steps = definition.steps || [];
+  const rendered = [];
+
+  for (let i = 0; i < steps.length; i += 1) {
+    const step = steps[i];
+    const stats = stepStats(tasks, step.id);
+
+    // A conditional step gets a decision diamond. If the *next* step is a
+    // mutually-exclusive sibling (same preReq, also conditional), pair them so
+    // the diamond shows both outcomes.
+    const next = steps[i + 1];
+    const isPair = step.condition && next?.condition
+      && JSON.stringify(step.preReq) === JSON.stringify(next.preReq);
+
+    if (isPair) {
+      const nextStats = stepStats(tasks, next.id);
+      rendered.push(
+        <div key={step.id} className="flex flex-col items-center">
+          {rendered.length > 0 && <Connector />}
+          <DecisionDiamond condition={step.condition} downLabel="YES" rightLabel="else →" />
+          <div className="flex w-full items-start justify-center gap-4">
+            <div className="flex flex-col items-center">
+              <span className="mb-1 text-[10px] font-black text-emerald-600">{conditionLabel(step.condition)}</span>
+              <StepNode step={step} stats={stats} />
+            </div>
+            <div className="flex flex-col items-center">
+              <span className="mb-1 text-[10px] font-black text-slate-500">{conditionLabel(next.condition)}</span>
+              <StepNode step={next} stats={nextStats} />
+            </div>
+          </div>
+        </div>,
+      );
+      i += 1; // consumed the sibling
+      continue;
+    }
+
+    rendered.push(
+      <div key={step.id} className="flex flex-col items-center">
+        {rendered.length > 0 && <Connector />}
+        {step.condition && <DecisionDiamond condition={step.condition} downLabel="YES" />}
+        <StepNode step={step} stats={stats} />
+      </div>,
+    );
+  }
+
+  return <div className="flex flex-col items-center py-2">{rendered}</div>;
+}
+
+// A single workflow run rendered as the clean flowchart, with run summary.
+function RunCard({ run, onDelete }) {
+  const [open, setOpen] = useState(true);
+  const definition = run.definition || {};
+  const tasks = run.tasks || [];
+  const totalManual = tasks.filter((t) => t.status === 'active' && t.actor === 'human').length;
+  const totalRan = tasks.filter((t) => t.status !== 'pending' && t.status !== 'skipped').length;
+  const items = run.total_items || 0;
+
+  const statusTone = run.status === 'completed'
+    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+    : run.status === 'failed'
+      ? 'bg-rose-50 text-rose-700 border-rose-200'
+      : 'bg-amber-50 text-amber-700 border-amber-200';
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-wrap items-center gap-3 border-b border-slate-100 p-4">
+        <button onClick={() => setOpen((v) => !v)} className="text-left">
+          <div className="flex items-center gap-2">
+            <span className="text-base font-black text-slate-800">{definition.name || run.workflow_id}</span>
+            <span className="font-mono text-[11px] text-slate-400">{run.workflow_id}</span>
+          </div>
+          <div className="mt-0.5 text-xs text-slate-500">
+            {run.source_label || '—'} · {new Date(run.created_at).toLocaleString()}
+          </div>
+        </button>
+        <div className="ml-auto flex items-center gap-2">
+          <span className={`rounded-full border px-2.5 py-1 text-[11px] font-bold ${statusTone}`}>{run.status}</span>
+          <span className="rounded-full border border-slate-200 px-2.5 py-1 text-[11px] font-semibold text-slate-600">{items} item(s)</span>
+          <span className="rounded-full border border-slate-200 px-2.5 py-1 text-[11px] font-semibold text-slate-600">{totalRan} task run(s)</span>
+          {totalManual > 0 && (
+            <span className="rounded-full border border-pink-200 bg-pink-50 px-2.5 py-1 text-[11px] font-black text-pink-700">{totalManual} manual to do</span>
+          )}
+          <button
+            onClick={() => onDelete(run)}
+            title="Delete run"
+            className="rounded-lg border border-slate-200 p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+          >
+            <Trash2 size={14} />
+          </button>
+        </div>
+      </div>
+      {open && (
+        <div className="overflow-x-auto p-4">
+          <div className="mx-auto w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">
+            START · {definition.trigger?.id || 'trigger'}
+          </div>
+          <Connector />
+          <WorkflowFlow definition={definition} tasks={tasks} />
+          <div className="mx-auto mt-1 w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">END</div>
         </div>
       )}
     </div>
   );
 }
 
-// Aggregate object lifecycle across all rows of a run: how many were created /
-// updated / found / in-review per object. Driven by each task's decision flags.
-function aggregateObjects(instance) {
-  const byPatient = {};
-  for (const t of instance.taskInstances) {
-    const pi = t.patientIndex;
-    if (pi == null) continue;
-    byPatient[pi] = { ...(byPatient[pi] || {}), ...(t.decisions || {}) };
-  }
-  const objs = {
-    Patient: { created: 0, updated: 0, review: 0 },
-    'Admission Object': { found: 0, created: 0 },
-    'Episode Object': { found: 0, created: 0 },
-    Order: { created: 0, updated: 0 },
-  };
-  for (const d of Object.values(byPatient)) {
-    if (d.patient_write_success && d.patient_exists) objs.Patient.updated += 1;
-    else if (d.patient_write_success || d.patient_retry_success) objs.Patient.created += 1;
-    if (d.needs_manual_review) objs.Patient.review += 1;
-    if (d.admission_created) objs['Admission Object'].created += 1; else if (d.admission_exists || d.admission_ready) objs['Admission Object'].found += 1;
-    if (d.episode_created) objs['Episode Object'].created += 1; else if (d.episode_exists || d.episode_ready) objs['Episode Object'].found += 1;
-    if (d.order_write_success && d.order_exists) objs.Order.updated += 1;
-    else if (d.order_write_success || d.order_retry_success) objs.Order.created += 1;
-  }
-  return objs;
-}
-
-function patientLabel(record) {
-  const info = record?.patient_info || record || {};
-  return info.name || info.patient_name || 'Unknown patient';
-}
-
-function patientDob(record) {
-  const info = record?.patient_info || record || {};
-  return info.dob || info.DOB || '';
-}
-
-function patientMrn(record) {
-  const info = record?.patient_info || record || {};
-  return info.mrn || info.MRN || '';
-}
-
-function orderNumber(record) {
-  return record?.order_info?.order_number || record?.order_number || record?.orderno || 'order';
-}
-
-function summarizePatientLanes(instance) {
-  const grouped = new Map();
-  for (const task of instance.taskInstances || []) {
-    const label = patientLabel(task.patientRecord);
-    const dob = patientDob(task.patientRecord);
-    const mrn = patientMrn(task.patientRecord);
-    const key = [label, dob, mrn].filter(Boolean).join('|') || `row-${task.patientIndex}`;
-    if (!grouped.has(key)) {
-      grouped.set(key, {
-        key,
-        label,
-        dob,
-        mrn,
-        indexes: new Set(),
-        orders: new Set(),
-        tasks: [],
-      });
-    }
-    const lane = grouped.get(key);
-    if (task.patientIndex != null) lane.indexes.add(task.patientIndex);
-    lane.orders.add(orderNumber(task.orderRecord));
-    lane.tasks.push(task);
-  }
-
-  return [...grouped.values()].map((lane) => {
-    const live = lane.tasks.filter((task) => task.status !== 'skipped');
-    const active = live.filter((task) => task.status === 'active');
-    const failed = live.some((task) => task.status === 'failed');
-    const blocked = active.some((task) => task.actor === 'human');
-    const completed = live.length > 0 && live.every((task) => task.status === 'completed');
-    const status = failed ? 'failed' : blocked ? 'blocked' : completed ? 'completed' : 'running';
-    const activeByActor = {
-      ai: active.filter((task) => task.actor === 'ai').length,
-      system: active.filter((task) => task.actor === 'system').length,
-      human: active.filter((task) => task.actor === 'human').length,
-    };
-    return {
-      ...lane,
-      indexes: [...lane.indexes],
-      orders: [...lane.orders].filter((order) => order !== 'order'),
-      status,
-      activeByActor,
-      activeTask: active[0] || null,
-      doneTasks: live.filter((task) => task.status === 'completed').length,
-      totalTasks: live.length,
-    };
-  }).sort((a, b) => a.label.localeCompare(b.label));
-}
-
-function orchestrationBuckets(instance) {
-  const lanes = summarizePatientLanes(instance);
-  const activeTasks = (instance.taskInstances || []).filter((task) => task.status === 'active');
-  return {
-    lanes,
-    runningPatients: lanes.filter((lane) => lane.status === 'running').length,
-    blockedPatients: lanes.filter((lane) => lane.status === 'blocked').length,
-    completedPatients: lanes.filter((lane) => lane.status === 'completed').length,
-    failedPatients: lanes.filter((lane) => lane.status === 'failed').length,
-    continuingPatients: lanes.filter((lane) => lane.status !== 'blocked' && lane.status !== 'failed').length,
-    activeAiTasks: activeTasks.filter((task) => task.actor === 'ai').length,
-    activeSystemTasks: activeTasks.filter((task) => task.actor === 'system').length,
-    activeHumanTasks: activeTasks.filter((task) => task.actor === 'human').length,
-  };
-}
-
-function ParallelBuckets({ buckets }) {
-  const tiles = [
-    [`${buckets.blockedPatients} blocked`, 'insufficient data / human review', 'border-rose-200 bg-rose-50 text-rose-700'],
-    [`${buckets.activeAiTasks} AI tasks running`, 'PDF extraction and validation', 'border-violet-200 bg-violet-50 text-violet-700'],
-    [`${buckets.activeSystemTasks} system tasks active`, 'DB checks and writes', 'border-sky-200 bg-sky-50 text-sky-700'],
-    [`${buckets.activeHumanTasks} human tasks active`, 'work bucket actions', 'border-pink-200 bg-pink-50 text-pink-700'],
-    [`${buckets.continuingPatients} patients continuing`, 'not blocked or failed', 'border-emerald-200 bg-emerald-50 text-emerald-700'],
-  ];
-  return (
-    <div className="grid md:grid-cols-5 gap-2">
-      {tiles.map(([title, sub, cls]) => (
-        <div key={title} className={`rounded-xl border px-3 py-2 ${cls}`}>
-          <div className="text-sm font-black">{title}</div>
-          <div className="mt-0.5 text-[11px] opacity-75">{sub}</div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function PatientParallelLanes({ lanes }) {
-  if (!lanes.length) return null;
-  const statusCls = {
-    running: 'border-sky-200 bg-sky-50/70 text-sky-800',
-    blocked: 'border-rose-200 bg-rose-50/80 text-rose-800',
-    completed: 'border-emerald-200 bg-emerald-50/80 text-emerald-800',
-    failed: 'border-red-300 bg-red-50 text-red-800',
-  };
-  return (
-    <div className="mt-3">
-      <div className="mb-2 text-[11px] font-bold uppercase tracking-wide text-slate-500">Parallel patient instances</div>
-      <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-2">
-        {lanes.map((lane) => (
-          <div key={lane.key} className={`rounded-xl border p-3 ${statusCls[lane.status] || statusCls.running}`}>
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="truncate text-sm font-black">{lane.label}</div>
-                <div className="mt-0.5 text-[11px] opacity-75">
-                  {lane.dob && <>DOB {lane.dob}</>} {lane.mrn && <>· MRN {lane.mrn}</>}
-                </div>
-              </div>
-              <span className="shrink-0 rounded-full bg-white/70 px-2 py-0.5 text-[10px] font-bold uppercase">{lane.status}</span>
-            </div>
-            <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] font-semibold">
-              <span className="rounded-full bg-white/70 px-2 py-0.5">{lane.orders.length || lane.indexes.length} order{(lane.orders.length || lane.indexes.length) === 1 ? '' : 's'}</span>
-              <span className="rounded-full bg-white/70 px-2 py-0.5">{lane.doneTasks}/{lane.totalTasks} steps</span>
-              {lane.activeByActor.ai > 0 && <span className="rounded-full bg-white/70 px-2 py-0.5">AI {lane.activeByActor.ai}</span>}
-              {lane.activeByActor.system > 0 && <span className="rounded-full bg-white/70 px-2 py-0.5">SYS {lane.activeByActor.system}</span>}
-              {lane.activeByActor.human > 0 && <span className="rounded-full bg-white/70 px-2 py-0.5">HUMAN {lane.activeByActor.human}</span>}
-            </div>
-            {lane.activeTask && (
-              <div className="mt-2 truncate text-[11px] opacity-80">Current: {lane.activeTask.taskName}</div>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
+// ── Area intake monitor (Trigger 1) ────────────────────────
 function AreaIntakePanel({ areas, loadingAreaId, onRunCheck }) {
-  const triggerLane = (title, subtitle, condition, tone) => (
-    <div className={`rounded-xl border p-3 ${tone}`}>
-      <div className="text-[10px] font-black uppercase tracking-wide opacity-70">Trigger lane</div>
-      <div className="mt-1 text-sm font-black">{title}</div>
-      <div className="mt-1 text-xs opacity-80">{subtitle}</div>
-      <div className="mt-2 inline-flex items-center gap-1 rounded-full border border-white/70 bg-white/70 px-2 py-0.5 font-mono text-[10px]">
-        <span className="inline-block h-2 w-2 rotate-45 border border-amber-500 bg-white" />
-        {condition}
-      </div>
-    </div>
-  );
-
   if (!areas.length) {
     return (
       <section className="mb-5 rounded-2xl border border-slate-200 bg-white p-4">
@@ -728,32 +274,11 @@ function AreaIntakePanel({ areas, loadingAreaId, onRunCheck }) {
   }
   return (
     <section className="mb-5 rounded-2xl border border-slate-200 bg-white p-4">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-sm font-bold text-slate-800">Area Intake Monitor</h2>
-          <p className="mt-1 text-xs text-slate-500">Onboarding starts the ongoing monitor. Upload and missing-upload notification triggers run independently.</p>
-        </div>
+      <div>
+        <h2 className="text-sm font-bold text-slate-800">Area Intake Monitor · Trigger 1</h2>
+        <p className="mt-1 text-xs text-slate-500">Onboarding starts the daily monitor. Upload and missing-upload notification triggers run independently.</p>
       </div>
-      <div className="mt-3 rounded-xl border border-violet-200 bg-violet-50/50 p-3">
-        <div className="mx-auto w-fit rounded-full border-2 border-violet-300 bg-white px-4 py-1.5 text-sm font-black text-violet-700">
-          START · Onboarding Successful
-        </div>
-        <div className="mt-3 grid md:grid-cols-2 gap-3">
-          {triggerLane(
-            'Upload Trigger',
-            'Runs wf7 when an HHAH uploads Excel + PDF ZIP.',
-            'upload_received_within_24h',
-            'border-sky-200 bg-sky-50 text-sky-800',
-          )}
-          {triggerLane(
-            'Notification Trigger',
-            'Runs when an expected HHAH has not uploaded within 24 hours.',
-            'upload_missing_after_24h',
-            'border-rose-200 bg-rose-50 text-rose-800',
-          )}
-        </div>
-      </div>
-      <div className="mt-3 grid lg:grid-cols-2 gap-3">
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
         {areas.map((area) => {
           const status = area.check?.status || 'monitoring';
           const missing = area.hhahs.filter((hhah) => !hhah.received);
@@ -786,11 +311,6 @@ function AreaIntakePanel({ areas, loadingAreaId, onRunCheck }) {
                   <div className="text-[10px] uppercase text-rose-600">missing</div>
                 </div>
               </div>
-              {area.check && (
-                <div className="mt-2 text-[11px] text-slate-500">
-                  Window: {new Date(area.check.window_started_at).toLocaleString()} to {new Date(area.check.window_ends_at).toLocaleString()}
-                </div>
-              )}
               <div className="mt-3 divide-y divide-slate-100 rounded-lg border border-slate-100">
                 {area.hhahs.map((hhah) => (
                   <div key={hhah.hhah_id} className="flex items-center justify-between gap-2 px-3 py-2">
@@ -804,19 +324,6 @@ function AreaIntakePanel({ areas, loadingAreaId, onRunCheck }) {
                   </div>
                 ))}
               </div>
-              {area.notifications.length > 0 && (
-                <div className="mt-3 rounded-lg border border-rose-100 bg-rose-50/60 px-3 py-2">
-                  <div className="text-[11px] font-bold uppercase text-rose-700">Notification workflow</div>
-                  <div className="mt-1 space-y-1">
-                    {area.notifications.map((notification) => (
-                      <div key={notification.id} className="flex items-center justify-between gap-2 text-[11px] text-rose-700">
-                        <span className="truncate">{notification.hhah_name}</span>
-                        <span className="font-bold">{notification.status}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
               <button
                 type="button"
                 onClick={() => onRunCheck(area.id)}
@@ -834,528 +341,69 @@ function AreaIntakePanel({ areas, loadingAreaId, onRunCheck }) {
   );
 }
 
-const OBJ_TONE = {
-  created: 'text-green-700 bg-green-50 border-green-200',
-  updated: 'text-violet-700 bg-violet-50 border-violet-200',
-  found: 'text-sky-700 bg-sky-50 border-sky-200',
-  review: 'text-amber-700 bg-amber-50 border-amber-200',
-  missing: 'text-rose-700 bg-rose-50 border-rose-200',
-};
-
-function ObjectsPanel({ instance }) {
-  const objs = aggregateObjects(instance);
-  return (
-    <div className="w-60 shrink-0 rounded-2xl border border-slate-200 bg-white p-3">
-      <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-2">Objects created / updated</div>
-      <div className="space-y-2">
-        {Object.entries(objs).map(([name, counts]) => {
-          const parts = Object.entries(counts).filter(([, n]) => n > 0);
-          return (
-            <div key={name} className="flex items-center justify-between gap-2">
-              <span className="text-xs font-semibold text-slate-700">{name}</span>
-              <div className="flex flex-wrap gap-1 justify-end">
-                {parts.length === 0
-                  ? <span className="text-[10px] text-slate-300">—</span>
-                  : parts.map(([state, n]) => (
-                    <span key={state} className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${OBJ_TONE[state] || 'text-slate-500 bg-slate-50 border-slate-200'}`}>
-                      {n} {state}
-                    </span>
-                  ))}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function DbBulkInstanceCard({ instance, onDelete }) {
-  const patientIdxs = [...new Set(instance.taskInstances.map(t => t.patientIndex))].sort((a, b) => a - b);
-  const total = patientIdxs.length;
-  const buckets = orchestrationBuckets(instance);
-  const live = instance.taskInstances.filter(t => t.status !== 'skipped');
-  const doneTasks = live.filter(t => t.status === 'completed').length;
-  const active = instance.taskInstances.find(t => t.status === 'active');
-  const allDone = instance.status === 'completed';
-  const donePatients = patientIdxs.filter((idx) => {
-    const tasks = instance.taskInstances.filter(t => t.patientIndex === idx && t.status !== 'skipped');
-    return tasks.length > 0 && tasks.every(t => t.status === 'completed');
-  }).length;
-
-  const hiddenInlineConditions = new Set(['admission_ready', 'episode_ready']);
-
-  const row = (leftId, rightId = null, label = null, options = {}) => {
-    const leftTask = instance.taskInstances.find(t => t.stepId === leftId);
-    const rightTask = rightId ? instance.taskInstances.find(t => t.stepId === rightId) : null;
-
-    // Prefer the side branch condition because that describes when the branch is
-    // taken (e.g. missing dates, patient exists, retry failed).
-    const branchExpr = rightTask?.conditionExpr || leftTask?.conditionExpr;
-    const sideBranchIsTrue = Boolean(rightTask?.conditionExpr && rightTask.conditionExpr === branchExpr);
-    const downLabel = sideBranchIsTrue ? 'NO' : 'YES';
-    const sideLabel = sideBranchIsTrue ? 'YES' : 'NO';
-
-    // No fallback branch → a single step box, no decision.
-    if (!rightId) {
-      const inlineCondition = hiddenInlineConditions.has(leftTask?.conditionExpr) ? null : leftTask?.conditionExpr;
-      return (
-        <div className="grid items-center gap-x-4" style={{ gridTemplateColumns: '320px 320px' }}>
-          <div className="flex justify-center">
-            <StepNode
-              name={leftTask?.taskName || leftId}
-              actor={leftTask?.actor || 'system'}
-              agg={aggDbStep(instance, leftId)}
-              sub={<ConditionDiamond expr={inlineCondition} />}
-              current={active?.stepId === leftId}
-            />
-          </div>
-          <div />
-        </div>
-      );
-    }
-
-    const sideTask = {
-      name: rightTask?.taskName || rightId,
-      actor: rightTask?.actor || 'system',
-      agg: aggDbStep(instance, rightId),
-      label,
-    };
-
-    if (options.choice) {
-      return (
-        <div className="grid items-center gap-x-4" style={{ gridTemplateColumns: '320px 320px' }}>
-          <div className="flex flex-col items-center">
-            {branchExpr && (
-              <>
-                <DecisionDiamond expr={branchExpr} active={active?.stepId === leftId || active?.stepId === rightId} downLabel={downLabel} />
-                <Arrow small />
-              </>
-            )}
-            <StepNode
-              name={leftTask?.taskName || leftId}
-              actor={leftTask?.actor || 'system'}
-              agg={aggDbStep(instance, leftId)}
-              current={active?.stepId === leftId}
-            />
-          </div>
-          <BranchArm task={sideTask} branchLabel={sideLabel} current={active?.stepId === rightId} />
-        </div>
-      );
-    }
-
-    // Check/fallback fork: first run the check/action, then branch on the result.
-    return (
-      <div className="grid items-center gap-x-4" style={{ gridTemplateColumns: '320px 320px' }}>
-        <div className="flex flex-col items-center">
-          <StepNode
-            name={leftTask?.taskName || leftId}
-            actor={leftTask?.actor || 'system'}
-            agg={aggDbStep(instance, leftId)}
-            current={active?.stepId === leftId}
-          />
-          {branchExpr && (
-            <>
-              <Arrow small />
-              <DecisionDiamond expr={branchExpr} active={active?.stepId === leftId || active?.stepId === rightId} downLabel={downLabel} />
-            </>
-          )}
-        </div>
-        <BranchArm task={sideTask} branchLabel={sideLabel} current={active?.stepId === rightId} />
-      </div>
-    );
-  };
-
-  return (
-    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-      <div className="flex items-start gap-3 p-4">
-        <div className="mt-0.5">{statusIcon(instance.status)}</div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-semibold text-slate-800">{instance.workflowName}</span>
-            <Badge label={instance.status} type={instance.status} />
-            <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-100">
-              <RefreshCw size={10} /> parallel · {donePatients}/{total} rows done
-            </span>
-            {instance.areaName && (
-              <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-slate-50 text-slate-600 border border-slate-100">
-                {instance.areaName}{instance.hhahName ? ` · ${instance.hhahName}` : ''}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-3 mt-1 text-xs text-slate-400">
-            <span className="flex items-center gap-1"><Clock size={10} /> {new Date(instance.launchedAt).toLocaleString()}</span>
-            <span>{doneTasks}/{live.length} live steps</span>
-          </div>
-          <StageHeader stage={instanceStage(instance)} />
-        </div>
-        {onDelete && (
-          <button onClick={() => onDelete(instance)} title="Delete this run"
-            className="shrink-0 p-2 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors">
-            <Trash2 size={15} />
-          </button>
-        )}
-      </div>
-
-      <div className="border-t border-slate-100 bg-slate-50/40 px-4 pt-3 flex items-center gap-3 text-[11px] text-slate-500 flex-wrap">
-        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-sky-200 border border-sky-300" /> system</span>
-        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-violet-200 border border-violet-300" /> AI</span>
-        <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-pink-200 border border-pink-300" /> human</span>
-        <span>counts show workflow rows through each step</span>
-      </div>
-
-      <div className="bg-slate-50/40 px-4 py-4 border-t border-slate-100">
-        <ParallelBuckets buckets={buckets} />
-        <PatientParallelLanes lanes={buckets.lanes} />
-      </div>
-
-      <div className="bg-slate-50/40 px-6 py-6 overflow-x-auto">
-        <div className="w-fit mx-auto flex flex-col items-center">
-          <div className="rounded-full px-6 py-1.5 text-sm font-bold border-2 border-violet-400 bg-violet-50 text-violet-700">START · Excel + order PDFs</div>
-          <Arrow />
-          <div className="flex items-start gap-4">
-          <div className="relative border-2 border-dashed border-purple-300 rounded-2xl bg-purple-50/20 px-5 py-4 pr-44">
-            <LoopArrow />
-            <div className="relative z-10">
-              <div className="flex items-center justify-center gap-1.5 text-[11px] font-bold text-purple-700 mb-4">
-                <RefreshCw size={12} /> FOR EACH PATIENT / ORDER ROW UNTIL LAST ROW
-              </div>
-              <div className="space-y-2">
-                {row('wf7-s1')}
-                <Arrow small />
-                {row('wf7-s2')}
-                <Arrow small />
-                {row('wf7-s3', 'wf7-s5', 'missing data fallback')}
-                <Arrow small />
-                {row('wf7-s12')}
-                <Arrow small />
-                {row('wf7-s24', 'wf7-s25', 'manual object dates if SOC missing')}
-                <Arrow small />
-                {row('wf7-s26', 'wf7-s27', 'manual object dates if SOE/EOE missing')}
-                <Arrow small />
-                {row('wf7-s14', 'wf7-s13', 'create or update patient', { choice: true })}
-                <Arrow small />
-                {row('wf7-s15', 'wf7-s16', 'retry or human fix')}
-                <Arrow small />
-                {row('wf7-s18', 'wf7-s17', 'create or update order', { choice: true })}
-                <Arrow small />
-                {row('wf7-s19', 'wf7-s20', 'retry or human fix')}
-                <Arrow small />
-                {row('wf7-s21')}
-              </div>
-            </div>
-          </div>
-          <ObjectsPanel instance={instance} />
-          </div>
-          <Arrow />
-          <div className={`rounded-full px-6 py-1.5 text-sm font-bold border-2 ${allDone ? 'border-green-400 bg-green-50 text-green-700' : 'border-slate-300 bg-white text-slate-400'}`}>
-            END {allDone && '· all rows reviewed'}
-          </div>
-        </div>
-      </div>
-
-      {!allDone && active && (
-        <div className="border-t border-slate-100 px-4 py-3 bg-amber-50/40 flex items-center gap-2 text-sm">
-          <span className="relative flex h-2.5 w-2.5">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-60" />
-            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" />
-          </span>
-          <span className="text-slate-500">Currently at:</span>
-          <span className="font-semibold text-slate-700">{active.taskName}</span>
-          {active.assignedTo && <span className="text-[11px] text-slate-400">assigned to {active.assignedTo}</span>}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function InstanceCard({ instance, users, onDelete }) {
-  const [view, setView] = useState('flow'); // 'flow' | 'detail' | 'collapsed'
-
-  // Skipped (not-taken branch) steps are excluded from progress counts.
-  const liveTasks = instance.taskInstances.filter(t => t.status !== 'skipped');
-  const totalActions = liveTasks.reduce((s, t) => s + t.actionInstances.filter(a => a.status !== 'skipped').length, 0);
-  const doneActions = liveTasks.reduce((s, t) => s + t.actionInstances.filter(a => a.status === 'completed').length, 0);
-  const totalTasks = liveTasks.length;
-  const doneTasks = liveTasks.filter(t => t.status === 'completed').length;
-  const stage = instanceStage(instance);
-
-  return (
-    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-      <div className="flex items-start gap-3 p-4">
-        <div className="mt-0.5">{statusIcon(instance.status)}</div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-semibold text-slate-800">{instance.workflowName}</span>
-            <Badge label={instance.status} type={instance.status} />
-          </div>
-          <div className="flex items-center gap-3 mt-1 text-xs text-slate-400">
-            <span className="flex items-center gap-1"><Clock size={10} /> {new Date(instance.launchedAt).toLocaleString()}</span>
-            <span>{doneTasks}/{totalTasks} steps</span>
-            <span>{doneActions}/{totalActions} sub-steps</span>
-          </div>
-          <StageHeader stage={stage} />
-          <div className="mt-2">{progressBar(doneActions, totalActions)}</div>
-        </div>
-
-        {/* view toggle — clicking the active button collapses */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
-            <button onClick={() => setView(v => v === 'flow' ? 'collapsed' : 'flow')}
-              className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1 ${view === 'flow' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>
-              <GitBranch size={11} /> Flow
-            </button>
-            <button onClick={() => setView(v => v === 'detail' ? 'collapsed' : 'detail')}
-              className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1 ${view === 'detail' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>
-              {view === 'detail' ? <ChevronUp size={11} /> : <ChevronDown size={11} />} Detail
-            </button>
-          </div>
-          <button onClick={() => onDelete(instance)} title="Delete this run"
-            className="p-2 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors">
-            <Trash2 size={15} />
-          </button>
-        </div>
-      </div>
-
-      {view === 'flow' && (
-        <div className="border-t border-slate-100 bg-slate-50/40">
-          <WorkflowFlowChart nodes={nodesFromInstance(instance, users)} endDone={instance.status === 'completed'} />
-        </div>
-      )}
-
-      {view === 'detail' && (
-        <div className="border-t border-slate-100 px-4 py-3 bg-slate-50/40 space-y-0">
-          {instance.taskInstances.map((ti, tIdx) => (
-            <StepBlock key={ti.id} ti={ti} tIdx={tIdx} isLast={tIdx === instance.taskInstances.length - 1} users={users} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Who is doing what ─────────────────────────────────
-// One task card with description + status + one-click Complete.
-function TaskCard({ item, onComplete }) {
-  const statusLabel = item.status === 'completed' ? 'done' : item.status === 'active' ? 'in progress' : 'waiting';
-  const statusCls = item.status === 'completed' ? 'bg-green-100 text-green-700'
-    : item.status === 'active' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500';
-  return (
-    <div className="bg-white rounded-xl border border-slate-100 p-3 shadow-sm">
-      <div className="flex items-start gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${typeBadgeCls[item.type || 'task']}`}>{typeIcon[item.type || 'task']}</span>
-            <span className="font-semibold text-slate-800 text-sm">{item.taskName}</span>
-            <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${statusCls}`}>{statusLabel}</span>
-          </div>
-          <div className="text-xs text-slate-500 mt-1">{item.description || 'No description.'}</div>
-          <div className="text-[11px] text-slate-400 mt-1">{item.workflowName}</div>
-        </div>
-        <button
-          onClick={() => onComplete(item)}
-          className="shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-50 text-green-700 border border-green-200 hover:bg-green-100 transition-colors">
-          <CheckCircle2 size={13} /> Complete
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function PeoplePanel({ instances, users, onComplete }) {
-  const workByUser = {};
-  for (const inst of instances) {
-    if (inst.status !== 'running') continue;
-    for (const ti of inst.taskInstances) {
-      if (ti.status !== 'active') continue;
-      const ai = (ti.actionInstances || [])[0];
-      const assignedTo = ti.assignedTo || ai?.assignedTo;
-      if (!assignedTo) continue;
-      (workByUser[assignedTo] = workByUser[assignedTo] || []).push({
-        instanceId: inst.id,
-        taskInstanceId: ti.id,
-        actionInstanceId: ai?.id,
-        dbBacked: inst.dbBacked || false,
-        workflowName: inst.workflowName,
-        taskName: ti.taskName,
-        description: ti.description,
-        type: ti.type,
-        status: ti.status,
-      });
-    }
-  }
-  const entries = Object.entries(workByUser);
-  if (entries.length === 0) {
-    return <div className="text-center py-8 text-slate-400 text-sm">No active tasks right now.</div>;
-  }
-  return (
-    <div className="space-y-3">
-      {entries.map(([userId, items]) => {
-        const user = users.find(u => u.id === userId);
-        if (!user) return null;
-        return (
-          <div key={userId} className="bg-slate-50/60 rounded-2xl border border-slate-100 p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <div className="w-8 h-8 rounded-full bg-violet-200 flex items-center justify-center text-violet-700 font-bold text-sm">{user.name[0]}</div>
-              <div>
-                <div className="font-semibold text-slate-800 text-sm">{user.name}</div>
-                <div className="text-xs text-slate-400">{items.length} active task{items.length !== 1 ? 's' : ''}</div>
-              </div>
-            </div>
-            <div className="grid md:grid-cols-2 gap-2">
-              {items.map((item, i) => (
-                <TaskCard key={i} item={item} onComplete={onComplete} />
-              ))}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function StatCard({ label, value, sub, color, onClick, active }) {
+function StatCard({ label, value, sub, color }) {
   const colors = {
     violet: 'bg-violet-50 text-violet-700 border-violet-100',
-    amber:  'bg-amber-50 text-amber-700 border-amber-100',
-    green:  'bg-green-50 text-green-700 border-green-100',
-    slate:  'bg-slate-50 text-slate-700 border-slate-100',
+    amber: 'bg-amber-50 text-amber-700 border-amber-100',
+    green: 'bg-green-50 text-green-700 border-green-100',
+    slate: 'bg-slate-50 text-slate-700 border-slate-100',
+    pink: 'bg-pink-50 text-pink-700 border-pink-100',
   };
-  const clickable = typeof onClick === 'function';
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={!clickable}
-      className={`text-left rounded-xl border p-4 transition-all ${colors[color] || colors.slate} ${clickable ? 'cursor-pointer hover:shadow-md hover:-translate-y-0.5' : 'cursor-default'} ${active ? 'ring-2 ring-offset-1 ring-current shadow-md' : ''}`}
-    >
+    <div className={`rounded-xl border p-4 ${colors[color] || colors.slate}`}>
       <div className="text-2xl font-bold">{value}</div>
-      <div className="text-sm font-medium mt-0.5 flex items-center gap-1">
-        {label}
-        {clickable && <ChevronDown size={12} className={`transition-transform ${active ? 'rotate-180' : ''}`} />}
-      </div>
-      {sub && <div className="text-xs opacity-60 mt-0.5">{sub}</div>}
-    </button>
+      <div className="mt-0.5 text-sm font-medium">{label}</div>
+      {sub && <div className="mt-0.5 text-xs opacity-60">{sub}</div>}
+    </div>
   );
 }
 
-// Every (non-skipped) task across all running instances. A task is atomic:
-// one assignee, one status. e.g. 3 runs of a 3-step workflow → up to 9 tasks
-// (fewer if some branches were skipped).
-function getActiveTaskGroups(instances) {
-  const groups = [];
-  for (const inst of instances) {
-    if (inst.status !== 'running') continue;
-    for (const ti of inst.taskInstances) {
-      if (ti.status === 'skipped') continue;
-      const assignedTo = ti.assignedTo || (ti.actionInstances || [])[0]?.assignedTo || null;
-      groups.push({
-        key: `${inst.id}-${ti.id}`,
-        workflowName: inst.workflowName,
-        taskName: ti.taskName,
-        type: ti.type || 'task',
-        status: ti.status,            // 'active' | 'pending' | 'completed'
-        assignedTo,
-      });
-    }
-  }
-  return groups;
-}
-
-function ActiveTasksPanel({ instances, users }) {
-  const groups = getActiveTaskGroups(instances);
-  if (groups.length === 0) {
-    return (
-      <div className="text-center py-10 text-slate-400 text-sm border border-dashed border-slate-200 rounded-2xl">
-        No active tasks right now. Launch a workflow to see live work here.
-      </div>
-    );
-  }
+function Legend() {
   return (
-    <div className="grid md:grid-cols-2 gap-3">
-      {groups.map(g => {
-        const u = users.find(x => x.id === g.assignedTo);
-        return (
-        <div key={g.key} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-          <div className="flex items-center gap-2 flex-wrap mb-2">
-            <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${typeBadgeCls[g.type]}`}>{typeIcon[g.type]} {g.type}</span>
-            <span className="font-semibold text-slate-800 text-sm">{g.taskName}</span>
-            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-              g.status === 'completed' ? 'bg-green-100 text-green-700'
-              : g.status === 'active' ? 'bg-amber-100 text-amber-700'
-              : 'bg-slate-100 text-slate-500'
-            }`}>
-              {g.status === 'active' ? 'in progress' : g.status === 'completed' ? 'done' : 'waiting'}
-            </span>
-          </div>
-          <div className="text-xs text-slate-400 mb-3">{g.workflowName}</div>
-
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500">
-              {g.status === 'pending' ? 'not started yet · ' : 'assigned to '}
-            </span>
-            {u ? (
-              <span className="flex items-center gap-1 bg-violet-50 border border-violet-200 rounded-full pl-1 pr-2 py-0.5">
-                <span className="w-4 h-4 rounded-full bg-violet-200 text-violet-800 text-[10px] font-bold flex items-center justify-center">{u.name[0]}</span>
-                <span className="text-xs text-violet-800 font-medium">{u.name}</span>
-              </span>
-            ) : (
-              <span className="text-xs text-slate-400 italic">unassigned</span>
-            )}
-          </div>
-        </div>
-        );
-      })}
+    <div className="mb-4 flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
+      <span className="flex items-center gap-1"><span className="rounded bg-sky-600 px-1 py-0.5 text-[9px] font-black text-white">SYS</span> system</span>
+      <span className="flex items-center gap-1"><span className="rounded bg-violet-600 px-1 py-0.5 text-[9px] font-black text-white">AI</span> Gemini</span>
+      <span className="flex items-center gap-1"><span className="rounded bg-pink-600 px-1 py-0.5 text-[9px] font-black text-white">HUMAN</span> manual</span>
+      <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rotate-45 border-2 border-amber-400 bg-amber-50" /> decision</span>
+      <span className="flex items-center gap-1 font-mono">(n) = times the task ran</span>
+      <span className="flex items-center gap-1 text-pink-700"><Clock size={11} /> N to do = manual backlog</span>
     </div>
   );
 }
 
 export default function Orchestrator() {
-  const [instances, setInstances] = useState([]);
-  const [users, setUsers] = useState([]);
+  const [runs, setRuns] = useState([]);
   const [areas, setAreas] = useState([]);
   const [dbError, setDbError] = useState(null);
   const [areaError, setAreaError] = useState(null);
   const [filter, setFilter] = useState('all');
-  const [tab, setTab] = useState('instances');
-  const [showActiveTasks, setShowActiveTasks] = useState(false);
   const [live, setLive] = useState(true);
   const [lastSync, setLastSync] = useState(null);
   const [checkingAreaId, setCheckingAreaId] = useState(null);
 
   async function refresh() {
-    setUsers(getUsers());
     try {
       const [dbRuns, areaRows] = await Promise.all([
         fetchWorkflowRuns(),
         fetchAreaIntakeStatus(),
       ]);
-      setInstances(dbRuns.map(dbRunToInstance));
+      setRuns(dbRuns);
       setAreas(areaRows);
       setDbError(null);
       setAreaError(null);
       setLastSync(new Date());
     } catch (err) {
-      setInstances([]);
+      setRuns([]);
       setDbError(err.message);
     }
   }
 
-  async function handleComplete(item) {
-    if (!item.actionInstanceId) return;
-    if (item.dbBacked) {
-      await completeDbWorkItem({ runId: item.instanceId, taskRunId: item.actionInstanceId });
-    }
-    await refresh();
-  }
-
-  async function handleDelete(instance) {
-    if (!instance?.id) return;
-    if (!window.confirm(`Delete this workflow run?\n\nThis removes the run and its task history. Created patient/order records are kept.`)) return;
-    // optimistic remove, then reconcile from the server
-    setInstances(prev => prev.filter(i => i.id !== instance.id));
+  async function handleDelete(run) {
+    if (!run?.id) return;
+    if (!window.confirm('Delete this workflow run?\n\nThis removes the run and its task history. Created patient/order records are kept.')) return;
+    setRuns((prev) => prev.filter((r) => r.id !== run.id));
     try {
-      await deleteWorkflowRun(instance.id);
+      await deleteWorkflowRun(run.id);
     } catch (err) {
       setDbError(err.message);
     }
@@ -1377,133 +425,90 @@ export default function Orchestrator() {
 
   useEffect(() => { refresh(); }, []);
 
-  // Live polling: re-render the orchestrator every 2.5s so you can watch the run
-  // progress without hitting refresh. Pauses when the tab is hidden.
+  // Live polling every 2.5s; pauses when the tab is hidden.
   useEffect(() => {
     if (!live) return undefined;
-    const id = setInterval(() => {
-      if (!document.hidden) refresh();
-    }, 2500);
+    const id = setInterval(() => { if (!document.hidden) refresh(); }, 2500);
     return () => clearInterval(id);
   }, [live]);
 
-  const running = instances.filter(i => i.status === 'running');
-  const completed = instances.filter(i => i.status === 'completed');
-  const totalActiveActions = running.reduce((s, inst) => s + inst.taskInstances.reduce((ts, t) => ts + t.actionInstances.filter(a => a.status === 'active').length, 0), 0);
-  const totalDoneActions = instances.reduce((s, inst) => s + inst.taskInstances.reduce((ts, t) => ts + t.actionInstances.filter(a => a.status === 'completed').length, 0), 0);
-  const activeTaskGroups = getActiveTaskGroups(instances);
+  const running = runs.filter((r) => r.status === 'running');
+  const completed = runs.filter((r) => r.status === 'completed');
+  const manualBacklog = runs.reduce((sum, r) => sum + (r.tasks || []).filter((t) => t.status === 'active' && t.actor === 'human').length, 0);
 
-  const filtered = instances.filter(i => {
-    if (filter === 'running') return i.status === 'running';
-    if (filter === 'completed') return i.status === 'completed';
-    return true;
-  }).sort((a, b) => new Date(b.launchedAt) - new Date(a.launchedAt));
+  const filtered = runs
+    .filter((r) => (filter === 'running' ? r.status === 'running' : filter === 'completed' ? r.status === 'completed' : true))
+    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
   return (
     <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
+      <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Orchestrator</h1>
-          <p className="text-sm text-slate-500 mt-1">Runs workflows from triggers, routes & auto-assigns tasks to people</p>
+          <p className="mt-1 text-sm text-slate-500">Live workflow runs rendered as flowcharts — system, AI and human tasks with decision branches.</p>
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setLive(v => !v)}
-            title={live ? 'Live updates on (every 2.5s)' : 'Live updates paused'}
-            className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg border transition-colors ${live ? 'border-green-300 bg-green-50 text-green-700' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+            onClick={() => setLive((v) => !v)}
+            className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${live ? 'border-green-300 bg-green-50 text-green-700' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}
           >
             <span className="relative flex h-2 w-2">
-              {live && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-70" />}
-              <span className={`relative inline-flex rounded-full h-2 w-2 ${live ? 'bg-green-500' : 'bg-slate-400'}`} />
+              {live && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-70" />}
+              <span className={`relative inline-flex h-2 w-2 rounded-full ${live ? 'bg-green-500' : 'bg-slate-400'}`} />
             </span>
             {live ? 'Live' : 'Paused'}
           </button>
-          <button onClick={refresh} className="flex items-center gap-2 px-3 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50">
+          <button onClick={refresh} className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50">
             <RefreshCw size={14} /> Refresh
           </button>
         </div>
       </div>
       {lastSync && (
-        <div className="-mt-4 mb-4 text-[11px] text-slate-400">
-          {live ? 'Live · ' : ''}last updated {lastSync.toLocaleTimeString()}
-        </div>
+        <div className="-mt-4 mb-4 text-[11px] text-slate-400">{live ? 'Live · ' : ''}last updated {lastSync.toLocaleTimeString()}</div>
       )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
-        <StatCard label="Total Runs" value={instances.length} sub="all time" color="slate" />
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard label="Total Runs" value={runs.length} sub="all time" color="slate" />
         <StatCard label="Active" value={running.length} sub="workflows running" color="amber" />
         <StatCard label="Completed" value={completed.length} sub="workflows done" color="green" />
-        <StatCard
-          label="Active Tasks"
-          value={activeTaskGroups.length}
-          sub="tasks across running runs"
-          color="amber"
-          active={showActiveTasks}
-          onClick={() => setShowActiveTasks(s => !s)}
-        />
-        <StatCard label="In Progress" value={totalActiveActions} sub={`${totalDoneActions} done`} color="violet" />
+        <StatCard label="Manual Backlog" value={manualBacklog} sub="human tasks to do" color="pink" />
       </div>
 
       {dbError && (
-        <div className="mb-4 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-sm">
-          DB workflow API unavailable: {dbError}. Showing local POC runs only.
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          DB workflow API unavailable: {dbError}
         </div>
       )}
       {areaError && (
-        <div className="mb-4 px-4 py-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-sm">
-          Area intake error: {areaError}
-        </div>
+        <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">Area intake error: {areaError}</div>
       )}
 
       <AreaIntakePanel areas={areas} loadingAreaId={checkingAreaId} onRunCheck={handleRunAreaCheck} />
 
-      {showActiveTasks && (
-        <div className="mb-6 bg-slate-50/60 border border-slate-100 rounded-2xl p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold text-slate-700">Active Tasks · who is working on what</h2>
-            <button onClick={() => setShowActiveTasks(false)} className="text-xs text-slate-400 hover:text-slate-600">Close ✕</button>
-          </div>
-          <ActiveTasksPanel instances={instances} users={users} />
-        </div>
-      )}
+      <Legend />
 
-      <div className="flex gap-1 mb-4 bg-slate-100 p-1 rounded-xl w-fit">
-        {[['instances', 'Workflow Runs'], ['people', 'Who is doing what']].map(([key, label]) => (
-          <button key={key} onClick={() => setTab(key)}
-            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${tab === key ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-            {label}
+      <div className="mb-4 flex gap-2">
+        {[['all', 'All'], ['running', 'Running'], ['completed', 'Completed']].map(([v, l]) => (
+          <button
+            key={v}
+            onClick={() => setFilter(v)}
+            className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${filter === v ? 'border-violet-600 bg-violet-600 text-white' : 'border-slate-200 text-slate-500 hover:border-violet-300'}`}
+          >
+            {l}
           </button>
         ))}
       </div>
 
-      {tab === 'instances' && (
-        <>
-          <div className="flex gap-2 mb-4">
-            {[['all', 'All'], ['running', 'Running'], ['completed', 'Completed']].map(([v, l]) => (
-              <button key={v} onClick={() => setFilter(v)}
-                className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${filter === v ? 'bg-violet-600 text-white border-violet-600' : 'border-slate-200 text-slate-500 hover:border-violet-300'}`}>
-                {l}
-              </button>
-            ))}
-          </div>
-          {filtered.length === 0 ? (
-            <div className="text-center py-16 text-slate-400">
-              <Activity size={40} className="mx-auto mb-3 opacity-30" />
-              <p>No workflow runs yet. Fire a trigger from the Triggers page.</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {filtered.map(inst => inst.bulkUpload && !inst.dbBacked
-                ? <BulkInstanceCard key={inst.id} instance={inst} onDelete={handleDelete} />
-                : inst.dbBacked && inst.workflowId === 'wf7'
-                  ? <DbBulkInstanceCard key={inst.id} instance={inst} onDelete={handleDelete} />
-                  : <InstanceCard key={inst.id} instance={inst} users={users} onDelete={handleDelete} />)}
-            </div>
-          )}
-        </>
+      {filtered.length === 0 ? (
+        <div className="py-16 text-center text-slate-400">
+          <Activity size={40} className="mx-auto mb-3 opacity-30" />
+          <p>No workflow runs yet. Fire a trigger from the Triggers page.</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {filtered.map((run) => <RunCard key={run.id} run={run} onDelete={handleDelete} />)}
+        </div>
       )}
-
-      {tab === 'people' && <PeoplePanel instances={instances} users={users} onComplete={handleComplete} />}
     </div>
   );
 }

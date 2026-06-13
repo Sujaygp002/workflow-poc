@@ -1,0 +1,474 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1480" height="2280" viewBox="0 0 1480 2280" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L9,3 L0,6 Z" fill="#475569"/>
+    </marker>
+    <marker id="arrG" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrR" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#e11d48"/>
+    </marker>
+    <style>
+      .sys  { fill:#eff6ff; stroke:#3b82f6; stroke-width:1.6; }
+      .ai   { fill:#f5f3ff; stroke:#8b5cf6; stroke-width:1.6; }
+      .hum  { fill:#fdf2f8; stroke:#ec4899; stroke-width:1.6; }
+      .stub { fill:#f8fafc; stroke:#94a3b8; stroke-width:1.4; stroke-dasharray:5 4; }
+      .trig { fill:#ecfeff; stroke:#06b6d4; stroke-width:1.8; }
+      .obj  { fill:#fffbeb; stroke:#d97706; stroke-width:1.4; }
+      .tid  { fill:#0f172a; font-size:11px; font-weight:800; }
+      .tnm  { fill:#0f172a; font-size:12.5px; font-weight:700; }
+      .act  { font-size:9px; font-weight:800; }
+      .desc { fill:#475569; font-size:10px; }
+      .objt { fill:#92400e; font-size:9.5px; }
+      .edge { stroke:#475569; stroke-width:1.5; fill:none; }
+      .edgeG{ stroke:#16a34a; stroke-width:1.4; fill:none; }
+      .edgeR{ stroke:#e11d48; stroke-width:1.4; fill:none; }
+      .lbl  { font-size:10px; font-weight:700; }
+      .lblG { fill:#16a34a; }
+      .lblR { fill:#e11d48; }
+      .hdr  { fill:#0f172a; font-size:18px; font-weight:800; }
+      .sub  { fill:#64748b; font-size:11px; }
+      .note { fill:#64748b; font-size:10px; }
+      .sech { fill:#1e293b; font-size:13px; font-weight:800; }
+    </style>
+  </defs>
+
+  <text x="30" y="30" class="hdr">HHH Core Intake Workflow — task-by-task + object-model effect (plan, not built)</text>
+  <text x="30" y="50" class="sub">Each box: task id · actor · what it does · what it reads/writes in the object model. Notification &amp; physician-signing are future stubs (greyed).</text>
+
+  <!-- Legend -->
+  <g transform="translate(30,64)">
+    <rect class="trig" x="0" y="0" width="13" height="13" rx="2"/><text x="18" y="11" class="note">trigger</text>
+    <rect class="sys" x="80" y="0" width="13" height="13" rx="2"/><text x="98" y="11" class="note">system</text>
+    <rect class="ai" x="160" y="0" width="13" height="13" rx="2"/><text x="178" y="11" class="note">AI</text>
+    <rect class="hum" x="220" y="0" width="13" height="13" rx="2"/><text x="238" y="11" class="note">human</text>
+    <rect class="obj" x="300" y="0" width="13" height="13" rx="2"/><text x="318" y="11" class="note">object touched</text>
+    <rect class="stub" x="430" y="0" width="13" height="13" rx="2"/><text x="448" y="11" class="note">future stub (ignored now)</text>
+    <line x1="610" y1="7" x2="640" y2="7" class="edgeG" marker-end="url(#arrG)"/><text x="645" y="11" class="note">YES</text>
+    <line x1="690" y1="7" x2="720" y2="7" class="edgeR" marker-end="url(#arrR)"/><text x="725" y="11" class="note">NO</text>
+  </g>
+
+  <!-- ============ COLUMN A: main flow (x ~ 60..430) ============ -->
+
+  <!-- T0 trigger onboarding -->
+  <g transform="translate(60,110)">
+    <rect class="trig" width="340" height="56" rx="9"/>
+    <text x="10" y="18" class="tid">T0 · trigger-onboarding-success</text>
+    <text x="10" y="34" class="tnm">Onboarding HHAH</text>
+    <text x="10" y="49" class="desc">Gate: HHAH is onboarded &amp; active → eligible to upload</text>
+  </g>
+  <text x="410" y="138" class="objt" font-weight="700">reads:</text>
+  <text x="410" y="151" class="objt">home_health_agencies,</text>
+  <text x="410" y="163" class="objt">statistical_area_hhahs</text>
+
+  <path class="edge" d="M230,166 L230,196" marker-end="url(#arr)"/>
+
+  <!-- T1 trigger bulk upload -->
+  <g transform="translate(60,196)">
+    <rect class="trig" width="340" height="62" rx="9"/>
+    <text x="10" y="18" class="tid">T1 · trigger-7 (Bulk Upload)</text>
+    <text x="10" y="34" class="tnm">Bulk Upload — Excel + PDF ZIP</text>
+    <text x="10" y="49" class="desc">Store PDFs; match PDF filename = order_number.</text>
+    <text x="10" y="59" class="desc">Creates a workflow_run; one workflow_item per joined row.</text>
+  </g>
+  <text x="410" y="222" class="objt" font-weight="700">writes:</text>
+  <text x="410" y="235" class="objt">workflow_runs,</text>
+  <text x="410" y="247" class="objt">workflow_items,</text>
+  <text x="410" y="259" class="objt">uploaded_documents</text>
+
+  <path class="edge" d="M230,258 L230,288" marker-end="url(#arr)"/>
+
+  <!-- S1 parse -->
+  <g transform="translate(60,288)">
+    <rect class="sys" width="340" height="58" rx="9"/>
+    <text x="10" y="18" class="tid">wf7-s1 · excel.parseWorkbook</text>
+    <text x="10" y="34" class="tnm">Parse Excel Workbook</text>
+    <text x="10" y="49" class="desc">Sheet1 patient/adm/episode, Sheet2 orders; join rows.</text>
+  </g>
+  <text x="410" y="318" class="objt" font-weight="700">builds payloads:</text>
+  <text x="410" y="331" class="objt">unit · record · admission</text>
+  <text x="410" y="343" class="objt">· episode · order (in item)</text>
+
+  <path class="edge" d="M230,346 L230,376" marker-end="url(#arr)"/>
+
+  <!-- S2 check fields -->
+  <g transform="translate(60,376)">
+    <rect class="sys" width="340" height="58" rx="9"/>
+    <text x="10" y="18" class="tid">wf7-s2 · row.checkCompleteness</text>
+    <text x="10" y="34" class="tnm">Check Required Fields</text>
+    <text x="10" y="49" class="desc">Validate REQUIRED_FIELDS incl. HHAH, PG, NPI, dates, PDF.</text>
+  </g>
+  <text x="410" y="402" class="objt" font-weight="700">reads item payload;</text>
+  <text x="410" y="415" class="objt">sets excel_row_complete /</text>
+  <text x="410" y="427" class="objt">excel_row_incomplete</text>
+
+  <!-- decision diamond: incomplete? -->
+  <path class="edge" d="M230,434 L230,460" marker-end="url(#arr)"/>
+  <g transform="translate(160,460)">
+    <path class="obj" d="M70,0 L140,38 L70,76 L0,38 Z"/>
+    <text x="70" y="34" text-anchor="middle" class="tid">excel_row_incomplete?</text>
+    <text x="70" y="48" text-anchor="middle" class="objt">(any required field missing)</text>
+  </g>
+  <!-- YES -> AI extraction (down) ; NO -> skip to S12 (right) -->
+  <path class="edgeG" d="M230,536 L230,566" marker-end="url(#arrG)"/>
+  <text x="238" y="556" class="lbl lblG">YES</text>
+
+  <!-- S3 AI extraction -->
+  <g transform="translate(60,566)">
+    <rect class="ai" width="340" height="58" rx="9"/>
+    <text x="10" y="18" class="tid">wf7-s3 · ai.extractMissingDataFromPdf</text>
+    <text x="10" y="34" class="tnm">AI PDF Extraction</text>
+    <text x="10" y="49" class="desc">Gemini fills missing fields from matched order PDF.</text>
+  </g>
+  <text x="410" y="592" class="objt" font-weight="700">writes ai_extractions;</text>
+  <text x="410" y="605" class="objt">merges into item payload;</text>
+  <text x="410" y="617" class="objt">ai_extraction_success/fail</text>
+
+  <!-- AI branches: success -> validate, fail -> fill -->
+  <path class="edge" d="M230,624 L230,650" marker-end="url(#arr)"/>
+  <g transform="translate(160,650)">
+    <path class="obj" d="M70,0 L140,34 L70,68 L0,34 Z"/>
+    <text x="70" y="31" text-anchor="middle" class="tid">extraction outcome?</text>
+    <text x="70" y="45" text-anchor="middle" class="objt">success vs fail/incomplete</text>
+  </g>
+  <path class="edgeG" d="M230,718 L230,742" marker-end="url(#arrG)"/>
+  <text x="238" y="734" class="lbl lblG">success</text>
+
+  <!-- S4 validate (human) -->
+  <g transform="translate(60,742)">
+    <rect class="hum" width="340" height="52" rx="9"/>
+    <text x="10" y="18" class="tid">wf7-s4 · human.validateExtractedData</text>
+    <text x="10" y="33" class="tnm">Validate Extracted Data</text>
+    <text x="10" y="47" class="desc">Human confirms AI values (Excel + PDF side by side).</text>
+  </g>
+
+  <!-- S5 fill (human) — to the right of S4, reached on fail -->
+  <g transform="translate(60,812)">
+    <rect class="hum" width="340" height="52" rx="9"/>
+    <text x="10" y="18" class="tid">wf7-s5 · human.fillMissingData</text>
+    <text x="10" y="33" class="tnm">Manually Fill Missing Data</text>
+    <text x="10" y="47" class="desc">Human enters missing fields (incl. missing PG / NPI).</text>
+  </g>
+  <!-- fail edge from diamond to S5 -->
+  <path class="edgeR" d="M300,684 C470,684 470,838 405,838" marker-end="url(#arrR)"/>
+  <text x="476" y="760" class="lbl lblR">fail /</text>
+  <text x="476" y="773" class="lbl lblR">incomplete</text>
+
+  <!-- merge S4/S5 -> S12 -->
+  <path class="edge" d="M230,794 L230,808" />
+  <path class="edge" d="M230,864 L230,892" marker-end="url(#arr)"/>
+
+  <!-- NO arm of S2 diamond bypassing AI straight to S12 -->
+  <path class="edgeR" d="M300,498 C620,498 620,892 405,902" marker-end="url(#arrR)"/>
+  <text x="624" y="690" class="lbl lblR">NO (row complete)</text>
+
+  <!-- S12 confirm context -->
+  <g transform="translate(60,892)">
+    <rect class="sys" width="340" height="54" rx="9"/>
+    <text x="10" y="18" class="tid">wf7-s12 · refs.confirmUploadContext</text>
+    <text x="10" y="34" class="tnm">Confirm HHAH Upload Context</text>
+    <text x="10" y="48" class="desc">HHAH from login is valid; PG/NPI stored as data only.</text>
+  </g>
+  <text x="410" y="918" class="objt" font-weight="700">reads home_health_agencies;</text>
+  <text x="410" y="930" class="objt">sets upload_context_ready;</text>
+  <text x="410" y="942" class="objt">PG/practitioner = JSON only</text>
+
+  <path class="edge" d="M230,946 L230,972" marker-end="url(#arr)"/>
+
+  <!-- S8 NEW: Patient Unit -->
+  <g transform="translate(60,972)">
+    <rect class="sys" width="340" height="58" rx="9"/>
+    <text x="10" y="18" class="tid">NEW · unit.resolve</text>
+    <text x="10" y="34" class="tnm">Check / Create Patient Unit</text>
+    <text x="10" y="49" class="desc">Match stable person by name + DOB + MRN.</text>
+  </g>
+  <text x="410" y="996" class="objt" font-weight="700">patient_units:</text>
+  <text x="410" y="1009" class="objt">find by normalized_patient_key;</text>
+  <text x="410" y="1021" class="objt">create if absent (unit_exists/created)</text>
+
+  <path class="edge" d="M230,1030 L230,1056" marker-end="url(#arr)"/>
+
+  <!-- S9 NEW: Patient Record context -->
+  <g transform="translate(60,1056)">
+    <rect class="sys" width="340" height="64" rx="9"/>
+    <text x="10" y="18" class="tid">NEW · record.resolve</text>
+    <text x="10" y="34" class="tnm">Check Patient Record Context</text>
+    <text x="10" y="49" class="desc">Reuse record if same Unit + HHAH + PG.</text>
+    <text x="10" y="60" class="desc">New record if HHAH or PG changed (record_context_key).</text>
+  </g>
+  <text x="410" y="1082" class="objt" font-weight="700">patients (= Patient Record):</text>
+  <text x="410" y="1094" class="objt">key = unit_id + hhah + pg;</text>
+  <text x="410" y="1106" class="objt">SCHEMA CHANGE: drop unique</text>
+  <text x="410" y="1118" class="objt">normalized_patient_key</text>
+
+  <!-- date checks merged into write path -->
+  <path class="edge" d="M230,1120 L230,1146" marker-end="url(#arr)"/>
+
+  <!-- S24/S25/S26/S27 dates (compact group) -->
+  <g transform="translate(60,1146)">
+    <rect class="sys" width="340" height="64" rx="9"/>
+    <text x="10" y="18" class="tid">wf7-s24/s26 · dates.check (Adm/Ep)</text>
+    <text x="10" y="34" class="tnm">Check Admission &amp; Episode Dates</text>
+    <text x="10" y="49" class="desc">SOC present? SOE+EOE present? (EOC optional).</text>
+    <text x="10" y="60" class="desc">Missing → human date-fill (wf7-s25 / wf7-s27).</text>
+  </g>
+  <!-- right human date fill box -->
+  <g transform="translate(440,1146)">
+    <rect class="hum" width="260" height="64" rx="9"/>
+    <text x="10" y="18" class="tid">wf7-s25 / wf7-s27 · human.fill*Dates</text>
+    <text x="10" y="34" class="tnm">Manually Add Dates</text>
+    <text x="10" y="49" class="desc">SOC → adm dates; SOE/EOE →</text>
+    <text x="10" y="60" class="desc">episode dates. Re-checks readiness.</text>
+  </g>
+  <path class="edgeR" d="M400,1178 L435,1178" marker-end="url(#arrR)"/>
+  <text x="405" y="1172" class="lbl lblR">missing</text>
+
+  <path class="edge" d="M230,1210 L230,1236" marker-end="url(#arr)"/>
+
+  <!-- patient write decision (exists?) -->
+  <g transform="translate(160,1236)">
+    <path class="obj" d="M70,0 L140,34 L70,68 L0,34 Z"/>
+    <text x="70" y="31" text-anchor="middle" class="tid">patient record exists?</text>
+    <text x="70" y="45" text-anchor="middle" class="objt">by record_context_key</text>
+  </g>
+  <path class="edgeG" d="M300,1270 C470,1270 470,1320 405,1320" marker-end="url(#arrG)"/>
+  <text x="476" y="1296" class="lbl lblG">YES</text>
+  <path class="edgeR" d="M230,1304 L230,1320" marker-end="url(#arrR)"/>
+  <text x="238" y="1316" class="lbl lblR">NO</text>
+
+  <!-- S13/S14 patient write (record + admission + episode bundle) -->
+  <g transform="translate(60,1320)">
+    <rect class="sys" width="340" height="68" rx="9"/>
+    <text x="10" y="18" class="tid">wf7-s13 / wf7-s14 · patient.update/create</text>
+    <text x="10" y="34" class="tnm">Write Patient Record bundle</text>
+    <text x="10" y="49" class="desc">Atomic: Record → Admission (by SOC/EOC) →</text>
+    <text x="10" y="60" class="desc">Episode (by SOE/EOE). Reuse-or-create each.</text>
+  </g>
+  <!-- update box to right -->
+  <g transform="translate(440,1320)">
+    <rect class="sys" width="260" height="68" rx="9"/>
+    <text x="10" y="18" class="tid">wf7-s13 · patient.update</text>
+    <text x="10" y="34" class="tnm">Update existing Record</text>
+    <text x="10" y="49" class="desc">Append/refresh admission &amp;</text>
+    <text x="10" y="60" class="desc">episode under same Record.</text>
+  </g>
+  <text x="710" y="1346" class="objt" font-weight="700">writes:</text>
+  <text x="710" y="1358" class="objt">patients,</text>
+  <text x="710" y="1370" class="objt">patient_admissions,</text>
+  <text x="710" y="1382" class="objt">patient_episodes</text>
+
+  <!-- retry / fix -->
+  <path class="edge" d="M230,1388 L230,1414" marker-end="url(#arr)"/>
+  <g transform="translate(60,1414)">
+    <rect class="sys" width="340" height="50" rx="9"/>
+    <text x="10" y="18" class="tid">wf7-s15 · patient.retryWrite</text>
+    <text x="10" y="33" class="tnm">Retry Patient Write</text>
+    <text x="10" y="46" class="desc">On write fail, retry once.</text>
+  </g>
+  <g transform="translate(440,1414)">
+    <rect class="hum" width="260" height="50" rx="9"/>
+    <text x="10" y="18" class="tid">wf7-s16 · human.fixPatientWrite</text>
+    <text x="10" y="33" class="tnm">Fix Patient Write</text>
+    <text x="10" y="46" class="desc">Human fixes after retry fail.</text>
+  </g>
+  <path class="edgeR" d="M400,1439 L435,1439" marker-end="url(#arrR)"/>
+  <text x="405" y="1433" class="lbl lblR">retry fail</text>
+
+  <path class="edge" d="M230,1464 L230,1490" marker-end="url(#arr)"/>
+
+  <!-- order exists? -->
+  <g transform="translate(160,1490)">
+    <path class="obj" d="M70,0 L140,34 L70,68 L0,34 Z"/>
+    <text x="70" y="31" text-anchor="middle" class="tid">order_number exists?</text>
+    <text x="70" y="45" text-anchor="middle" class="objt">orders.order_number (unique)</text>
+  </g>
+  <!-- YES -> SKIP duplicate (right, red) ; NO -> create (down, green) -->
+  <path class="edgeR" d="M300,1524 C480,1524 480,1560 405,1560" marker-end="url(#arrR)"/>
+  <text x="486" y="1546" class="lbl lblR">YES → skip</text>
+  <path class="edgeG" d="M230,1558 L230,1584" marker-end="url(#arrG)"/>
+  <text x="238" y="1576" class="lbl lblG">NO</text>
+
+  <!-- duplicate skip box -->
+  <g transform="translate(440,1534)">
+    <rect class="hum" width="260" height="52" rx="9"/>
+    <text x="10" y="18" class="tid">REVISED · order.update → SKIP</text>
+    <text x="10" y="33" class="tnm">Mark Upload Row Duplicate</text>
+    <text x="10" y="47" class="desc">Do NOT overwrite existing order.</text>
+  </g>
+  <text x="710" y="1556" class="objt" font-weight="700">item.status =</text>
+  <text x="710" y="1568" class="objt">skipped_duplicate;</text>
+  <text x="710" y="1580" class="objt">orders untouched</text>
+
+  <!-- order field check before create -->
+  <g transform="translate(60,1584)">
+    <rect class="sys" width="340" height="58" rx="9"/>
+    <text x="10" y="18" class="tid">NEW · order.checkFields</text>
+    <text x="10" y="34" class="tnm">Check Order Fields + PDF</text>
+    <text x="10" y="49" class="desc">order#, type, date, links, matched PDF required.</text>
+  </g>
+  <g transform="translate(440,1596)">
+    <rect class="hum" width="260" height="46" rx="9"/>
+    <text x="10" y="17" class="tid">NEW · human.fixOrderFields</text>
+    <text x="10" y="32" class="tnm">Fix Order Fields</text>
+    <text x="10" y="44" class="desc">Human supplies missing data/PDF.</text>
+  </g>
+  <path class="edgeR" d="M400,1616 L435,1616" marker-end="url(#arrR)"/>
+  <text x="405" y="1610" class="lbl lblR">missing</text>
+
+  <path class="edge" d="M230,1642 L230,1668" marker-end="url(#arr)"/>
+
+  <!-- S18 create order -->
+  <g transform="translate(60,1668)">
+    <rect class="sys" width="340" height="64" rx="9"/>
+    <text x="10" y="18" class="tid">wf7-s18 · order.create</text>
+    <text x="10" y="34" class="tnm">Create Order</text>
+    <text x="10" y="49" class="desc">Link to Record + Admission + Episode + HHAH.</text>
+    <text x="10" y="60" class="desc">PG/practitioner raw in JSON; FK only if resolvable.</text>
+  </g>
+  <text x="410" y="1694" class="objt" font-weight="700">writes orders;</text>
+  <text x="410" y="1706" class="objt">FK patient_id, admission_id,</text>
+  <text x="410" y="1718" class="objt">episode_id, agency_id;</text>
+  <text x="410" y="1730" class="objt">document_type from PDF</text>
+
+  <!-- retry / fix order write -->
+  <path class="edge" d="M230,1732 L230,1758" marker-end="url(#arr)"/>
+  <g transform="translate(60,1758)">
+    <rect class="sys" width="340" height="50" rx="9"/>
+    <text x="10" y="18" class="tid">wf7-s19 · order.retryWrite</text>
+    <text x="10" y="33" class="tnm">Retry Order Write</text>
+    <text x="10" y="46" class="desc">On write fail, retry once.</text>
+  </g>
+  <g transform="translate(440,1758)">
+    <rect class="hum" width="260" height="50" rx="9"/>
+    <text x="10" y="18" class="tid">wf7-s20 · human.fixOrderWrite</text>
+    <text x="10" y="33" class="tnm">Fix Order Write</text>
+    <text x="10" y="46" class="desc">Human fixes after retry fail.</text>
+  </g>
+  <path class="edgeR" d="M400,1783 L435,1783" marker-end="url(#arrR)"/>
+  <text x="405" y="1777" class="lbl lblR">retry fail</text>
+
+  <path class="edge" d="M230,1808 L230,1834" marker-end="url(#arr)"/>
+
+  <!-- S21 review patient graph -->
+  <g transform="translate(60,1834)">
+    <rect class="hum" width="340" height="64" rx="9"/>
+    <text x="10" y="18" class="tid">wf7-s21 · human.reviewRecord</text>
+    <text x="10" y="34" class="tnm">Review Patient Graph</text>
+    <text x="10" y="49" class="desc">Unit → Record → Admission → Episode → Orders,</text>
+    <text x="10" y="60" class="desc">with matched PDFs. Pass / fail.</text>
+  </g>
+  <path class="edge" d="M230,1898 L230,1922" marker-end="url(#arr)"/>
+  <g transform="translate(160,1922)">
+    <path class="obj" d="M70,0 L140,34 L70,68 L0,34 Z"/>
+    <text x="70" y="31" text-anchor="middle" class="tid">review passed?</text>
+  </g>
+  <!-- fail -> manual fix loop back -->
+  <path class="edgeR" d="M160,1956 C40,1956 40,1866 55,1866" marker-end="url(#arrR)"/>
+  <text x="46" y="2000" class="lbl lblR">NO → fix &amp; re-review</text>
+  <path class="edgeG" d="M230,1990 L230,2016" marker-end="url(#arrG)"/>
+  <text x="238" y="2008" class="lbl lblG">YES</text>
+
+  <!-- END / reviewed -->
+  <g transform="translate(60,2016)">
+    <rect class="sys" width="340" height="48" rx="9" fill="#ecfdf5" stroke="#16a34a"/>
+    <text x="10" y="20" class="tid" fill="#166534">END · intake reviewed</text>
+    <text x="10" y="36" class="desc" fill="#166534">Record graph confirmed. Future signing stub shown.</text>
+  </g>
+
+  <!-- ============ RIGHT: future stubs ============ -->
+  <text x="980" y="120" class="sech">Future stubs (ignored this phase — kept inactive/visible only)</text>
+
+  <g transform="translate(980,140)">
+    <rect class="stub" width="420" height="50" rx="9"/>
+    <text x="10" y="20" class="tid">STUB · area-s4 (notification)</text>
+    <text x="10" y="36" class="desc">Missing-upload notification. No active behavior now.</text>
+  </g>
+  <g transform="translate(980,202)">
+    <rect class="stub" width="420" height="50" rx="9"/>
+    <text x="10" y="20" class="tid">STUB · trigger-order-document-ready</text>
+    <text x="10" y="36" class="desc">Send unsigned orders to physician — terminal stub only.</text>
+  </g>
+  <g transform="translate(980,264)">
+    <rect class="stub" width="420" height="62" rx="9"/>
+    <text x="10" y="20" class="tid">STUB · wf-signing (sign-s1..s6)</text>
+    <text x="10" y="36" class="desc">Readiness review, send-to-physician, 48h check, signed</text>
+    <text x="10" y="48" class="desc">update, overdue email. Mark inactive / future.</text>
+  </g>
+
+  <!-- ============ RIGHT: object-model panel ============ -->
+  <g transform="translate(980,360)">
+    <rect x="0" y="0" width="420" height="430" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
+    <text x="16" y="26" class="sech">Object model (target)</text>
+
+    <rect class="obj" x="16" y="40" width="388" height="46" rx="7"/>
+    <text x="26" y="60" class="tnm">patient_units  (stable person)</text>
+    <text x="26" y="76" class="objt">key: name + DOB + MRN · identity, insurance, family</text>
+
+    <line class="edge" x1="40" y1="86" x2="40" y2="100" marker-end="url(#arr)"/>
+    <text x="50" y="98" class="note">1 → many</text>
+
+    <rect class="obj" x="16" y="100" width="388" height="56" rx="7"/>
+    <text x="26" y="120" class="tnm">patients  (= Patient Record / care context)</text>
+    <text x="26" y="135" class="objt">NEW key: unit_id + HHAH + PG  (record_context_key)</text>
+    <text x="26" y="148" class="objt">drop UNIQUE(normalized_patient_key)</text>
+
+    <line class="edge" x1="40" y1="156" x2="40" y2="170" marker-end="url(#arr)"/>
+    <rect class="obj" x="16" y="170" width="388" height="46" rx="7"/>
+    <text x="26" y="190" class="tnm">patient_admissions</text>
+    <text x="26" y="206" class="objt">key: record + SOC/EOC · FK agency/pg/care_provider</text>
+
+    <line class="edge" x1="40" y1="216" x2="40" y2="230" marker-end="url(#arr)"/>
+    <rect class="obj" x="16" y="230" width="388" height="46" rx="7"/>
+    <text x="26" y="250" class="tnm">patient_episodes</text>
+    <text x="26" y="266" class="objt">key: admission + SOE/EOE · create or update</text>
+
+    <line class="edge" x1="40" y1="276" x2="40" y2="290" marker-end="url(#arr)"/>
+    <rect class="obj" x="16" y="290" width="388" height="56" rx="7"/>
+    <text x="26" y="310" class="tnm">orders</text>
+    <text x="26" y="325" class="objt">key: order_number (unique) → duplicate = SKIP row</text>
+    <text x="26" y="338" class="objt">FK record/adm/episode/agency · PG/NPI raw in JSON</text>
+
+    <text x="16" y="370" class="note" font-weight="700">Matched PDF (uploaded_documents) required before order create.</text>
+    <text x="16" y="388" class="note">patient_physician_groups / patient_practitioners: link only if</text>
+    <text x="16" y="401" class="note">a DB PG/practitioner resolves; otherwise leave FK null, keep JSON.</text>
+    <text x="16" y="419" class="note" font-style="italic">eligible = 485 + active F2F (6mo) · billable = all signed.</text>
+  </g>
+
+  <!-- ============ RIGHT: key changes panel ============ -->
+  <g transform="translate(980,810)">
+    <rect x="0" y="0" width="420" height="300" rx="10" fill="#fff7ed" stroke="#fed7aa"/>
+    <text x="16" y="26" class="sech">What changes vs. current wf7</text>
+    <text x="16" y="50" class="note">1. SCHEMA: drop UNIQUE(patients.normalized_patient_key);</text>
+    <text x="16" y="63" class="note">   add record_context_key = unit_id|hhah|pg + unique on it.</text>
+    <text x="16" y="84" class="note">2. NEW unit.resolve + record.resolve steps; today writePatient-</text>
+    <text x="16" y="97" class="note">   Bundle keys patients by name|DOB|MRN (that's the UNIT key).</text>
+    <text x="16" y="118" class="note">3. Order exists → SKIP (don't update). order.update becomes a</text>
+    <text x="16" y="131" class="note">   no-op/duplicate-marker, not an overwrite.</text>
+    <text x="16" y="152" class="note">4. NEW order.checkFields + human.fixOrderFields (require PDF).</text>
+    <text x="16" y="173" class="note">5. PG/practitioner: stay required as DATA (s2), but never gate</text>
+    <text x="16" y="186" class="note">   the flow; missing → wf7-s5 fill, not a create-PG task.</text>
+    <text x="16" y="207" class="note">6. Review loop: fail → manual fix → re-review (wf7-s21).</text>
+    <text x="16" y="228" class="note">7. Deactivate wf-area-onboarding notification + wf-signing;</text>
+    <text x="16" y="241" class="note">   keep as visible stubs only.</text>
+    <text x="16" y="266" class="note" font-style="italic">Reuse: s1,s2,s3,s4,s5,s12,s24-s27,s13-s16,s18-s21.</text>
+    <text x="16" y="282" class="note" font-style="italic">Scrap/stub: area-s3..s5 (notify), wf-signing, order overwrite.</text>
+  </g>
+
+  <!-- task id index footer -->
+  <g transform="translate(980,1130)">
+    <rect x="0" y="0" width="420" height="220" rx="10" fill="#f1f5f9" stroke="#e2e8f0"/>
+    <text x="16" y="26" class="sech">Task-id index (give me an id to change)</text>
+    <text x="16" y="48" class="note">T0  Onboarding HHAH (trigger)</text>
+    <text x="16" y="64" class="note">T1  Bulk Upload (trigger-7)</text>
+    <text x="16" y="80" class="note">wf7-s1  parse · wf7-s2  check fields</text>
+    <text x="16" y="96" class="note">wf7-s3  AI extract · s4 validate · s5 fill</text>
+    <text x="16" y="112" class="note">wf7-s12  confirm HHAH context</text>
+    <text x="16" y="128" class="note">NEW unit.resolve · NEW record.resolve</text>
+    <text x="16" y="144" class="note">wf7-s24/s25  admission dates · s26/s27 episode dates</text>
+    <text x="16" y="160" class="note">wf7-s13/s14  patient write · s15/s16 retry/fix</text>
+    <text x="16" y="176" class="note">NEW order.checkFields · NEW human.fixOrderFields</text>
+    <text x="16" y="192" class="note">wf7-s18  create order · s19/s20 retry/fix</text>
+    <text x="16" y="208" class="note">wf7-s21  review patient graph (loop on fail)</text>
+  </g>
+</svg>
