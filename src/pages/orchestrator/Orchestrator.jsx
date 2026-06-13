@@ -3,7 +3,14 @@ import { Activity, ChevronDown, ChevronUp, CheckCircle2, Clock, Circle, AlertCir
 import Badge from '../../components/Badge';
 import WorkflowFlowChart, { nodesFromInstance } from '../../components/WorkflowFlowChart';
 import { getUsers, instanceStage } from '../../store';
-import { completeDbWorkItem, dbRunToInstance, deleteWorkflowRun, fetchWorkflowRuns } from '../../lib/workflowApi';
+import {
+  completeDbWorkItem,
+  dbRunToInstance,
+  deleteWorkflowRun,
+  fetchAreaIntakeStatus,
+  fetchWorkflowRuns,
+  runAreaIntakeCheck,
+} from '../../lib/workflowApi';
 
 // Instance lifecycle header: unassigned → assigned → done
 function StageHeader({ stage }) {
@@ -559,6 +566,248 @@ function aggregateObjects(instance) {
   return objs;
 }
 
+function patientLabel(record) {
+  const info = record?.patient_info || record || {};
+  return info.name || info.patient_name || 'Unknown patient';
+}
+
+function patientDob(record) {
+  const info = record?.patient_info || record || {};
+  return info.dob || info.DOB || '';
+}
+
+function patientMrn(record) {
+  const info = record?.patient_info || record || {};
+  return info.mrn || info.MRN || '';
+}
+
+function orderNumber(record) {
+  return record?.order_info?.order_number || record?.order_number || record?.orderno || 'order';
+}
+
+function summarizePatientLanes(instance) {
+  const grouped = new Map();
+  for (const task of instance.taskInstances || []) {
+    const label = patientLabel(task.patientRecord);
+    const dob = patientDob(task.patientRecord);
+    const mrn = patientMrn(task.patientRecord);
+    const key = [label, dob, mrn].filter(Boolean).join('|') || `row-${task.patientIndex}`;
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        key,
+        label,
+        dob,
+        mrn,
+        indexes: new Set(),
+        orders: new Set(),
+        tasks: [],
+      });
+    }
+    const lane = grouped.get(key);
+    if (task.patientIndex != null) lane.indexes.add(task.patientIndex);
+    lane.orders.add(orderNumber(task.orderRecord));
+    lane.tasks.push(task);
+  }
+
+  return [...grouped.values()].map((lane) => {
+    const live = lane.tasks.filter((task) => task.status !== 'skipped');
+    const active = live.filter((task) => task.status === 'active');
+    const failed = live.some((task) => task.status === 'failed');
+    const blocked = active.some((task) => task.actor === 'human');
+    const completed = live.length > 0 && live.every((task) => task.status === 'completed');
+    const status = failed ? 'failed' : blocked ? 'blocked' : completed ? 'completed' : 'running';
+    const activeByActor = {
+      ai: active.filter((task) => task.actor === 'ai').length,
+      system: active.filter((task) => task.actor === 'system').length,
+      human: active.filter((task) => task.actor === 'human').length,
+    };
+    return {
+      ...lane,
+      indexes: [...lane.indexes],
+      orders: [...lane.orders].filter((order) => order !== 'order'),
+      status,
+      activeByActor,
+      activeTask: active[0] || null,
+      doneTasks: live.filter((task) => task.status === 'completed').length,
+      totalTasks: live.length,
+    };
+  }).sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function orchestrationBuckets(instance) {
+  const lanes = summarizePatientLanes(instance);
+  const activeTasks = (instance.taskInstances || []).filter((task) => task.status === 'active');
+  return {
+    lanes,
+    runningPatients: lanes.filter((lane) => lane.status === 'running').length,
+    blockedPatients: lanes.filter((lane) => lane.status === 'blocked').length,
+    completedPatients: lanes.filter((lane) => lane.status === 'completed').length,
+    failedPatients: lanes.filter((lane) => lane.status === 'failed').length,
+    continuingPatients: lanes.filter((lane) => lane.status !== 'blocked' && lane.status !== 'failed').length,
+    activeAiTasks: activeTasks.filter((task) => task.actor === 'ai').length,
+    activeSystemTasks: activeTasks.filter((task) => task.actor === 'system').length,
+    activeHumanTasks: activeTasks.filter((task) => task.actor === 'human').length,
+  };
+}
+
+function ParallelBuckets({ buckets }) {
+  const tiles = [
+    [`${buckets.blockedPatients} blocked`, 'insufficient data / human review', 'border-rose-200 bg-rose-50 text-rose-700'],
+    [`${buckets.activeAiTasks} AI tasks running`, 'PDF extraction and validation', 'border-violet-200 bg-violet-50 text-violet-700'],
+    [`${buckets.activeSystemTasks} system tasks active`, 'DB checks and writes', 'border-sky-200 bg-sky-50 text-sky-700'],
+    [`${buckets.activeHumanTasks} human tasks active`, 'work bucket actions', 'border-pink-200 bg-pink-50 text-pink-700'],
+    [`${buckets.continuingPatients} patients continuing`, 'not blocked or failed', 'border-emerald-200 bg-emerald-50 text-emerald-700'],
+  ];
+  return (
+    <div className="grid md:grid-cols-5 gap-2">
+      {tiles.map(([title, sub, cls]) => (
+        <div key={title} className={`rounded-xl border px-3 py-2 ${cls}`}>
+          <div className="text-sm font-black">{title}</div>
+          <div className="mt-0.5 text-[11px] opacity-75">{sub}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PatientParallelLanes({ lanes }) {
+  if (!lanes.length) return null;
+  const statusCls = {
+    running: 'border-sky-200 bg-sky-50/70 text-sky-800',
+    blocked: 'border-rose-200 bg-rose-50/80 text-rose-800',
+    completed: 'border-emerald-200 bg-emerald-50/80 text-emerald-800',
+    failed: 'border-red-300 bg-red-50 text-red-800',
+  };
+  return (
+    <div className="mt-3">
+      <div className="mb-2 text-[11px] font-bold uppercase tracking-wide text-slate-500">Parallel patient instances</div>
+      <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-2">
+        {lanes.map((lane) => (
+          <div key={lane.key} className={`rounded-xl border p-3 ${statusCls[lane.status] || statusCls.running}`}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-black">{lane.label}</div>
+                <div className="mt-0.5 text-[11px] opacity-75">
+                  {lane.dob && <>DOB {lane.dob}</>} {lane.mrn && <>· MRN {lane.mrn}</>}
+                </div>
+              </div>
+              <span className="shrink-0 rounded-full bg-white/70 px-2 py-0.5 text-[10px] font-bold uppercase">{lane.status}</span>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] font-semibold">
+              <span className="rounded-full bg-white/70 px-2 py-0.5">{lane.orders.length || lane.indexes.length} order{(lane.orders.length || lane.indexes.length) === 1 ? '' : 's'}</span>
+              <span className="rounded-full bg-white/70 px-2 py-0.5">{lane.doneTasks}/{lane.totalTasks} steps</span>
+              {lane.activeByActor.ai > 0 && <span className="rounded-full bg-white/70 px-2 py-0.5">AI {lane.activeByActor.ai}</span>}
+              {lane.activeByActor.system > 0 && <span className="rounded-full bg-white/70 px-2 py-0.5">SYS {lane.activeByActor.system}</span>}
+              {lane.activeByActor.human > 0 && <span className="rounded-full bg-white/70 px-2 py-0.5">HUMAN {lane.activeByActor.human}</span>}
+            </div>
+            {lane.activeTask && (
+              <div className="mt-2 truncate text-[11px] opacity-80">Current: {lane.activeTask.taskName}</div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AreaIntakePanel({ areas, loadingAreaId, onRunCheck }) {
+  if (!areas.length) {
+    return (
+      <section className="mb-5 rounded-2xl border border-slate-200 bg-white p-4">
+        <div className="text-sm font-semibold text-slate-700">Area intake monitor</div>
+        <div className="mt-1 text-sm text-slate-400">No statistical areas have been seeded yet.</div>
+      </section>
+    );
+  }
+  return (
+    <section className="mb-5 rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-sm font-bold text-slate-800">Area Intake Monitor</h2>
+          <p className="mt-1 text-xs text-slate-500">Daily 24-hour area check. Missing HHAHs get a notification workflow; late uploads still start wf7 normally.</p>
+        </div>
+      </div>
+      <div className="mt-3 grid lg:grid-cols-2 gap-3">
+        {areas.map((area) => {
+          const status = area.check?.status || 'monitoring';
+          const missing = area.hhahs.filter((hhah) => !hhah.received);
+          const done = area.received_count === area.expected_count && area.expected_count > 0;
+          const statusTone = status === 'complete' || done
+            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+            : status === 'missing_uploads'
+              ? 'bg-rose-50 text-rose-700 border-rose-200'
+              : 'bg-amber-50 text-amber-700 border-amber-200';
+          return (
+            <div key={area.id} className="rounded-xl border border-slate-200 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-black text-slate-800">{area.name}</div>
+                  <div className="text-[11px] uppercase tracking-wide text-slate-400">{area.area_type?.replaceAll('_', ' ')} {area.state ? `· ${area.state}` : ''}</div>
+                </div>
+                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${statusTone}`}>{status.replaceAll('_', ' ')}</span>
+              </div>
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+                  <div className="text-lg font-black text-slate-800">{area.expected_count}</div>
+                  <div className="text-[10px] uppercase text-slate-400">expected</div>
+                </div>
+                <div className="rounded-lg bg-emerald-50 px-2 py-1.5">
+                  <div className="text-lg font-black text-emerald-700">{area.received_count}</div>
+                  <div className="text-[10px] uppercase text-emerald-600">received</div>
+                </div>
+                <div className="rounded-lg bg-rose-50 px-2 py-1.5">
+                  <div className="text-lg font-black text-rose-700">{area.missing_count}</div>
+                  <div className="text-[10px] uppercase text-rose-600">missing</div>
+                </div>
+              </div>
+              {area.check && (
+                <div className="mt-2 text-[11px] text-slate-500">
+                  Window: {new Date(area.check.window_started_at).toLocaleString()} to {new Date(area.check.window_ends_at).toLocaleString()}
+                </div>
+              )}
+              <div className="mt-3 divide-y divide-slate-100 rounded-lg border border-slate-100">
+                {area.hhahs.map((hhah) => (
+                  <div key={hhah.hhah_id} className="flex items-center justify-between gap-2 px-3 py-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-semibold text-slate-700">{hhah.hhah_name}</div>
+                      <div className="text-[10px] text-slate-400">window {hhah.upload_window_hours || 24}h {hhah.run_count ? `· ${hhah.run_count} run(s)` : ''}</div>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${hhah.received ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+                      {hhah.received ? 'received' : 'missing'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              {area.notifications.length > 0 && (
+                <div className="mt-3 rounded-lg border border-rose-100 bg-rose-50/60 px-3 py-2">
+                  <div className="text-[11px] font-bold uppercase text-rose-700">Notification workflow</div>
+                  <div className="mt-1 space-y-1">
+                    {area.notifications.map((notification) => (
+                      <div key={notification.id} className="flex items-center justify-between gap-2 text-[11px] text-rose-700">
+                        <span className="truncate">{notification.hhah_name}</span>
+                        <span className="font-bold">{notification.status}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => onRunCheck(area.id)}
+                disabled={loadingAreaId === area.id || missing.length === 0}
+                className="mt-3 inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              >
+                <RefreshCw size={12} className={loadingAreaId === area.id ? 'animate-spin' : ''} />
+                Simulate 24h check
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 const OBJ_TONE = {
   created: 'text-green-700 bg-green-50 border-green-200',
   updated: 'text-violet-700 bg-violet-50 border-violet-200',
@@ -598,6 +847,7 @@ function ObjectsPanel({ instance }) {
 function DbBulkInstanceCard({ instance, onDelete }) {
   const patientIdxs = [...new Set(instance.taskInstances.map(t => t.patientIndex))].sort((a, b) => a - b);
   const total = patientIdxs.length;
+  const buckets = orchestrationBuckets(instance);
   const live = instance.taskInstances.filter(t => t.status !== 'skipped');
   const doneTasks = live.filter(t => t.status === 'completed').length;
   const active = instance.taskInstances.find(t => t.status === 'active');
@@ -699,8 +949,13 @@ function DbBulkInstanceCard({ instance, onDelete }) {
             <span className="font-semibold text-slate-800">{instance.workflowName}</span>
             <Badge label={instance.status} type={instance.status} />
             <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-100">
-              <RefreshCw size={10} /> loop · {donePatients}/{total} rows done
+              <RefreshCw size={10} /> parallel · {donePatients}/{total} rows done
             </span>
+            {instance.areaName && (
+              <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-slate-50 text-slate-600 border border-slate-100">
+                {instance.areaName}{instance.hhahName ? ` · ${instance.hhahName}` : ''}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-3 mt-1 text-xs text-slate-400">
             <span className="flex items-center gap-1"><Clock size={10} /> {new Date(instance.launchedAt).toLocaleString()}</span>
@@ -721,6 +976,11 @@ function DbBulkInstanceCard({ instance, onDelete }) {
         <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-violet-200 border border-violet-300" /> AI</span>
         <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-pink-200 border border-pink-300" /> human</span>
         <span>counts show workflow rows through each step</span>
+      </div>
+
+      <div className="bg-slate-50/40 px-4 py-4 border-t border-slate-100">
+        <ParallelBuckets buckets={buckets} />
+        <PatientParallelLanes lanes={buckets.lanes} />
       </div>
 
       <div className="bg-slate-50/40 px-6 py-6 overflow-x-auto">
@@ -747,13 +1007,13 @@ function DbBulkInstanceCard({ instance, onDelete }) {
                 <Arrow small />
                 {row('wf7-s12')}
                 <Arrow small />
-                {row('wf7-s14', 'wf7-s13', 'create or update patient', { choice: true })}
-                <Arrow small />
-                {row('wf7-s15', 'wf7-s16', 'retry or human fix')}
-                <Arrow small />
                 {row('wf7-s24', 'wf7-s25', 'manual object dates if SOC missing')}
                 <Arrow small />
                 {row('wf7-s26', 'wf7-s27', 'manual object dates if SOE/EOE missing')}
+                <Arrow small />
+                {row('wf7-s14', 'wf7-s13', 'create or update patient', { choice: true })}
+                <Arrow small />
+                {row('wf7-s15', 'wf7-s16', 'retry or human fix')}
                 <Arrow small />
                 {row('wf7-s18', 'wf7-s17', 'create or update order', { choice: true })}
                 <Arrow small />
@@ -1031,19 +1291,27 @@ function ActiveTasksPanel({ instances, users }) {
 export default function Orchestrator() {
   const [instances, setInstances] = useState([]);
   const [users, setUsers] = useState([]);
+  const [areas, setAreas] = useState([]);
   const [dbError, setDbError] = useState(null);
+  const [areaError, setAreaError] = useState(null);
   const [filter, setFilter] = useState('all');
   const [tab, setTab] = useState('instances');
   const [showActiveTasks, setShowActiveTasks] = useState(false);
   const [live, setLive] = useState(true);
   const [lastSync, setLastSync] = useState(null);
+  const [checkingAreaId, setCheckingAreaId] = useState(null);
 
   async function refresh() {
     setUsers(getUsers());
     try {
-      const dbRuns = await fetchWorkflowRuns();
+      const [dbRuns, areaRows] = await Promise.all([
+        fetchWorkflowRuns(),
+        fetchAreaIntakeStatus(),
+      ]);
       setInstances(dbRuns.map(dbRunToInstance));
+      setAreas(areaRows);
       setDbError(null);
+      setAreaError(null);
       setLastSync(new Date());
     } catch (err) {
       setInstances([]);
@@ -1070,6 +1338,19 @@ export default function Orchestrator() {
       setDbError(err.message);
     }
     await refresh();
+  }
+
+  async function handleRunAreaCheck(areaId) {
+    setCheckingAreaId(areaId);
+    setAreaError(null);
+    try {
+      await runAreaIntakeCheck({ areaId, forceExpired: true });
+    } catch (err) {
+      setAreaError(err.message);
+    } finally {
+      setCheckingAreaId(null);
+      await refresh();
+    }
   }
 
   useEffect(() => { refresh(); }, []);
@@ -1146,6 +1427,13 @@ export default function Orchestrator() {
           DB workflow API unavailable: {dbError}. Showing local POC runs only.
         </div>
       )}
+      {areaError && (
+        <div className="mb-4 px-4 py-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-sm">
+          Area intake error: {areaError}
+        </div>
+      )}
+
+      <AreaIntakePanel areas={areas} loadingAreaId={checkingAreaId} onRunCheck={handleRunAreaCheck} />
 
       {showActiveTasks && (
         <div className="mb-6 bg-slate-50/60 border border-slate-100 rounded-2xl p-4">

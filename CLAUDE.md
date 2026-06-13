@@ -66,6 +66,19 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-13** — Added area-based intake orchestration. New migration
+  `003_area_intake.sql` adds statistical areas, area-HHAH mappings, area intake checks,
+  missing-upload notifications, and area/HHAH links on workflow runs/uploads. Seed now
+  creates `Boise-Ada Metro Intake` with three expected HHAHs. Added `/api/area-intake`
+  for status + simulated 24-hour checks. Upload starts accept area/HHAH scope.
+
+- **2026-06-13** — Changed wf7 automation to process patient/order items concurrently
+  instead of serially breaking on the first blocked item. Item status becomes `blocked`
+  only for active human work; completing a human task resumes that item. Orchestrator now
+  shows area intake status plus patient-parallel lanes and aggregate buckets for blocked
+  patients, active AI/system/human tasks, and continuing patients. Trigger + HHH upload
+  default to `Boise-Ada Metro Intake` / `Boise Home Health`.
+
 - **2026-06-12** — Removed the duplicate visual Admission/Episode object boxes from wf7.
   `wf7-s22`/`wf7-s23` are no longer in the seeded workflow definition; admission/episode
   found-vs-created decisions are recorded during patient write, and the orchestrator now

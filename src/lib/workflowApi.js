@@ -1,9 +1,24 @@
-export async function startBulkUploadRun({ workbook, pdfs = [], orderZip = null, sourceLabel }) {
+export async function startBulkUploadRun({
+  workbook,
+  pdfs = [],
+  orderZip = null,
+  sourceLabel,
+  areaId,
+  hhahId,
+  areaName,
+  areaType,
+  hhahName,
+}) {
   const form = new FormData();
   form.append('workbook', workbook);
   pdfs.forEach((pdf) => form.append('pdfs', pdf));
   if (orderZip) form.append('orderZip', orderZip);
   if (sourceLabel) form.append('sourceLabel', sourceLabel);
+  if (areaId) form.append('areaId', areaId);
+  if (hhahId) form.append('hhahId', hhahId);
+  if (areaName) form.append('areaName', areaName);
+  if (areaType) form.append('areaType', areaType);
+  if (hhahName) form.append('hhahName', hhahName);
 
   const res = await fetch('/api/workflows/bulk-upload/start', {
     method: 'POST',
@@ -11,6 +26,24 @@ export async function startBulkUploadRun({ workbook, pdfs = [], orderZip = null,
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || 'Bulk upload failed');
+  return body;
+}
+
+export async function fetchAreaIntakeStatus() {
+  const res = await fetch('/api/area-intake');
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Unable to load area intake status');
+  return body.areas || [];
+}
+
+export async function runAreaIntakeCheck({ areaId, checkDate = null, now = null, forceExpired = false }) {
+  const res = await fetch('/api/area-intake', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ areaId, checkDate, now, forceExpired }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Unable to run area intake check');
   return body;
 }
 
@@ -123,6 +156,12 @@ export function dbRunToInstance(run) {
     workflowName: definition.name || run.workflow_id,
     launchedAt: run.created_at,
     status: run.status,
+    areaId: run.area_id,
+    areaName: run.area_name,
+    areaType: run.area_type,
+    hhahId: run.hhah_id,
+    hhahName: run.hhah_name,
+    inputSummary: run.input_summary || {},
     dbBacked: true,
     taskInstances: tasks.map((task) => {
       const step = stepsById[task.step_id] || {};

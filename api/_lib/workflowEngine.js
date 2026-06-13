@@ -30,6 +30,10 @@ function terminal(task) {
   return ['completed', 'skipped', 'failed'].includes(task.status);
 }
 
+function hasActiveHuman(tasks) {
+  return tasks.some((task) => task.status === 'active' && task.actor === 'human');
+}
+
 async function assignHuman() {
   const users = await listUsers();
   if (!users.length) return null;
@@ -112,18 +116,26 @@ export async function runItemAutomation({ definition, itemId, context = {} }) {
     if (live.every((task) => task.status === 'completed')) {
       await updateItem(itemId, { status: 'completed' });
     }
+  } else if (hasActiveHuman(finalTasks)) {
+    await updateItem(itemId, { status: 'blocked' });
+  } else {
+    await updateItem(itemId, { status: 'running' });
   }
 }
 
-export async function runWorkflowAutomation({ runId, definition, context = {} }) {
-  const items = await getRunItems(runId);
-  for (const item of items) {
-    if (item.status !== 'completed') {
-      await runItemAutomation({ definition, itemId: item.id, context });
-      const refreshed = await getItem(item.id);
-      if (refreshed?.status !== 'completed') break;
-    }
+async function runLimited(items, limit, fn) {
+  for (let index = 0; index < items.length; index += limit) {
+    const batch = items.slice(index, index + limit);
+    await Promise.all(batch.map(fn));
   }
+}
+
+export async function runWorkflowAutomation({ runId, definition, context = {}, concurrency = 10 }) {
+  const items = await getRunItems(runId);
+  const runnable = items.filter((item) => item.status !== 'completed' && item.status !== 'failed');
+  await runLimited(runnable, Math.max(1, Number(concurrency) || 10), (item) => (
+    runItemAutomation({ definition, itemId: item.id, context })
+  ));
   await updateRunStatus(runId);
 }
 
@@ -136,6 +148,7 @@ export async function completeHumanTask({ taskRunId, notes, payload, definition 
   const fn = taskRegistry[task.task_key];
   if (!step || !fn) throw new Error(`Task implementation missing for ${task.task_key}`);
   const result = await fn({ item, step, task, payload: payload || {} });
+  await updateItem(item.id, { status: 'running' });
   await updateTask(task.id, {
     status: result.ok === false ? 'failed' : 'completed',
     notes: notes || '',

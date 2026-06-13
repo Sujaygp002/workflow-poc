@@ -67,11 +67,11 @@ export async function listUsers() {
   return sql`SELECT id, name, job_role, access_level FROM users ORDER BY id`;
 }
 
-export async function createWorkflowRun({ workflowId, workflowVersion, sourceLabel, totalItems, inputSummary }) {
+export async function createWorkflowRun({ workflowId, workflowVersion, sourceLabel, totalItems, inputSummary, areaId = null, hhahId = null }) {
   const sql = getSql();
   const rows = await sql`
-    INSERT INTO workflow_runs (workflow_id, workflow_version, source_label, total_items, input_summary)
-    VALUES (${workflowId}, ${workflowVersion}, ${sourceLabel || null}, ${totalItems}, ${await jsonParam(inputSummary)}::jsonb)
+    INSERT INTO workflow_runs (workflow_id, workflow_version, source_label, total_items, input_summary, area_id, hhah_id)
+    VALUES (${workflowId}, ${workflowVersion}, ${sourceLabel || null}, ${totalItems}, ${await jsonParam(inputSummary)}::jsonb, ${areaId}, ${hhahId})
     RETURNING *
   `;
   return rows[0];
@@ -118,9 +118,10 @@ export async function createTaskRunsForItem({ runId, itemId, steps }) {
 
 export async function insertUploadedDocument({ runId, fileName, contentType, sizeBytes, blobUrl, blobPath }) {
   const sql = getSql();
+  const run = (await sql`SELECT hhah_id FROM workflow_runs WHERE id = ${runId} LIMIT 1`)[0];
   const rows = await sql`
-    INSERT INTO uploaded_documents (run_id, file_name, content_type, size_bytes, blob_url, blob_path)
-    VALUES (${runId}, ${fileName}, ${contentType || null}, ${sizeBytes || null}, ${blobUrl || null}, ${blobPath || null})
+    INSERT INTO uploaded_documents (run_id, file_name, content_type, size_bytes, blob_url, blob_path, hhah_id)
+    VALUES (${runId}, ${fileName}, ${contentType || null}, ${sizeBytes || null}, ${blobUrl || null}, ${blobPath || null}, ${run?.hhah_id || null})
     RETURNING *
   `;
   return rows[0];
@@ -188,10 +189,15 @@ export async function getTaskRun(taskRunId) {
 export async function listWorkflowRuns() {
   const sql = getSql();
   return sql`
-    SELECT r.*, d.definition
+    SELECT r.*, d.definition,
+      sa.name AS area_name,
+      sa.area_type,
+      h.name AS hhah_name
     FROM workflow_runs r
     JOIN workflow_definitions d
       ON d.id = r.workflow_id AND d.version = r.workflow_version
+    LEFT JOIN statistical_areas sa ON sa.id = r.area_id
+    LEFT JOIN home_health_agencies h ON h.id = r.hhah_id
     ORDER BY r.created_at DESC
     LIMIT 100
   `;
@@ -302,11 +308,12 @@ export async function updateRunStatus(runId) {
     SELECT
       COUNT(*)::int AS total,
       COUNT(*) FILTER (WHERE status = 'completed')::int AS completed,
+      COUNT(*) FILTER (WHERE status = 'blocked')::int AS blocked,
       COUNT(*) FILTER (WHERE status = 'failed')::int AS failed
     FROM workflow_items
     WHERE run_id = ${runId}
   `;
-  const { total, completed, failed } = counts[0] || { total: 0, completed: 0, failed: 0 };
+  const { total, completed, failed } = counts[0] || { total: 0, completed: 0, blocked: 0, failed: 0 };
   const status = total > 0 && completed === total ? 'completed' : failed > 0 ? 'running' : 'running';
   const rows = await sql`
     UPDATE workflow_runs
@@ -955,4 +962,194 @@ export async function mapPgToPractitioner({ pgId, practitionerId }) {
   `;
 
   return { pg: updatedPg[0], practitioner: updatedPractitioner[0] };
+}
+
+export async function upsertStatisticalArea({ name, areaType, state = null, metadata = {} }) {
+  const sql = getSql();
+  const rows = await sql`
+    INSERT INTO statistical_areas (name, area_type, state, metadata, updated_at)
+    VALUES (${name}, ${areaType}, ${state}, ${await jsonParam(metadata)}::jsonb, now())
+    ON CONFLICT (name, area_type)
+    DO UPDATE SET
+      state = COALESCE(EXCLUDED.state, statistical_areas.state),
+      metadata = statistical_areas.metadata || EXCLUDED.metadata,
+      updated_at = now()
+    RETURNING *
+  `;
+  return rows[0];
+}
+
+export async function linkHhahToArea({ areaId, hhahId, expectedDailyUploadTime = '17:00', uploadWindowHours = 24 }) {
+  const sql = getSql();
+  const rows = await sql`
+    INSERT INTO statistical_area_hhahs (area_id, hhah_id, expected_daily_upload_time, upload_window_hours, active, updated_at)
+    VALUES (${areaId}, ${hhahId}, ${expectedDailyUploadTime}, ${uploadWindowHours}, true, now())
+    ON CONFLICT (area_id, hhah_id)
+    DO UPDATE SET
+      expected_daily_upload_time = EXCLUDED.expected_daily_upload_time,
+      upload_window_hours = EXCLUDED.upload_window_hours,
+      active = true,
+      updated_at = now()
+    RETURNING *
+  `;
+  return rows[0];
+}
+
+export async function findStatisticalAreaByName(name, areaType) {
+  const sql = getSql();
+  const rows = await sql`
+    SELECT * FROM statistical_areas
+    WHERE name = ${name} AND area_type = ${areaType}
+    LIMIT 1
+  `;
+  return rows[0] || null;
+}
+
+export async function listAreaIntakeStatus({ checkDate = null } = {}) {
+  const sql = getSql();
+  const dateExpr = checkDate || new Date().toISOString().slice(0, 10);
+  const areas = await sql`
+    SELECT id, name, area_type, state, metadata, created_at, updated_at
+    FROM statistical_areas
+    ORDER BY name
+  `;
+  const memberships = await sql`
+    SELECT sah.area_id, sah.hhah_id, sah.expected_daily_upload_time, sah.upload_window_hours,
+      h.name AS hhah_name, h.contact_info
+    FROM statistical_area_hhahs sah
+    JOIN home_health_agencies h ON h.id = sah.hhah_id
+    WHERE sah.active = true
+    ORDER BY h.name
+  `;
+  const checks = await sql`
+    SELECT *
+    FROM area_intake_checks
+    WHERE check_date = ${dateExpr}
+  `;
+  const notifications = await sql`
+    SELECT n.*, h.name AS hhah_name
+    FROM missing_upload_notifications n
+    JOIN home_health_agencies h ON h.id = n.hhah_id
+    JOIN area_intake_checks c ON c.id = n.area_check_id
+    WHERE c.check_date = ${dateExpr}
+    ORDER BY n.created_at DESC
+  `;
+  const uploads = await sql`
+    SELECT r.area_id, r.hhah_id, COUNT(*)::int AS run_count, MAX(r.created_at) AS last_upload_at
+    FROM workflow_runs r
+    WHERE r.created_at::date = ${dateExpr}
+      AND r.area_id IS NOT NULL
+      AND r.hhah_id IS NOT NULL
+    GROUP BY r.area_id, r.hhah_id
+  `;
+
+  const membersByArea = new Map();
+  for (const member of memberships) {
+    const list = membersByArea.get(member.area_id) || [];
+    const upload = uploads.find((u) => u.area_id === member.area_id && u.hhah_id === member.hhah_id);
+    list.push({
+      ...member,
+      received: !!upload,
+      run_count: upload?.run_count || 0,
+      last_upload_at: upload?.last_upload_at || null,
+    });
+    membersByArea.set(member.area_id, list);
+  }
+
+  return areas.map((area) => {
+    const areaMembers = membersByArea.get(area.id) || [];
+    const check = checks.find((row) => row.area_id === area.id) || null;
+    return {
+      ...area,
+      check,
+      hhahs: areaMembers,
+      notifications: notifications.filter((n) => n.area_id === area.id),
+      expected_count: areaMembers.length,
+      received_count: areaMembers.filter((m) => m.received).length,
+      missing_count: areaMembers.filter((m) => !m.received).length,
+    };
+  });
+}
+
+export async function runAreaIntakeCheck({ areaId, checkDate = null, now = null, forceExpired = false }) {
+  const sql = getSql();
+  const checkedAt = now ? new Date(now) : new Date();
+  const dateExpr = checkDate || checkedAt.toISOString().slice(0, 10);
+  const members = await sql`
+    SELECT sah.area_id, sah.hhah_id, sah.upload_window_hours, h.name AS hhah_name, h.contact_info
+    FROM statistical_area_hhahs sah
+    JOIN home_health_agencies h ON h.id = sah.hhah_id
+    WHERE sah.area_id = ${areaId} AND sah.active = true
+    ORDER BY h.name
+  `;
+  if (!members.length) throw new Error('No HHAHs are linked to this statistical area.');
+
+  const uploads = await sql`
+    SELECT hhah_id, COUNT(*)::int AS run_count, MAX(created_at) AS last_upload_at
+    FROM workflow_runs
+    WHERE area_id = ${areaId}
+      AND hhah_id IS NOT NULL
+      AND created_at::date = ${dateExpr}
+    GROUP BY hhah_id
+  `;
+  const received = new Set(uploads.map((row) => row.hhah_id));
+  const missing = members.filter((member) => !received.has(member.hhah_id));
+  const maxWindow = Math.max(...members.map((member) => Number(member.upload_window_hours) || 24));
+  const windowStartedAt = new Date(`${dateExpr}T00:00:00.000Z`);
+  const windowEndsAt = new Date(windowStartedAt.getTime() + maxWindow * 60 * 60 * 1000);
+  const expired = forceExpired || checkedAt >= windowEndsAt;
+  const status = missing.length === 0 ? 'complete' : expired ? 'missing_uploads' : 'monitoring';
+
+  const checkRows = await sql`
+    INSERT INTO area_intake_checks (
+      area_id, check_date, window_started_at, window_ends_at, status,
+      expected_count, received_count, missing_count, updated_at
+    )
+    VALUES (
+      ${areaId}, ${dateExpr}, ${windowStartedAt.toISOString()}, ${windowEndsAt.toISOString()}, ${status},
+      ${members.length}, ${members.length - missing.length}, ${missing.length}, now()
+    )
+    ON CONFLICT (area_id, check_date)
+    DO UPDATE SET
+      window_started_at = EXCLUDED.window_started_at,
+      window_ends_at = EXCLUDED.window_ends_at,
+      status = EXCLUDED.status,
+      expected_count = EXCLUDED.expected_count,
+      received_count = EXCLUDED.received_count,
+      missing_count = EXCLUDED.missing_count,
+      updated_at = now()
+    RETURNING *
+  `;
+  const check = checkRows[0];
+
+  const notifications = [];
+  if (status === 'missing_uploads') {
+    for (const member of missing) {
+      const recipient = member.contact_info?.email || '';
+      const message = `Missing daily intake upload for ${member.hhah_name} in area ${areaId} on ${dateExpr}.`;
+      const rows = await sql`
+        INSERT INTO missing_upload_notifications (
+          area_check_id, area_id, hhah_id, notification_type, recipient, status, message, sent_at, updated_at
+        )
+        VALUES (${check.id}, ${areaId}, ${member.hhah_id}, 'email', ${recipient}, 'sent', ${message}, now(), now())
+        ON CONFLICT (area_check_id, hhah_id)
+        DO UPDATE SET
+          recipient = EXCLUDED.recipient,
+          status = EXCLUDED.status,
+          message = EXCLUDED.message,
+          sent_at = COALESCE(missing_upload_notifications.sent_at, EXCLUDED.sent_at),
+          updated_at = now()
+        RETURNING *
+      `;
+      notifications.push(rows[0]);
+    }
+  }
+
+  return {
+    check,
+    expected: members,
+    received: uploads,
+    missing,
+    notifications,
+  };
 }

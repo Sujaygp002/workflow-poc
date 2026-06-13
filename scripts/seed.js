@@ -1,6 +1,13 @@
 import { getSql } from '../api/_lib/db.js';
 import { SEEDED_USERS, WF7_DEFINITION } from '../api/_lib/workflowDefinition.js';
-import { upsertUser, upsertWorkflowDefinition } from '../api/_lib/repositories.js';
+import {
+  createHhahFromPayload,
+  findHhahByName,
+  linkHhahToArea,
+  upsertStatisticalArea,
+  upsertUser,
+  upsertWorkflowDefinition,
+} from '../api/_lib/repositories.js';
 import { normalizeName, normalizeNpi } from '../api/_lib/normalizers.js';
 
 async function seedReferenceData() {
@@ -41,6 +48,54 @@ async function seedReferenceData() {
     )
     ON CONFLICT (npi_digits) DO NOTHING
   `;
+
+  await createHhahFromPayload({
+    HHAH: {
+      name: 'Sunrise Skilled Home Health',
+      NPI: '2223334444',
+      type: 'Home Health Agency',
+      type_of_service: 'Skilled Nursing',
+      contact_info: {
+        phone_number: '602-555-0120',
+        email: 'intake@sunriseskilled.example',
+        address: { street: '44 Central Ave', city: 'Phoenix', state: 'AZ', county: 'Maricopa', zip: '85004' },
+      },
+      raw_data: { seed: true },
+    },
+  });
+
+  await createHhahFromPayload({
+    HHAH: {
+      name: 'Treasure Valley Hospice',
+      NPI: '3334445555',
+      type: 'Home Health Agency',
+      type_of_service: 'Hospice',
+      contact_info: {
+        phone_number: '208-555-0188',
+        email: 'uploads@treasurevalley.example',
+        address: { street: '500 Capitol Blvd', city: 'Boise', state: 'ID', county: 'Ada', zip: '83702' },
+      },
+      raw_data: { seed: true },
+    },
+  });
+
+  const area = await upsertStatisticalArea({
+    name: 'Boise-Ada Metro Intake',
+    areaType: 'metro_statistical_area',
+    state: 'ID',
+    metadata: { seed: true, description: 'Demo area with three expected HHAHs' },
+  });
+  for (const name of ['Boise Home Health', 'Sunrise Skilled Home Health', 'Treasure Valley Hospice']) {
+    const hhah = await findHhahByName(name);
+    if (hhah) {
+      await linkHhahToArea({
+        areaId: area.id,
+        hhahId: hhah.id,
+        expectedDailyUploadTime: '17:00',
+        uploadWindowHours: 24,
+      });
+    }
+  }
 }
 
 async function main() {

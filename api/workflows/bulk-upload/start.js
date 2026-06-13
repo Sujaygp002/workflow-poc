@@ -9,6 +9,8 @@ import {
   createTaskRunsForItem,
   createWorkflowItem,
   createWorkflowRun,
+  findHhahByName,
+  findStatisticalAreaByName,
   getActiveWorkflow,
   getRunWithDefinition,
   insertUploadedDocument,
@@ -39,6 +41,22 @@ function firstField(value, fallback = '') {
   return value ?? fallback;
 }
 
+async function resolveAreaUploadContext(fields = {}, body = {}) {
+  const areaId = firstField(fields.areaId, body.areaId || null);
+  const hhahId = firstField(fields.hhahId, body.hhahId || null);
+  const areaName = firstField(fields.areaName, body.areaName || '');
+  const areaType = firstField(fields.areaType, body.areaType || 'micro_statistical_area');
+  const hhahName = firstField(fields.hhahName, body.hhahName || '');
+  const area = areaId ? { id: areaId } : areaName ? await findStatisticalAreaByName(areaName, areaType) : null;
+  const hhah = hhahId ? { id: hhahId } : hhahName ? await findHhahByName(hhahName) : null;
+  return {
+    areaId: area?.id || null,
+    hhahId: hhah?.id || null,
+    areaName: area?.name || areaName || null,
+    hhahName: hhah?.name || hhahName || null,
+  };
+}
+
 async function pdfsFromZip(zipFile) {
   const zipBuffer = await fs.readFile(zipFile.filepath);
   const zip = await JSZip.loadAsync(zipBuffer);
@@ -64,13 +82,16 @@ async function startFromMultipart(req) {
   if (!workbook) throw new Error('Upload requires a .xlsx workbook field named "workbook".');
 
   const workflow = await ensureWorkflow();
+  const areaContext = await resolveAreaUploadContext(fields);
   const parsed = await parseWorkflowWorkbook(workbook.filepath);
   const run = await createWorkflowRun({
     workflowId: workflow.id,
     workflowVersion: workflow.version,
     sourceLabel: String(firstField(fields.sourceLabel, workbook.originalFilename || 'Excel upload')),
     totalItems: parsed.joined.length,
-    inputSummary: parsed.summary,
+    inputSummary: { ...parsed.summary, area: areaContext },
+    areaId: areaContext.areaId,
+    hhahId: areaContext.hhahId,
   });
 
   const uploadedPdfs = [];
@@ -148,12 +169,15 @@ async function startFromJson(req) {
     throw new Error('JSON start requires an items array of { patientPayload, orderPayload, referencePayload }.');
   }
   const workflow = await ensureWorkflow();
+  const areaContext = await resolveAreaUploadContext({}, body);
   const run = await createWorkflowRun({
     workflowId: workflow.id,
     workflowVersion: workflow.version,
     sourceLabel: body.sourceLabel || 'JSON upload',
     totalItems: body.items.length,
-    inputSummary: { joinedRows: body.items.length, mode: 'json' },
+    inputSummary: { joinedRows: body.items.length, mode: 'json', area: areaContext },
+    areaId: areaContext.areaId,
+    hhahId: areaContext.hhahId,
   });
 
   for (let i = 0; i < body.items.length; i += 1) {

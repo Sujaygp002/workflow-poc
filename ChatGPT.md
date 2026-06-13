@@ -8,6 +8,12 @@
 - The wf7 workflow is seeded into the DB and can be visualized from the Workflows UI.
 - Dummy users remain Alice (`u1`), Bob (`u2`), and Carol (`u3`).
 - Human tasks are now assigned randomly across the seeded users.
+- Added area-based intake orchestration for the POC:
+  - Statistical Area can be `micro_statistical_area` or `metro_statistical_area`.
+  - Seeded area: `Boise-Ada Metro Intake`.
+  - Area links to expected HHAHs and tracks whether each HHAH uploaded within the daily 24-hour window.
+  - Missing uploads create logged notification records in the DB; real email delivery can be wired later.
+- Upload workflow processing now runs patient instances in parallel instead of stopping the whole run on the first blocked patient. A blocked patient waits on human work while other patients continue.
 
 ## HHH Portal
 
@@ -30,6 +36,7 @@
 - PDF matching rule:
   - PDF filename without `.pdf` must match `order_number` from the order sheet.
   - Example: order number `ORD-1001` should use `ORD-1001.pdf`.
+- HHH portal uploads are currently scoped to `Boise-Ada Metro Intake` / `Boise Home Health` so the area monitor can show received vs missing uploads.
 
 ## New API Routes
 
@@ -41,6 +48,11 @@
   - Maps a physician group to a practitioner by updating the DB JSON link fields.
 - `POST /api/workflows/bulk-upload/start`
   - Starts the DB-backed wf7 workflow from Excel and optional ZIP/PDF uploads.
+  - Accepts optional `areaId`, `hhahId`, `areaName`, `areaType`, and `hhahName` to scope a run to an area/HHAH.
+- `GET /api/area-intake`
+  - Returns statistical areas, expected HHAHs, received/missing upload status, current check record, and notification records.
+- `POST /api/area-intake`
+  - Runs the simulated 24-hour area check and creates logged missing-upload notification records.
 - `GET /api/workflows`
   - Returns active DB workflow definitions for visualization.
 - `GET /api/workflow-runs`
@@ -59,6 +71,19 @@
 - `/triggers` is back in FlowPOC and starts the DB-backed bulk upload trigger.
 - `/builder/workflows` now pulls only DB workflow definitions and no longer shows local dummy workflows.
 - `/orchestrator` now shows only DB workflow runs and renders wf7 as one aggregate loop body instead of one repeated flow per patient/order row.
+- `/orchestrator` now includes an Area Intake Monitor above workflow runs:
+  - Shows selected statistical area.
+  - Shows expected HHAHs.
+  - Shows received/missing upload status.
+  - Shows 24-hour check status and missing-upload notification status.
+  - Includes a POC button to simulate the 24-hour check.
+- `/orchestrator` wf7 cards now show patient-parallel orchestration buckets:
+  - blocked patients,
+  - active AI tasks,
+  - active system tasks,
+  - active human tasks,
+  - patients continuing.
+- `/orchestrator` also shows one compact lane/card per patient with order count and current state.
 - `/orchestrator` and `/builder/workflows` show condition markers as diamond decision blocks; the wf7 loop is shown with a large curved repeat arrow.
 - The wf7 orchestrator diamonds now label the real branch truth: missing-date checks route YES to manual date entry, and patient/order exists checks route YES to update and NO to create.
 - `/orchestrator` object lifecycle excludes HHAH from created/updated/found counts because HHAH comes from the login context.
@@ -77,3 +102,10 @@
 - Environment values are currently hardcoded in `api/_lib/config.js` for personal testing.
 - For real production use, move secrets back to environment variables and rotate exposed keys.
 - Vercel Blob is used when `BLOB_READ_WRITE_TOKEN` is configured; otherwise uploads can still run but PDF blob storage is skipped.
+- Verification on 2026-06-13:
+  - `npm run lint` passed.
+  - `npm run build` passed.
+  - `npm run db:migrate` applied `003_area_intake.sql`.
+  - `npm run db:seed` passed.
+  - Area monitor DB smoke tests passed for all-upload, one-missing, and late-upload-after-notification scenarios.
+  - A full 10-patient/30-order DB smoke test was started but stopped because the current per-task Neon round trips were taking too long; temporary rows were cleaned up.

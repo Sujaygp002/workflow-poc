@@ -7,11 +7,20 @@ const CONDITIONS = [
   'excel_row_incomplete',
   'practitioner_not_exists',
   'pg_not_exists',
+  'reference_records_ready',
+  'admission_dates_missing',
+  'episode_dates_missing',
   'patient_exists',
   'patient_not_exists',
   'order_exists',
   'order_not_exists',
+  'area_upload_missing',
+  'notification_sent',
 ];
+
+const DEFAULT_AREA_NAME = 'Boise-Ada Metro Intake';
+const DEFAULT_AREA_TYPE = 'metro_statistical_area';
+const DEFAULT_HHAH_NAME = 'Boise Home Health';
 
 function DiamondCondition({ label }) {
   return (
@@ -45,6 +54,9 @@ export default function Triggers() {
         workbook,
         orderZip: zip,
         sourceLabel: workbook.name,
+        areaName: DEFAULT_AREA_NAME,
+        areaType: DEFAULT_AREA_TYPE,
+        hhahName: DEFAULT_HHAH_NAME,
       });
       setMessage(`Trigger fired. ${result.inputSummary?.joinedRows ?? 0} patient/order row(s) entered wf7.`);
     } catch (err) {
@@ -73,7 +85,10 @@ export default function Triggers() {
               <h2 className="text-lg font-bold text-slate-900">Bulk Upload Patient & Order</h2>
               <span className="rounded-full bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-700 border border-sky-100">trigger-7</span>
             </div>
-            <p className="text-sm text-slate-500 mt-1">Upload one Excel workbook and a ZIP of order PDFs. The workflow loops over every patient/order row.</p>
+            <p className="text-sm text-slate-500 mt-1">Upload one Excel workbook and a ZIP of order PDFs. The workflow groups rows by patient and runs patient instances in parallel.</p>
+            <p className="mt-2 text-xs font-semibold text-slate-500">
+              Scope: {DEFAULT_AREA_NAME} · {DEFAULT_HHAH_NAME}
+            </p>
           </div>
           <div className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">
             <Play size={13} className="inline mr-1" /> File upload trigger

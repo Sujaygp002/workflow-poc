@@ -2,6 +2,10 @@ import { useEffect, useState } from 'react';
 import { Activity, ArrowLeft, Building2, CheckCircle2, ChevronRight, ExternalLink, FileArchive, FileSpreadsheet, FileText, GitBranch, Loader2, Lock, RefreshCw, Upload, UserRound } from 'lucide-react';
 import { fetchOrders, fetchPatientTree, fetchPatients, startBulkUploadRun } from '../../lib/workflowApi';
 
+const DEFAULT_AREA_NAME = 'Boise-Ada Metro Intake';
+const DEFAULT_AREA_TYPE = 'metro_statistical_area';
+const DEFAULT_HHAH_NAME = 'Boise Home Health';
+
 function formatDate(value) {
   if (!value) return 'Missing';
   const date = new Date(value);
@@ -285,6 +289,9 @@ export default function HhhLogin() {
         workbook,
         orderZip: zip,
         sourceLabel: workbook.name,
+        areaName: DEFAULT_AREA_NAME,
+        areaType: DEFAULT_AREA_TYPE,
+        hhahName: DEFAULT_HHAH_NAME,
       });
       setMessage(`Upload started. Joined rows: ${result.inputSummary?.joinedRows ?? 0}.`);
       await refreshPatients();
