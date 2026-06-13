@@ -66,6 +66,12 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-14** — Hardcoded Gmail SMTP credentials as fallbacks in `config.js`
+  (`SMTP_HOST/PORT/SECURE/USER/PASS/FROM`), matching the existing DB/Gemini/Blob convention,
+  so the deployed app sends emails without Vercel env vars. Env vars still override. Real
+  account + app password committed to public git history — rotate before any real use.
+  (Verified the credentials send via Gmail SMTP.)
+
 - **2026-06-14** — Time trigger label + real SMTP email send for the missing-upload task.
   - `wf-area-onboarding` trigger changed to `{ type: 'time_interval', intervalSeconds: 10,
     label: 'Time trigger · every 10s' }`. New `triggerLabel(trigger)` helper in
