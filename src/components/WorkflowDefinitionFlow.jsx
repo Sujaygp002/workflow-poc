@@ -48,6 +48,15 @@ export function conditionLabel(condition) {
   return (condition || '').replaceAll('_', ' ');
 }
 
+// Label for the START cap. Time-interval triggers read as "Time trigger · every Ns".
+export function triggerLabel(trigger) {
+  if (!trigger) return 'trigger';
+  if (trigger.type === 'time_interval' && trigger.intervalSeconds) {
+    return trigger.label || `Time trigger · every ${trigger.intervalSeconds}s`;
+  }
+  return trigger.label || trigger.id || trigger.type || 'trigger';
+}
+
 // ── Decision diamond ──────────────────────────────────
 // The condition sits in a rotated square. Down exit = YES; right exit = else branch.
 export function DecisionDiamond({ condition, downLabel = 'YES', rightLabel }) {

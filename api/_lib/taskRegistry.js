@@ -12,6 +12,7 @@ import {
 } from './repositories.js';
 import { extractMissingDataFromPdf } from './gemini.js';
 import { GEMINI_MODEL } from './config.js';
+import { sendEmail } from './mailer.js';
 import { cleanString, hasValue, normalizeNpi, safeJson } from './normalizers.js';
 
 const REQUIRED_FIELDS = [
@@ -758,17 +759,31 @@ export const taskRegistry = {
   // ── Area Upload Monitor tasks ────────────────────────────────────────────
   'area.monitorExpectedUploads': async () => ({ ok: true, output: { monitoring: true } }),
   'area.continueUploadWorkflow': async () => ({ ok: true, output: { continued: true } }),
-  // Manual: a person sends the missing-upload email to the HHAH, then the system
-  // posts the on-page notification (area.recordNotificationStatus) right after.
+  // Manual: a person sends the missing-upload email to the HHAH via SMTP, then the
+  // system posts the on-page notification (area.recordNotificationStatus) right after.
   'area.sendMissingUploadNotification': async ({ item, payload }) => {
+    const recipient = payload?.recipient || item.reference_payload?.HHAH?.contact_info?.email || '';
+    const subject = payload?.subject || 'Missing daily intake upload';
+    const body = payload?.notes || 'We have not received your daily Excel + PDF ZIP upload within the 24-hour window. Please upload your documents as soon as possible.';
+
+    let mail;
+    try {
+      mail = await sendEmail({ to: recipient, subject, text: body });
+    } catch (error) {
+      return { ok: false, error: `Email send failed: ${error.message}`, output: { recipient } };
+    }
+
     const decisions = setDecisions(item, { notification_sent: true });
     await updateItem(item.id, { decisions });
     return {
       ok: true,
       output: {
-        email_sent: true,
-        recipient: payload?.recipient || item.reference_payload?.HHAH?.contact_info?.email || '',
-        notes: payload?.notes || '',
+        email_sent: mail.sent,
+        email_skipped: mail.skipped || false,
+        email_reason: mail.reason || null,
+        message_id: mail.messageId || null,
+        recipient,
+        subject,
       },
     };
   },

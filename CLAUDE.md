@@ -66,6 +66,20 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-14** — Time trigger label + real SMTP email send for the missing-upload task.
+  - `wf-area-onboarding` trigger changed to `{ type: 'time_interval', intervalSeconds: 10,
+    label: 'Time trigger · every 10s' }`. New `triggerLabel(trigger)` helper in
+    `WorkflowDefinitionFlow.jsx`; Orchestrator + Workflows START caps now render
+    "START · Time trigger · every 10s" for time triggers (and the trigger id/label otherwise).
+  - **SMTP**: added `nodemailer` + `api/_lib/mailer.js` (`sendEmail`). SMTP creds are
+    **env-only** (`SMTP_HOST/PORT/SECURE/USER/PASS/FROM` in `config.js`, documented in
+    `.env.example`) — NOT hardcoded, unlike the test creds. When SMTP is unset the mailer
+    logs the email and the workflow still completes (no-op fallback).
+  - `area.sendMissingUploadNotification` now actually sends the email via `sendEmail` using the
+    composer's recipient/subject/body; on send failure the task fails with the error. WorkBucket
+    hides the irrelevant "N missing" badge for this email task.
+  - DB reset + reseeded (new trigger shape).
+
 - **2026-06-14** — Made **Notification Trigger — Missing Upload** (`area-s4`) a manual task.
   - `area-s4` actor `system` → `human`: a person now sends the missing-upload **email** to the
     HHAH. Its task fn (`area.sendMissingUploadNotification`) records `email_sent` + the

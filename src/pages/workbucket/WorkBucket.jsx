@@ -356,7 +356,7 @@ function ActionCard({ item, onComplete }) {
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-semibold text-slate-800 leading-tight">{item.taskName}</span>
             <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700">in progress</span>
-            {missingFields.length > 0 && (
+            {!isMissingUploadEmail && missingFields.length > 0 && (
               <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-rose-100 text-rose-700">
                 {missingFields.length} missing
               </span>

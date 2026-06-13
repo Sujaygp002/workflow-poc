@@ -15,3 +15,14 @@ export const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 export const BLOB_READ_WRITE_TOKEN =
   process.env.BLOB_READ_WRITE_TOKEN ||
   'vercel_blob_rw_Mj10cXp6A8JClcKA_h10io6jawhYAs0hUbuQHDR8GFSxe8u';
+
+// SMTP for outbound email (missing-upload notifications). These are real mail
+// credentials, so they are env-only — set them on Vercel (or in a local .env).
+// When unset, the mailer logs the email instead of sending (no-op fallback).
+//   SMTP_HOST, SMTP_PORT, SMTP_SECURE ("true"/"false"), SMTP_USER, SMTP_PASS, SMTP_FROM
+export const SMTP_HOST = process.env.SMTP_HOST || '';
+export const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
+export const SMTP_SECURE = process.env.SMTP_SECURE === 'true';
+export const SMTP_USER = process.env.SMTP_USER || '';
+export const SMTP_PASS = process.env.SMTP_PASS || '';
+export const SMTP_FROM = process.env.SMTP_FROM || process.env.SMTP_USER || 'no-reply@hhh-intake.local';

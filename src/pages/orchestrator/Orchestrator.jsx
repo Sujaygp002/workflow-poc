@@ -11,6 +11,7 @@ import {
   MegaGroupFlow,
   MegaTaskNode,
   RunObjectSidebar,
+  triggerLabel,
   TriggerChainConnector,
   WorkflowFlow,
 } from '../../components/WorkflowDefinitionFlow';
@@ -132,7 +133,7 @@ function RunCard({ run, onDelete, areas, loadingAreaId, onRunCheck }) {
         <div className="flex flex-col gap-4 p-4 lg:flex-row lg:items-start">
           <div className="min-w-0 flex-1 overflow-x-auto">
             <div className="mx-auto w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">
-              START · {definition.trigger?.id || 'trigger'}
+              START · {triggerLabel(definition.trigger)}
             </div>
             <Connector />
             {definition.megaGroups ? (

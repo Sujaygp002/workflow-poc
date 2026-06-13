@@ -4,8 +4,10 @@ export const WF_AREA_ONBOARDING_DEFINITION = {
   description:
     'Starts when an area/HHAH onboarding is successful. It keeps the area intake cycle active, waits for expected HHAH uploads, and triggers missing-upload notifications when an HHAH has not uploaded within the 24-hour window.',
   trigger: {
-    id: 'trigger-onboarding-success',
-    type: 'onboarding_success',
+    id: 'trigger-daily-upload-timer',
+    type: 'time_interval',
+    intervalSeconds: 10,
+    label: 'Time trigger · every 10s',
   },
   conditions: {
     upload_received_within_24h: 'expected HHAH uploaded Excel + PDF ZIP within 24 hours',

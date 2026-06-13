@@ -5,6 +5,7 @@ import {
   Connector,
   MegaGroupFlow,
   MegaTaskNode,
+  triggerLabel,
   TriggerChainConnector,
   WorkflowFlow,
 } from '../../components/WorkflowDefinitionFlow';
@@ -65,7 +66,7 @@ function WorkflowCard({ wf }) {
       {showFlow && (
         <div className="border-t border-slate-100 bg-slate-50/40 overflow-x-auto p-4">
           <div className="mx-auto w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">
-            START · {wf.trigger?.id || wf.trigger?.type || 'trigger'}
+            START · {triggerLabel(wf.trigger)}
           </div>
           <Connector />
           {/* tasks=[] → static definition view with no live run counts */}
