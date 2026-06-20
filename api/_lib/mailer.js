@@ -27,12 +27,19 @@ export async function sendEmail({ to, subject, text, html }) {
   if (!to) {
     return { sent: false, skipped: true, reason: 'no_recipient' };
   }
-  const info = await transport.sendMail({
-    from: SMTP_FROM,
-    to,
-    subject: subject || '(no subject)',
-    text: text || '',
-    html: html || undefined,
-  });
-  return { sent: true, messageId: info.messageId, accepted: info.accepted, rejected: info.rejected };
+  // Best-effort: a dead/rejected SMTP login must never throw and deadlock the
+  // workflow (e.g. Trigger 4 human tasks). Log and return a non-fatal skip.
+  try {
+    const info = await transport.sendMail({
+      from: SMTP_FROM,
+      to,
+      subject: subject || '(no subject)',
+      text: text || '',
+      html: html || undefined,
+    });
+    return { sent: true, messageId: info.messageId, accepted: info.accepted, rejected: info.rejected };
+  } catch (error) {
+    console.log('[mailer] send failed — continuing without email:', error.message);
+    return { sent: false, skipped: true, reason: `smtp_error: ${error.message}` };
+  }
 }

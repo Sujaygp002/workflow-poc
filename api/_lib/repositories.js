@@ -1613,7 +1613,48 @@ export async function markOrderSignedByPhysician(orderId, date = todayYmd()) {
     WHERE id = ${orderId}
     RETURNING *
   `;
+  // Clear any Trigger-3 overdue reminder task now that this order is signed.
+  await resolveOverdueSigningTasksForOrders([orderId], date);
   return rows[0] || null;
+}
+
+// When an order is signed (e.g. via PG Bulk Sign) AFTER Trigger 3 already raised an
+// "Email Physician — Signature Overdue" manual task, that reminder is moot — the work
+// is done. Auto-complete any still-active signing.emailPhysicianReminder task whose
+// item points at one of the just-signed orders so it disappears from the worker bucket.
+export async function resolveOverdueSigningTasksForOrders(orderIds = [], date = todayYmd()) {
+  const ids = [...new Set((orderIds || []).filter(Boolean))].map(String);
+  if (!ids.length) return { resolved: [] };
+  const sql = getSql();
+  const rows = await sql`
+    UPDATE workflow_task_runs t
+    SET status = 'completed',
+        notes = 'Auto-resolved: physician signed the document after the reminder task was raised.',
+        output = ${await jsonParam({ autoResolved: true, reason: 'order_signed_after_trigger', signedDate: date })}::jsonb,
+        completed_at = now(),
+        updated_at = now()
+    FROM workflow_items i
+    WHERE t.item_id = i.id
+      AND t.task_key = 'signing.emailPhysicianReminder'
+      AND t.status = 'active'
+      AND (i.extraction_payload->>'orderId') = ANY(${ids})
+    RETURNING t.id, t.item_id, t.run_id
+  `;
+  // Settle each affected item (mark completed when all its tasks are terminal) and
+  // recompute its run status so a fully-resolved signing run rolls up to completed.
+  const runIds = new Set();
+  for (const row of rows) {
+    const itemTasks = await sql`SELECT status FROM workflow_task_runs WHERE item_id = ${row.item_id}`;
+    const live = itemTasks.filter((task) => task.status !== 'skipped');
+    const allDone = live.length > 0 && live.every((task) => task.status === 'completed');
+    await sql`
+      UPDATE workflow_items SET status = ${allDone ? 'completed' : 'running'}, updated_at = now()
+      WHERE id = ${row.item_id}
+    `;
+    runIds.add(row.run_id);
+  }
+  for (const runId of runIds) await updateRunStatus(runId);
+  return { resolved: rows.map((row) => row.id) };
 }
 
 export async function listPgUnsignedOrders(pgId = null) {
@@ -1668,6 +1709,8 @@ export async function bulkSignOrders({ orderIds = [], pgId = null, date = todayY
     RETURNING *
   `;
   const updatedIds = new Set(rows.map((row) => row.id));
+  // Signing happened — clear any Trigger-3 overdue reminder tasks for these orders.
+  await resolveOverdueSigningTasksForOrders([...updatedIds], date);
   return {
     updated: rows,
     skipped: ids.filter((id) => !updatedIds.has(id)),

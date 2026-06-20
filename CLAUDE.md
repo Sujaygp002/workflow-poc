@@ -66,6 +66,30 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-21** — Fixed Trigger 4 deadlock, added Trigger 3 auto-resolve, renamed demo
+  HHAH/PG.
+  - **Trigger 4 (billing monitor) was deadlocked by SMTP failures.** `sendEmail` (mailer.js)
+    threw when the hardcoded Gmail login was rejected (`535 BadCredentials`). The billing human
+    tasks (`billing.sendHhahMissingDocumentEmail` / `sendPhysicianReminder`) call `sendEmail`
+    with no try/catch, so `completeHumanTask` threw → the task never completed → the item stayed
+    `blocked` → the run stayed `running` → the active-HHAH-run guard then blocked ALL future
+    Trigger 4 runs for that HHAH (so "tasks aren't getting created or completed"). Fix: `sendEmail`
+    now wraps `transport.sendMail` in try/catch and returns `{ sent:false, skipped:true, reason }`
+    instead of throwing — email is best-effort and never deadlocks a workflow. Verified: a stuck
+    billing run's 3 tasks now complete and the run rolls up to `completed`, releasing the guard.
+  - **Trigger 3: auto-resolve the overdue reminder when the physician signs late.** New
+    `resolveOverdueSigningTasksForOrders(orderIds)` in `repositories.js` auto-completes any still
+    -`active` `signing.emailPhysicianReminder` task whose item `extraction_payload.orderId` is in
+    the just-signed set (with an explanatory note), settles the item, and recomputes the run
+    status. Wired into `bulkSignOrders` (PG Bulk Sign) and `markOrderSignedByPhysician`. So if the
+    physician signs after Trigger 3 raised the "Email Physician — Signature Overdue" task, that
+    manual task disappears from the worker bucket. Verified via a forced-active reminder + sign.
+  - **Renamed demo HHAH/PG**: `HHAH1/HHAH2` → `HHAH1-demo-workflow`/`HHAH2-demo-workflow` and
+    `PG1/PG2` → `PG1-demo-workflow`/`PG2-demo-workflow` in the live DB (`home_health_agencies`/
+    `physician_groups` name + normalized_name, plus denormalized `patients.hhah_name`/`pg_name`)
+    and in `scripts/seed-map-demo.js` so a reseed stays consistent.
+  - lint + build pass.
+
 - **2026-06-20** — Coverage Map drilldown re-shaped to mirror the patient page hierarchy +
   added spring animation. The HHAH→PG patient-count drilldown now nests strictly like the
   Patient page (each level connects only to its parent): patient-count → **Admissions** →

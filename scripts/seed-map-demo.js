@@ -93,13 +93,13 @@ async function upsertOrder(num, docType, patientId, admissionId, episodeId, hhah
 }
 
 async function main() {
-  console.log('Seeding Coverage Map demo data (HHAH1/2, PG1/2, Practitioners)…');
+  console.log('Seeding Coverage Map demo data (HHAH1/2-demo-workflow, PG1/2-demo-workflow, Practitioners)…');
 
   // 2 HHAHs, 2 PGs
-  const hhah1 = await upsertHhah('HHAH1', '1000000011');
-  const hhah2 = await upsertHhah('HHAH2', '1000000012');
-  const pg1 = await upsertPg('PG1', '2000000011');
-  const pg2 = await upsertPg('PG2', '2000000012');
+  const hhah1 = await upsertHhah('HHAH1-demo-workflow', '1000000011');
+  const hhah2 = await upsertHhah('HHAH2-demo-workflow', '1000000012');
+  const pg1 = await upsertPg('PG1-demo-workflow', '2000000011');
+  const pg2 = await upsertPg('PG2-demo-workflow', '2000000012');
 
   // a few practitioners, linked to PGs (PG1 gets 3, PG2 gets 2)
   const practitioners = [];
