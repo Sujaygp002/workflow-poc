@@ -79,6 +79,7 @@ export function buildGraph({ patients = [], orders = [], reference = {} } = {}) 
         _billedEpisodeIds: new Set(),
         _unbilledEpisodeIds: new Set(),
         _eligibleEpisodeIds: new Set(),
+        _episodeAdmission: new Map(),
       };
       edgeMap.set(k, e);
     }
@@ -99,7 +100,6 @@ export function buildGraph({ patients = [], orders = [], reference = {} } = {}) 
     const admissionId = clean(o.admission_id);
     const episodeId = clean(o.episode_id);
     const admissionEnd = details.EOC || details.eoc || details.admission_eoc || details.admissionEndDate;
-    const episodeEnd = o.episode_eoe || details.EOE || details.eoe || details.episode_eoe || details.episodeEndDate;
 
     e.orders += 1;
     e[classifyOrderType(o)] += 1;
@@ -118,12 +118,12 @@ export function buildGraph({ patients = [], orders = [], reference = {} } = {}) 
 
     if (episodeId) {
       e._episodeIds.add(episodeId);
-      if (isPastDate(episodeEnd, todayMs)) {
-        e._oldEpisodeIds.add(episodeId);
-        e._newEpisodeIds.delete(episodeId);
-      } else if (!e._oldEpisodeIds.has(episodeId)) {
-        e._newEpisodeIds.add(episodeId);
-      }
+      // Remember which admission this episode belongs to so its old/new age can
+      // INHERIT the admission's age below. Classifying an episode independently by
+      // its own EOE diverges from the admission age (an admission's EOC outlives its
+      // episode's EOE), producing "1 new admission with 0 episodes". Inheriting keeps
+      // every admission's episodes reachable.
+      if (admissionId) e._episodeAdmission.set(episodeId, admissionId);
       if (o.episode_status === 'billable') {
         e._billedEpisodeIds.add(episodeId);
         e._unbilledEpisodeIds.delete(episodeId);
@@ -134,6 +134,18 @@ export function buildGraph({ patients = [], orders = [], reference = {} } = {}) 
       if (o.episode_status === 'eligible' || o.episode_status === 'billable') {
         e._eligibleEpisodeIds.add(episodeId);
       }
+    }
+  }
+
+  // Bucket episodes old/new by their parent admission's age (fallback: own EOE).
+  for (const e of edgeMap.values()) {
+    for (const episodeId of e._episodeIds) {
+      const admissionId = e._episodeAdmission.get(episodeId);
+      const admissionIsOld = admissionId
+        ? e._oldAdmissionIds.has(admissionId)
+        : null;
+      if (admissionIsOld === true) e._oldEpisodeIds.add(episodeId);
+      else if (admissionIsOld === false) e._newEpisodeIds.add(episodeId);
     }
   }
 
@@ -157,6 +169,7 @@ export function buildGraph({ patients = [], orders = [], reference = {} } = {}) 
       delete e._billedEpisodeIds;
       delete e._unbilledEpisodeIds;
       delete e._eligibleEpisodeIds;
+      delete e._episodeAdmission;
       return e;
     })
     .filter((e) => e.patients > 0 || e.orders > 0);

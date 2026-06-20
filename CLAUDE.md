@@ -66,6 +66,14 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-21** — Coverage Map: fixed "1 new admission but 0 episodes" inconsistency.
+  `graph.js` classified admission age (by EOC) and episode age (by EOE) independently, so an
+  admission could be "new" while its only episode was "old" — leaving the New Admission → Episodes
+  drilldown empty. Now each episode's old/new age **inherits its parent admission's age** (tracked
+  via `_episodeAdmission` map; fallback to own EOE only if no admission link). Removed the now-unused
+  per-episode EOE date read. Verified on the demo data: HHAH1→PG2 now reads new adm 1 / new epi 1 and
+  old adm 1 / old epi 1 (was new epi 0). lint + build pass.
+
 - **2026-06-21** — Trigger 4: fixed missing CPO tasks + append-to-active-run. Two bugs kept
   the "Add 30 Min CPO" (and signature) tasks from ever appearing for a billable patient like
   Eleanor Watkins:
