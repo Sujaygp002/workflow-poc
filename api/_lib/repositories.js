@@ -212,6 +212,12 @@ export async function getRunItems(runId) {
   `;
 }
 
+export async function countWorkflowItems(runId) {
+  const sql = getSql();
+  const rows = await sql`SELECT count(*)::int AS n FROM workflow_items WHERE run_id = ${runId}`;
+  return rows[0]?.n || 0;
+}
+
 export async function getItem(itemId) {
   const sql = getSql();
   const rows = await sql`SELECT * FROM workflow_items WHERE id = ${itemId} LIMIT 1`;
@@ -1718,8 +1724,13 @@ export async function bulkSignOrders({ orderIds = [], pgId = null, date = todayY
 }
 
 function parseDateOnly(value) {
-  if (!value) return null;
-  const parsed = new Date(`${String(value).slice(0, 10)}T00:00:00.000Z`);
+  // value may be a Date (as the Neon driver returns soe/eoe) or a string. Using
+  // String(dateObj).slice(0,10) yields "Mon Jan 05" → NaN, which silently dropped
+  // every CPO month (so the CPO billing check never ran). Reuse dateOnly, which
+  // normalizes both Date objects and strings to YYYY-MM-DD.
+  const ymd = dateOnly(value);
+  if (!ymd) return null;
+  const parsed = new Date(`${ymd}T00:00:00.000Z`);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 

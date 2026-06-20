@@ -66,6 +66,27 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-21** — Trigger 4: fixed missing CPO tasks + append-to-active-run. Two bugs kept
+  the "Add 30 Min CPO" (and signature) tasks from ever appearing for a billable patient like
+  Eleanor Watkins:
+  - **`parseDateOnly` dropped every CPO month.** It did `String(value).slice(0,10)`, but
+    Neon returns `soe`/`eoe` as Date objects, so `String(dateObj)` → `"Mon Jan 05 …"` →
+    `.slice(0,10)` = `"Mon Jan 05"` → `NaN` → null. `cpoMonthDatesForEpisode` then returned
+    `[]`, so no CPO month rows were ever created and the CPO billing check never ran. Fixed by
+    delegating to the existing `dateOnly` helper (handles Date + string). Same class of bug as
+    the 2026-06-19 `dayDiff` fix. Verified: Eleanor's billable episode now generates 3 CPO
+    months and 3 "Add 30 Min CPO" issues; completing one captures minutes and flips the month
+    to billable.
+  - **New issues for an HHAH with an active run were silently skipped.** The active-HHAH-run
+    guard dropped any issue discovered after the run was created (e.g. CPO months that only
+    became checkable once an episode turned billable). Now `appendIssuesToRun` appends those
+    (already-deduped) issues as fresh items to the in-flight run instead of skipping; added
+    `countWorkflowItems`. Confirmed Eleanor's 3 CPO tasks append to the live HHAH1 run and go
+    active. (Note: the "Email HHAH — Missing Document (3)" badge was never about Eleanor — it
+    aggregates 3 *other* patients: Doris Bell missing 485, Harper Chen + Miguel Alvarez missing
+    F2F. Eleanor has both 485 + F2F and is correctly billable.)
+  - lint + build pass.
+
 - **2026-06-21** — Coverage Map: fixed "undefined" episode/admission ball labels + added an
   **Eligible** episode bucket. `fmtCount(undefined)` rendered the literal string `"undefined"`
   as the big inner number (the count source — `s.newEpisodes` etc. — was sometimes absent);

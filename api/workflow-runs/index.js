@@ -1,6 +1,7 @@
 import { handleError, methodNotAllowed, readJson, sendJson } from '../_lib/http.js';
 import { SEEDED_USERS, WF_BILLING_MONITOR_DEFINITION } from '../_lib/workflowDefinition.js';
 import {
+  countWorkflowItems,
   createTaskRunsForItem,
   createWorkflowItem,
   createWorkflowRun,
@@ -102,6 +103,37 @@ async function createHhahIssueRun({ workflow, group }) {
     concurrency: Math.max(1, group.issues.length),
   });
   return { created: true, runId: run.id, itemIds, hhahId: group.hhah?.id || null, hhahName: group.hhah?.name || null };
+}
+
+// New (already-deduped) issues for an HHAH that still has an active run get APPENDED
+// to that run as fresh items, rather than skipped — otherwise issues discovered after
+// the run was created (e.g. CPO months that only became checkable once the episode
+// turned billable) would silently wait until the whole run completes.
+async function appendIssuesToRun({ workflow, runId, issues }) {
+  const existingCount = await countWorkflowItems(runId);
+  const stepsById = new Map();
+  const itemIds = [];
+  for (let offset = 0; offset < issues.length; offset += 1) {
+    const issue = issues[offset];
+    const step = runnableStep(workflow, issue.stepId);
+    stepsById.set(step.id, step);
+    const item = await createWorkflowItem({
+      runId,
+      itemIndex: existingCount + offset,
+      patientPayload: issue.patientPayload || {},
+      orderPayload: issue.orderPayload || {},
+      referencePayload: issue.referencePayload || {},
+      extractionPayload: issue.extractionPayload || {},
+    });
+    itemIds.push(item.id);
+    await createTaskRunsForItem({ runId, itemId: item.id, steps: [step] });
+  }
+  await runWorkflowAutomation({
+    runId,
+    definition: { ...workflow.definition, steps: [...stepsById.values()] },
+    concurrency: Math.max(1, issues.length),
+  });
+  return itemIds;
 }
 
 async function runBillingMonitorHandler() {
@@ -211,14 +243,17 @@ async function runBillingMonitorHandler() {
       group.hhah?.name || null,
     );
     if (activeRun) {
+      // Append the new issues to the in-flight run for this HHAH instead of dropping them.
+      const itemIds = await appendIssuesToRun({ workflow, runId: activeRun.id, issues: group.issues });
       tasks.push({
         created: false,
-        skipped: true,
-        reason: 'active_hhah_billing_run_exists',
+        appended: true,
+        reason: 'appended_to_active_hhah_billing_run',
         existingRunId: activeRun.id,
         hhahId: group.hhah?.id || null,
         hhahName: group.hhah?.name || 'Unknown HHAH',
         issueCount: group.issues.length,
+        itemIds,
       });
       continue;
     }
