@@ -96,6 +96,7 @@ function RunCard({ run, onDelete, areas, loadingAreaId, onRunCheck }) {
   const totalRan = tasks.filter((t) => t.status !== 'pending' && t.status !== 'skipped').length;
   const items = run.total_items || 0;
   const isAreaOnboarding = run.workflow_id === 'wf-area-onboarding';
+  const hhahName = run.hhah_name || run.input_summary?.hhahName || run.input_summary?.area?.hhahName || '';
 
   const statusTone = run.status === 'completed'
     ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
@@ -117,6 +118,9 @@ function RunCard({ run, onDelete, areas, loadingAreaId, onRunCheck }) {
         </button>
         <div className="ml-auto flex items-center gap-2">
           <span className={`rounded-full border px-2.5 py-1 text-[11px] font-bold ${statusTone}`}>{run.status}</span>
+          {hhahName && (
+            <span className="rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-[11px] font-semibold text-sky-700">HHAH: {hhahName}</span>
+          )}
           <span className="rounded-full border border-slate-200 px-2.5 py-1 text-[11px] font-semibold text-slate-600">{items} item(s)</span>
           <span className="rounded-full border border-slate-200 px-2.5 py-1 text-[11px] font-semibold text-slate-600">{totalRan} task run(s)</span>
           {totalManual > 0 && (
@@ -402,7 +406,7 @@ export default function Orchestrator() {
                 <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[11px] font-black uppercase tracking-wide text-amber-700">
                   Trigger 4 · Make Patients Billable
                 </span>
-                <span className="text-[11px] text-slate-400">runs independently every 10 seconds</span>
+                <span className="text-[11px] text-slate-400">runs HHAH by HHAH every 10 seconds</span>
               </div>
               <div className="space-y-4">
                 {billingRuns.filter(filterRun).map((run) => (

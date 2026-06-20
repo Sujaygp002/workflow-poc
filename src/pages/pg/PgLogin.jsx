@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Building2, CheckCircle2, ClipboardSignature, ExternalLink, LayoutDashboard, Loader2, Lock, RefreshCw, UserRound } from 'lucide-react';
 import { formatUiDate } from '../../lib/dateFormat';
 import { bulkSignPgOrders, fetchPgUnsignedOrders, fetchReferenceData } from '../../lib/workflowApi';
@@ -7,16 +7,56 @@ function todayYmd() {
   return new Date().toISOString().slice(0, 10);
 }
 
+const PG_SCOPE_KEY = 'pg_selected_pg';
+
+function readSelectedPg() {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(PG_SCOPE_KEY) || 'null');
+    return parsed?.id && parsed?.name ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function LoginPanel({ onLogin }) {
   const [username, setUsername] = useState('test123');
   const [password, setPassword] = useState('test123');
+  const [physicianGroups, setPhysicianGroups] = useState([]);
+  const [selectedPgId, setSelectedPgId] = useState(() => readSelectedPg()?.id || '');
+  const [loadingPgs, setLoadingPgs] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadPhysicianGroups() {
+      setLoadingPgs(true);
+      try {
+        const data = await fetchReferenceData();
+        if (cancelled) return;
+        const groups = data.physicianGroups || [];
+        setPhysicianGroups(groups);
+        setSelectedPgId((current) => current || groups[0]?.id || '');
+        setError('');
+      } catch (err) {
+        if (!cancelled) setError(err.message);
+      } finally {
+        if (!cancelled) setLoadingPgs(false);
+      }
+    }
+    loadPhysicianGroups();
+    return () => { cancelled = true; };
+  }, []);
 
   function submit(event) {
     event.preventDefault();
+    const selected = physicianGroups.find((pg) => pg.id === selectedPgId);
+    if (!selected) {
+      setError('Select a physician group.');
+      return;
+    }
     if (username === 'test123' && password === 'test123') {
       setError('');
-      onLogin();
+      onLogin({ id: selected.id, name: selected.name });
       return;
     }
     setError('Invalid username or password.');
@@ -25,13 +65,33 @@ function LoginPanel({ onLogin }) {
   return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center px-4">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_25%_25%,rgba(14,165,233,0.2),transparent_30%),radial-gradient(circle_at_75%_15%,rgba(16,185,129,0.18),transparent_28%),linear-gradient(135deg,#020617,#0f172a_52%,#111827)]" />
-      <form onSubmit={submit} className="relative w-full max-w-sm rounded-2xl border border-white/10 bg-white/95 p-6 shadow-2xl">
+      <form onSubmit={submit} className="relative w-full max-w-md rounded-2xl border border-white/10 bg-white/95 p-6 shadow-2xl">
         <div className="w-12 h-12 rounded-2xl bg-emerald-600 flex items-center justify-center text-white mb-4">
           <Building2 size={24} />
         </div>
         <h1 className="text-2xl font-bold text-slate-900">PG Login</h1>
         <p className="text-sm text-slate-500 mt-1">Sign physician orders and review PG work.</p>
         <div className="mt-6 space-y-3">
+          <div>
+            <span className="text-xs font-semibold text-slate-500 uppercase">Physician Group</span>
+            <div className="mt-1 max-h-36 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-2">
+              {loadingPgs ? (
+                <div className="px-2 py-3 text-sm text-slate-400">Loading physician groups...</div>
+              ) : physicianGroups.length === 0 ? (
+                <div className="px-2 py-3 text-sm text-slate-400">No physician groups found.</div>
+              ) : physicianGroups.map((pg) => (
+                <button
+                  key={pg.id}
+                  type="button"
+                  onClick={() => setSelectedPgId(pg.id)}
+                  className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left text-sm transition-colors ${selectedPgId === pg.id ? 'border-emerald-300 bg-white text-emerald-800 shadow-sm' : 'border-transparent bg-transparent text-slate-600 hover:bg-white'}`}
+                >
+                  <span className="font-semibold">{pg.name}</span>
+                  {selectedPgId === pg.id && <CheckCircle2 size={15} />}
+                </button>
+              ))}
+            </div>
+          </div>
           <label className="block">
             <span className="text-xs font-semibold text-slate-500 uppercase">Username</span>
             <div className="mt-1 flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
@@ -68,9 +128,8 @@ function Dashboard() {
   );
 }
 
-function BulkSign() {
-  const [physicianGroups, setPhysicianGroups] = useState([]);
-  const [pgId, setPgId] = useState('');
+function BulkSign({ selectedPg }) {
+  const pgId = selectedPg?.id || '';
   const [orders, setOrders] = useState([]);
   const [selected, setSelected] = useState(() => new Set());
   const [loading, setLoading] = useState(false);
@@ -96,27 +155,8 @@ function BulkSign() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    async function loadReferenceData() {
-      try {
-        const data = await fetchReferenceData();
-        if (cancelled) return;
-        const groups = data.physicianGroups || [];
-        setPhysicianGroups(groups);
-        const defaultPg = groups.find((pg) => pg.name === 'Lakeside Family Practice') || groups[0] || null;
-        if (defaultPg) {
-          setPgId(defaultPg.id);
-          await refresh(defaultPg.id);
-        } else {
-          await refresh('');
-        }
-      } catch (err) {
-        if (!cancelled) setError(err.message);
-      }
-    }
-    loadReferenceData();
-    return () => { cancelled = true; };
-  }, [refresh]);
+    if (pgId) refresh(pgId);
+  }, [pgId, refresh]);
 
   function toggleOrder(orderId) {
     setSelected((current) => {
@@ -150,10 +190,7 @@ function BulkSign() {
     }
   }
 
-  const selectedPgName = useMemo(
-    () => physicianGroups.find((pg) => pg.id === pgId)?.name || 'All physician groups',
-    [physicianGroups, pgId],
-  );
+  const selectedPgName = selectedPg?.name || 'Selected physician group';
 
   return (
     <section className="space-y-4">
@@ -164,20 +201,12 @@ function BulkSign() {
             <p className="mt-1 text-sm text-slate-500">Orders sent to physician and waiting for signature.</p>
           </div>
           <div className="flex flex-wrap items-end gap-2">
-            <label className="block">
+            <div className="block">
               <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Physician group</span>
-              <select
-                value={pgId}
-                onChange={(event) => {
-                  setPgId(event.target.value);
-                  refresh(event.target.value);
-                }}
-                className="mt-1 min-w-[240px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-              >
-                <option value="">All physician groups</option>
-                {physicianGroups.map((pg) => <option key={pg.id} value={pg.id}>{pg.name}</option>)}
-              </select>
-            </label>
+              <div className="mt-1 min-w-[240px] rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+                {selectedPgName}
+              </div>
+            </div>
             <button onClick={() => refresh(pgId)} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">
               <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> Refresh
             </button>
@@ -245,11 +274,14 @@ function BulkSign() {
 }
 
 export default function PgLogin() {
-  const [loggedIn, setLoggedIn] = useState(() => sessionStorage.getItem('pg_logged_in') === 'true');
+  const [selectedPg, setSelectedPg] = useState(() => readSelectedPg());
+  const [loggedIn, setLoggedIn] = useState(() => sessionStorage.getItem('pg_logged_in') === 'true' && !!readSelectedPg());
   const [tab, setTab] = useState('dashboard');
 
-  function login() {
+  function login(pg) {
+    sessionStorage.setItem(PG_SCOPE_KEY, JSON.stringify(pg));
     sessionStorage.setItem('pg_logged_in', 'true');
+    setSelectedPg(pg);
     setLoggedIn(true);
   }
 
@@ -265,12 +297,14 @@ export default function PgLogin() {
             </div>
             <div>
               <h1 className="font-bold text-slate-900">PG Portal</h1>
-              <p className="text-xs text-slate-500">Physician signing bucket</p>
+              <p className="text-xs text-slate-500">{selectedPg?.name || 'Practice'} · Physician signing bucket</p>
             </div>
           </div>
           <button
             onClick={() => {
               sessionStorage.removeItem('pg_logged_in');
+              sessionStorage.removeItem(PG_SCOPE_KEY);
+              setSelectedPg(null);
               setLoggedIn(false);
             }}
             className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
@@ -288,7 +322,7 @@ export default function PgLogin() {
             <ClipboardSignature size={15} /> Bulk Sign
           </button>
         </div>
-        {tab === 'dashboard' ? <Dashboard /> : <BulkSign />}
+        {tab === 'dashboard' ? <Dashboard /> : <BulkSign selectedPg={selectedPg} />}
       </main>
     </div>
   );

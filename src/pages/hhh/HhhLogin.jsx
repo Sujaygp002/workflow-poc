@@ -1,12 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, BellRing, Building2, CheckCircle2, ExternalLink, FileArchive, FileSpreadsheet, FileText, GitBranch, Loader2, Lock, RefreshCw, Upload, UserRound } from 'lucide-react';
 import PatientHierarchyView from '../../components/PatientHierarchyView';
 import { formatUiDate, formatUiDateTime } from '../../lib/dateFormat';
-import { fetchAreaIntakeStatus, fetchOrders, fetchPatientTree, fetchPatients, startBulkUploadRun } from '../../lib/workflowApi';
+import { fetchAreaIntakeStatus, fetchOrders, fetchPatientTree, fetchPatients, fetchReferenceData, startBulkUploadRun } from '../../lib/workflowApi';
 
-const DEFAULT_AREA_NAME = 'Boise-Ada Metro Intake';
-const DEFAULT_AREA_TYPE = 'metro_statistical_area';
-const DEFAULT_HHAH_NAME = 'Boise Home Health';
+const HHH_SCOPE_KEY = 'hhh_selected_hhah';
+
+function readSelectedHhah() {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(HHH_SCOPE_KEY) || 'null');
+    return parsed?.id && parsed?.name ? parsed : null;
+  } catch {
+    return null;
+  }
+}
 
 // Computed status: eligible = has 485 + active F2F. Billable = all orders signed.
 // Patient status is the latest episode status.
@@ -84,13 +91,42 @@ function LoginPanel({ onLogin }) {
   // Demo POC: credentials are preloaded so the user can just click Login.
   const [username, setUsername] = useState('test123');
   const [password, setPassword] = useState('test123');
+  const [hhahs, setHhahs] = useState([]);
+  const [selectedHhahId, setSelectedHhahId] = useState(() => readSelectedHhah()?.id || '');
+  const [loadingHhahs, setLoadingHhahs] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadHhahs() {
+      setLoadingHhahs(true);
+      try {
+        const data = await fetchReferenceData();
+        if (cancelled) return;
+        const nextHhahs = data.hhahs || [];
+        setHhahs(nextHhahs);
+        setSelectedHhahId((current) => current || nextHhahs[0]?.id || '');
+        setError('');
+      } catch (err) {
+        if (!cancelled) setError(err.message);
+      } finally {
+        if (!cancelled) setLoadingHhahs(false);
+      }
+    }
+    loadHhahs();
+    return () => { cancelled = true; };
+  }, []);
 
   function submit(event) {
     event.preventDefault();
+    const selected = hhahs.find((hhah) => hhah.id === selectedHhahId);
+    if (!selected) {
+      setError('Select a Home Health agency.');
+      return;
+    }
     if (username === 'test123' && password === 'test123') {
       setError('');
-      onLogin();
+      onLogin({ id: selected.id, name: selected.name });
       return;
     }
     setError('Invalid username or password.');
@@ -99,13 +135,33 @@ function LoginPanel({ onLogin }) {
   return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center px-4">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(14,165,233,0.24),transparent_32%),radial-gradient(circle_at_80%_10%,rgba(16,185,129,0.2),transparent_30%),linear-gradient(135deg,#020617,#0f172a_48%,#111827)]" />
-      <form onSubmit={submit} className="relative w-full max-w-sm rounded-2xl border border-white/10 bg-white/95 p-6 shadow-2xl">
+      <form onSubmit={submit} className="relative w-full max-w-md rounded-2xl border border-white/10 bg-white/95 p-6 shadow-2xl">
         <div className="w-12 h-12 rounded-2xl bg-sky-600 flex items-center justify-center text-white mb-4">
           <Building2 size={24} />
         </div>
         <h1 className="text-2xl font-bold text-slate-900">HHH Login</h1>
         <p className="text-sm text-slate-500 mt-1">Sign in to upload patient and order batches.</p>
         <div className="mt-6 space-y-3">
+          <div>
+            <span className="text-xs font-semibold text-slate-500 uppercase">Home Health</span>
+            <div className="mt-1 max-h-36 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-2">
+              {loadingHhahs ? (
+                <div className="px-2 py-3 text-sm text-slate-400">Loading Home Health agencies...</div>
+              ) : hhahs.length === 0 ? (
+                <div className="px-2 py-3 text-sm text-slate-400">No Home Health agencies found.</div>
+              ) : hhahs.map((hhah) => (
+                <button
+                  key={hhah.id}
+                  type="button"
+                  onClick={() => setSelectedHhahId(hhah.id)}
+                  className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left text-sm transition-colors ${selectedHhahId === hhah.id ? 'border-sky-300 bg-white text-sky-800 shadow-sm' : 'border-transparent bg-transparent text-slate-600 hover:bg-white'}`}
+                >
+                  <span className="font-semibold">{hhah.name}</span>
+                  {selectedHhahId === hhah.id && <CheckCircle2 size={15} />}
+                </button>
+              ))}
+            </div>
+          </div>
           <label className="block">
             <span className="text-xs font-semibold text-slate-500 uppercase">Username</span>
             <div className="mt-1 flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
@@ -164,7 +220,9 @@ function NotificationBanner({ notifications }) {
 }
 
 export default function HhhLogin() {
-  const [loggedIn, setLoggedIn] = useState(() => sessionStorage.getItem('hhh_logged_in') === 'true');
+  const [selectedHhah, setSelectedHhah] = useState(() => readSelectedHhah());
+  const [loggedIn, setLoggedIn] = useState(() => sessionStorage.getItem('hhh_logged_in') === 'true' && !!readSelectedHhah());
+  const [areaContext, setAreaContext] = useState(null);
   const [workbook, setWorkbook] = useState(null);
   const [unsignedZip, setUnsignedZip] = useState(null);
   const [signedZip, setSignedZip] = useState(null);
@@ -180,20 +238,25 @@ export default function HhhLogin() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
-  async function refreshPatients() {
+  const refreshPatients = useCallback(async () => {
+    if (!selectedHhah?.id) return;
     setLoadingPatients(true);
     try {
       const [nextPatients, nextOrders, areas] = await Promise.all([
-        fetchPatients(),
-        fetchOrders(),
+        fetchPatients({ hhahId: selectedHhah.id }),
+        fetchOrders({ hhahId: selectedHhah.id }),
         fetchAreaIntakeStatus().catch(() => []),
       ]);
       setPatients(nextPatients);
       setOrders(nextOrders);
+      const selectedArea = (areas || []).find((area) => (
+        (area.hhahs || []).some((hhah) => hhah.hhah_id === selectedHhah.id)
+      ));
+      setAreaContext(selectedArea ? { id: selectedArea.id, name: selectedArea.name } : null);
       // Surface notifications addressed to this HHAH login.
       const mine = (areas || [])
         .flatMap((area) => area.notifications || [])
-        .filter((n) => !n.hhah_name || n.hhah_name === DEFAULT_HHAH_NAME);
+        .filter((n) => n.hhah_id === selectedHhah.id || n.hhah_name === selectedHhah.name);
       setNotifications(mine);
       setError('');
     } catch (err) {
@@ -201,11 +264,11 @@ export default function HhhLogin() {
     } finally {
       setLoadingPatients(false);
     }
-  }
+  }, [selectedHhah]);
 
   useEffect(() => {
     if (loggedIn) refreshPatients();
-  }, [loggedIn]);
+  }, [loggedIn, refreshPatients]);
 
   // Demo POC: preload the sample-4 artifacts into the upload form so the user can
   // just click Start Upload. Served from /public/sample-4-artifacts.
@@ -265,9 +328,9 @@ export default function HhhLogin() {
         unsignedZip,
         signedZip,
         sourceLabel: workbook.name,
-        areaName: DEFAULT_AREA_NAME,
-        areaType: DEFAULT_AREA_TYPE,
-        hhahName: DEFAULT_HHAH_NAME,
+        areaId: areaContext?.id,
+        hhahId: selectedHhah?.id,
+        hhahName: selectedHhah?.name,
       });
       setMessage(`Upload started. Joined rows: ${result.inputSummary?.joinedRows ?? 0}.`);
       await refreshPatients();
@@ -278,8 +341,10 @@ export default function HhhLogin() {
     }
   }
 
-  function login() {
+  function login(hhah) {
+    sessionStorage.setItem(HHH_SCOPE_KEY, JSON.stringify(hhah));
     sessionStorage.setItem('hhh_logged_in', 'true');
+    setSelectedHhah(hhah);
     setLoggedIn(true);
   }
 
@@ -301,12 +366,14 @@ export default function HhhLogin() {
             </div>
             <div>
               <h1 className="font-bold text-slate-900">HHH Intake</h1>
-              <p className="text-xs text-slate-500">Bulk upload and patient review</p>
+              <p className="text-xs text-slate-500">{selectedHhah?.name || 'Home Health'} · Bulk upload and patient review</p>
             </div>
           </div>
           <button
             onClick={() => {
               sessionStorage.removeItem('hhh_logged_in');
+              sessionStorage.removeItem(HHH_SCOPE_KEY);
+              setSelectedHhah(null);
               setLoggedIn(false);
             }}
             className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"

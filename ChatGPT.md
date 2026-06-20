@@ -61,10 +61,12 @@
   - Username: `test123`
   - Password: `test123`
 - After login, the HHH portal shows:
+  - DB-backed Home Health agency selection from existing HHAH reference records.
   - Bulk upload form for one `.xlsx` workbook.
   - Unsigned and signed ZIP upload fields for order PDFs.
   - Patient browsing section.
   - Patient flow chart: patient -> admissions -> episodes -> orders.
+  - Patients, orders, upload scope, and missing-upload notifications filtered to the selected HHAH.
 
 ## PG Portal
 
@@ -74,7 +76,8 @@
   - Password: `test123`
 - Screens:
   - Dashboard: placeholder / coming soon.
-  - Bulk Sign: lists orders sent to physician and not yet signed.
+  - DB-backed physician group selection from existing PG reference records.
+  - Bulk Sign: lists orders sent to physician and not yet signed for the selected PG.
 - Bulk Sign writes only:
   - `order_status.SignedByPhyscianDate = YYYY-MM-DD`
   - `order_status.SignedByPhysician_Status = true`
@@ -92,12 +95,14 @@
   - PDF filename without `.pdf` must match `order_number` from the order sheet.
   - Example: order number `ORD-1001` should use `ORD-1001.pdf`.
 - Matched PDF metadata is stored on each workflow item as `extraction_payload.pdf`. New orders require both required order fields and a matched PDF before `order.create`; otherwise the row routes to `human.fixOrderFields`.
-- HHH portal uploads are currently scoped to `Boise-Ada Metro Intake` / `Boise Home Health` so the area monitor can show received vs missing uploads.
+- HHH portal and Trigger 2 uploads use the selected DB-backed HHAH. When that HHAH is linked to an area, the upload sends the DB `areaId` as scope so the area monitor can show received vs missing uploads.
 
 ## New API Routes
 
 - `GET /api/orders`
   - Returns uploaded/created orders with patient, HHAH, PG, and practitioner links.
+- `GET /api/orders?hhahId=<id>`
+  - Returns uploaded/created orders scoped to one HHAH.
 - `GET /api/orders?pgUnsigned=1&pgId=<id>`
   - Returns PG orders that were sent to physician and are not signed.
 - `POST /api/orders` with `{ "action": "bulkSign" }`
@@ -125,6 +130,8 @@
   - Completes a human task and resumes workflow automation.
 - `GET /api/patients`
   - Returns patients with admission/episode/order counts.
+- `GET /api/patients?hhahId=<id>`
+  - Returns patient records scoped to one HHAH.
 - `GET /api/patients?view=units`
   - Returns Patient Unit summaries for the Admin Patients hierarchy page.
 - `GET /api/patients/:id`
@@ -165,6 +172,7 @@
 - wf7 now treats Admission and Episode as explicit objects through the date-check branches: `admission.resolve` writes/reuses Admission after SOC is ready, and `episode.resolve` writes/reuses Episode after SOE/EOE are ready.
 - `wf-signing` starts after a written order has an uploaded document. It checks signing readiness, routes document fixes to a human when needed, sends to physician, immediately checks whether the physician signed, then either updates signed status automatically or creates a manual `Email Physician — Signature Overdue` task. There is no 48-hour wait in Trigger 3.
 - `wf-billing-monitor` displays as one mega task: `Make Patients Billable`.
+  - Trigger 4 groups new billing-monitor tasks HHAH by HHAH: one run per HHAH with patient/episode/CPO issues as items inside that run.
   - System: Check If Patient Is Eligible.
   - If not eligible: manual `Email HHAH — Missing Document` task using SMTP.
   - If eligible: system Check If Patient Is Billable.
@@ -190,3 +198,7 @@
   - Migration history was later collapsed into fresh `001_core_intake.sql`; use `npm run db:reset` only when a clean destructive reset is intended, then `npm run db:seed`.
   - Area monitor DB smoke tests passed for all-upload, one-missing, and late-upload-after-notification scenarios.
   - A full 10-patient/30-order DB smoke test was started but stopped because the current per-task Neon round trips were taking too long; temporary rows were cleaned up.
+- Verification notes from 2026-06-20:
+  - `npm run lint` passed.
+  - `npm run build` passed.
+  - Scoped portal/API paths no longer contain hardcoded `Boise Home Health` or `Lakeside Family Practice` behavior.

@@ -4,6 +4,7 @@ import {
   createTaskRunsForItem,
   createWorkflowItem,
   createWorkflowRun,
+  findWorkflowItemByIssueSignature,
   findWorkflowRunBySourceLabel,
   getActiveWorkflow,
   listTaskRunsForRun,
@@ -28,50 +29,104 @@ function stepById(definition, stepId) {
   return (definition.steps || []).find((step) => step.id === stepId);
 }
 
-async function createIssueTask({ workflow, sourceLabel, stepId, itemIndex, patientPayload = {}, orderPayload = {}, referencePayload = {}, extractionPayload = {} }) {
-  const existing = await findWorkflowRunBySourceLabel(workflow.id, sourceLabel);
-  if (existing) return { created: false, existingRunId: existing.id };
-
+function runnableStep(workflow, stepId) {
   const step = stepById(workflow.definition, stepId);
   if (!step) throw new Error(`Billing monitor step ${stepId} not found`);
-  const runnableStep = { ...step, preReq: [], condition: null };
+  return { ...step, preReq: [], condition: null };
+}
 
+function hhahGroupKey(hhah = {}) {
+  return hhah.id || hhah.name || 'unknown-hhah';
+}
+
+function groupIssue(groups, issue) {
+  const key = hhahGroupKey(issue.hhah);
+  if (!groups.has(key)) {
+    groups.set(key, {
+      hhah: issue.hhah || {},
+      issues: [],
+    });
+  }
+  groups.get(key).issues.push(issue);
+}
+
+async function findExistingBillingIssue(workflow, issueSignature, legacySourceLabel) {
+  const existingItem = await findWorkflowItemByIssueSignature(workflow.id, issueSignature);
+  if (existingItem) return { run_id: existingItem.run_id };
+  const existingRun = legacySourceLabel
+    ? await findWorkflowRunBySourceLabel(workflow.id, legacySourceLabel)
+    : null;
+  return existingRun ? { run_id: existingRun.id } : null;
+}
+
+async function createHhahIssueRun({ workflow, group }) {
+  const sourceKey = String(hhahGroupKey(group.hhah)).replace(/[^a-zA-Z0-9_-]/g, '-');
   const run = await createWorkflowRun({
     workflowId: workflow.id,
     workflowVersion: workflow.version,
-    sourceLabel,
-    totalItems: 1,
-    inputSummary: { trigger: 'billing-monitor', stepId },
+    sourceLabel: `billing-monitor:hhah:${sourceKey}:${new Date().toISOString()}`,
+    totalItems: group.issues.length,
+    inputSummary: {
+      trigger: 'billing-monitor',
+      groupedBy: 'hhah',
+      hhahId: group.hhah?.id || null,
+      hhahName: group.hhah?.name || 'Unknown HHAH',
+      issueCount: group.issues.length,
+      issueTypes: [...new Set(group.issues.map((issue) => issue.issueType))],
+    },
+    hhahId: group.hhah?.id || null,
   });
-  const item = await createWorkflowItem({
+
+  const stepsById = new Map();
+  const itemIds = [];
+  for (let itemIndex = 0; itemIndex < group.issues.length; itemIndex += 1) {
+    const issue = group.issues[itemIndex];
+    const step = runnableStep(workflow, issue.stepId);
+    stepsById.set(step.id, step);
+    const item = await createWorkflowItem({
+      runId: run.id,
+      itemIndex,
+      patientPayload: issue.patientPayload || {},
+      orderPayload: issue.orderPayload || {},
+      referencePayload: issue.referencePayload || {},
+      extractionPayload: issue.extractionPayload || {},
+    });
+    itemIds.push(item.id);
+    await createTaskRunsForItem({ runId: run.id, itemId: item.id, steps: [step] });
+  }
+
+  await runWorkflowAutomation({
     runId: run.id,
-    itemIndex,
-    patientPayload,
-    orderPayload,
-    referencePayload,
-    extractionPayload,
+    definition: { ...workflow.definition, steps: [...stepsById.values()] },
+    concurrency: Math.max(1, group.issues.length),
   });
-  await createTaskRunsForItem({ runId: run.id, itemId: item.id, steps: [runnableStep] });
-  await runWorkflowAutomation({ runId: run.id, definition: { ...workflow.definition, steps: [runnableStep] }, concurrency: 1 });
-  return { created: true, runId: run.id, itemId: item.id };
+  return { created: true, runId: run.id, itemIds, hhahId: group.hhah?.id || null, hhahName: group.hhah?.name || null };
 }
 
 async function runBillingMonitorHandler() {
   const workflow = await ensureBillingWorkflow();
   const result = await runBillingMonitorPass();
-  let itemIndex = 0;
   const tasks = [];
+  const groups = new Map();
 
   for (const issue of result.issues.missingDocuments) {
-    tasks.push(await createIssueTask({
-      workflow,
-      sourceLabel: `billing-monitor:missing-docs:${issue.episode.id}`,
+    const issueSignature = `missing-docs:${issue.episode.id}`;
+    const existing = await findExistingBillingIssue(workflow, issueSignature, `billing-monitor:missing-docs:${issue.episode.id}`);
+    if (existing) {
+      tasks.push({ created: false, existingRunId: existing.run_id, issueSignature });
+      continue;
+    }
+    groupIssue(groups, {
+      issueType: 'missing-docs',
+      issueSignature,
+      hhah: issue.hhah || {},
       stepId: 'billing-s2',
-      itemIndex,
       referencePayload: {
         HHAH: issue.hhah || {},
       },
       extractionPayload: {
+        issueType: 'missing-docs',
+        issueSignature,
         episodeId: issue.episode.id,
         admissionId: issue.episode.admission_id,
         eligible: false,
@@ -80,17 +135,25 @@ async function runBillingMonitorHandler() {
       },
       patientPayload: {},
       orderPayload: {},
-    }));
-    itemIndex += 1;
+    });
   }
 
   for (const issue of result.issues.physicianReminders) {
+    const issueSignature = `signature:${issue.episode.id}`;
+    const existing = await findExistingBillingIssue(workflow, issueSignature, `billing-monitor:signature:${issue.episode.id}`);
+    if (existing) {
+      tasks.push({ created: false, existingRunId: existing.run_id, issueSignature });
+      continue;
+    }
     const firstOrder = issue.orders[0] || {};
-    tasks.push(await createIssueTask({
-      workflow,
-      sourceLabel: `billing-monitor:signature:${issue.episode.id}`,
+    groupIssue(groups, {
+      issueType: 'signature',
+      issueSignature,
+      hhah: issue.hhah || {},
       stepId: 'billing-s5',
-      itemIndex,
+      referencePayload: {
+        HHAH: issue.hhah || {},
+      },
       orderPayload: {
         order_info: {
           order_number: firstOrder.order_number || '',
@@ -100,23 +163,35 @@ async function runBillingMonitorHandler() {
         order_status: firstOrder.order_status || {},
       },
       extractionPayload: {
+        issueType: 'signature',
+        issueSignature,
         episodeId: issue.episode.id,
         admissionId: issue.episode.admission_id,
         eligible: true,
         billable: false,
         unsignedOrderNumbers: issue.unsignedOrderNumbers,
       },
-    }));
-    itemIndex += 1;
+    });
   }
 
   for (const issue of result.issues.cpoMinutes) {
-    tasks.push(await createIssueTask({
-      workflow,
-      sourceLabel: `billing-monitor:cpo:${issue.cpoMonth.id}`,
+    const issueSignature = `cpo:${issue.cpoMonth.id}`;
+    const existing = await findExistingBillingIssue(workflow, issueSignature, `billing-monitor:cpo:${issue.cpoMonth.id}`);
+    if (existing) {
+      tasks.push({ created: false, existingRunId: existing.run_id, issueSignature });
+      continue;
+    }
+    groupIssue(groups, {
+      issueType: 'cpo',
+      issueSignature,
+      hhah: issue.hhah || {},
       stepId: 'billing-s7',
-      itemIndex,
+      referencePayload: {
+        HHAH: issue.hhah || {},
+      },
       extractionPayload: {
+        issueType: 'cpo',
+        issueSignature,
         episodeId: issue.episode.id,
         cpoMonthId: issue.cpoMonth.id,
         cpoMonth: issue.cpoMonth.cpo_month,
@@ -125,8 +200,11 @@ async function runBillingMonitorHandler() {
         billable: true,
         cpoMonthBillable: false,
       },
-    }));
-    itemIndex += 1;
+    });
+  }
+
+  for (const group of groups.values()) {
+    tasks.push(await createHhahIssueRun({ workflow, group }));
   }
 
   return {

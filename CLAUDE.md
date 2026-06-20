@@ -66,6 +66,28 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-20** — DB-scoped HHAH/PG portal selection + HHAH-grouped billing monitor.
+  HHAH and PG login pages now load selectable agencies/practices from `/api/reference-data`
+  and store the selected scope in `sessionStorage`; HHAH upload, notification, patient, and
+  order views use the selected HHAH id, and PG Bulk Sign is scoped to the selected PG id.
+  `/api/patients` and `/api/orders` accept optional `hhahId` filters for portal-scoped reads.
+  Trigger 2's standalone upload form also selects an HHAH from DB and derives area scope from
+  `/api/area-intake`. Trigger 4 now groups new billing issues into one `wf-billing-monitor`
+  run per HHAH, with issue-signature duplicate checks plus compatibility with old per-issue
+  source labels. Orchestrator labels Trigger 4 as HHAH-by-HHAH and shows an HHAH badge on runs.
+  `ChatGPT.md` updated to match the new scoped behavior. lint + build pass.
+
+- **2026-06-20** — Live DB reset to only the Coverage-Map demo network. Ran `npm run db:reset`
+  (full schema drop + re-apply of 001/002) to clear all prior data — Boise/Sunrise/Treasure
+  Valley HHAHs, Maya Thompson + sample patients, Mountain View/Lakeside PGs, the statistical
+  area, and all workflow runs — then re-ran `scripts/seed-map-demo.js`. DB now holds only
+  HHAH1/HHAH2, PG1/PG2, Practitioner1–5, 10 patients, 30 orders. **Note:** the wipe also drops
+  `workflow_definitions`, which the map seed does NOT restore, so the Workflow/Orchestrator/
+  Triggers screens showed "No DB workflow definition available". Restored just the 4 definitions
+  + 3 users by upserting `WORKFLOW_DEFINITIONS`/`SEEDED_USERS` via `upsertWorkflowDefinition`/
+  `upsertUser` (no old patient/run data re-added). Workflow runs are NOT restored (Orchestrator
+  shows no runs by design); run `npm run db:seed` if the full Boise sample + runs are wanted back.
+
 - **2026-06-20** — Coverage Map: restyled to the light FlowPOC theme + added demo data.
   `NetworkMap.jsx` chrome now matches the rest of the app (white top bar, violet logo tile,
   slate text/borders, white search/zoom/legend on a `bg-slate-50` canvas); graph balls keep

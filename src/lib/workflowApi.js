@@ -75,8 +75,9 @@ export async function fetchWorkflowDefinitions() {
   return body.workflows || [];
 }
 
-export async function fetchPatients() {
-  const res = await fetch('/api/patients');
+export async function fetchPatients({ hhahId = '' } = {}) {
+  const qs = hhahId ? `?hhahId=${encodeURIComponent(hhahId)}` : '';
+  const res = await fetch(`/api/patients${qs}`);
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || 'Unable to load patients');
   return body.patients || [];
@@ -89,8 +90,9 @@ export async function fetchPatientUnits() {
   return body.units || [];
 }
 
-export async function fetchOrders() {
-  const res = await fetch('/api/orders');
+export async function fetchOrders({ hhahId = '' } = {}) {
+  const qs = hhahId ? `?hhahId=${encodeURIComponent(hhahId)}` : '';
+  const res = await fetch(`/api/orders${qs}`);
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || 'Unable to load orders');
   return body.orders || [];

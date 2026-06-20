@@ -1,10 +1,6 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AlertCircle, CheckCircle2, Clock, FileArchive, FileSpreadsheet, Mail, Play, RefreshCw, Upload, Zap } from 'lucide-react';
-import { startBulkUploadRun } from '../../lib/workflowApi';
-
-const DEFAULT_AREA_NAME = 'Boise-Ada Metro Intake';
-const DEFAULT_AREA_TYPE = 'metro_statistical_area';
-const DEFAULT_HHAH_NAME = 'Boise Home Health';
+import { fetchAreaIntakeStatus, fetchReferenceData, startBulkUploadRun } from '../../lib/workflowApi';
 
 const TRIGGERS = [
   {
@@ -58,14 +54,52 @@ export default function Triggers() {
   const [workbook, setWorkbook] = useState(null);
   const [unsignedZip, setUnsignedZip] = useState(null);
   const [signedZip, setSignedZip] = useState(null);
+  const [hhahs, setHhahs] = useState([]);
+  const [selectedHhahId, setSelectedHhahId] = useState('');
+  const [areaContext, setAreaContext] = useState(null);
+  const [loadingScope, setLoadingScope] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadScope() {
+      setLoadingScope(true);
+      try {
+        const [reference, areas] = await Promise.all([
+          fetchReferenceData(),
+          fetchAreaIntakeStatus().catch(() => []),
+        ]);
+        if (cancelled) return;
+        const nextHhahs = reference.hhahs || [];
+        const nextSelectedId = selectedHhahId || nextHhahs[0]?.id || '';
+        setHhahs(nextHhahs);
+        setSelectedHhahId(nextSelectedId);
+        const selectedArea = (areas || []).find((area) => (
+          (area.hhahs || []).some((hhah) => hhah.hhah_id === nextSelectedId)
+        ));
+        setAreaContext(selectedArea ? { id: selectedArea.id, name: selectedArea.name } : null);
+        setError('');
+      } catch (err) {
+        if (!cancelled) setError(err.message);
+      } finally {
+        if (!cancelled) setLoadingScope(false);
+      }
+    }
+    loadScope();
+    return () => { cancelled = true; };
+  }, [selectedHhahId]);
 
   async function fireTrigger(event) {
     event.preventDefault();
     if (!workbook) {
       setError('Select an Excel workbook first.');
+      return;
+    }
+    const selectedHhah = hhahs.find((hhah) => hhah.id === selectedHhahId);
+    if (!selectedHhah) {
+      setError('Select a Home Health agency first.');
       return;
     }
     setUploading(true);
@@ -77,9 +111,9 @@ export default function Triggers() {
         unsignedZip,
         signedZip,
         sourceLabel: workbook.name,
-        areaName: DEFAULT_AREA_NAME,
-        areaType: DEFAULT_AREA_TYPE,
-        hhahName: DEFAULT_HHAH_NAME,
+        areaId: areaContext?.id,
+        hhahId: selectedHhah.id,
+        hhahName: selectedHhah.name,
       });
       setMessage(`Trigger fired. ${result.inputSummary?.joinedRows ?? 0} patient/order row(s) entered wf7.`);
     } catch (err) {
@@ -114,7 +148,7 @@ export default function Triggers() {
             </div>
             <p className="text-sm text-slate-500 mt-1">Upload one Excel workbook plus unsigned/signed order PDF ZIPs. The workflow creates patient, admission, episode, and order records, then routes ready documents to physician signing.</p>
             <p className="mt-2 text-xs font-semibold text-slate-500">
-              Scope: {DEFAULT_AREA_NAME} · {DEFAULT_HHAH_NAME}
+              Scope: {areaContext?.name || 'No area linked'} · {hhahs.find((hhah) => hhah.id === selectedHhahId)?.name || 'Select HHAH'}
             </p>
           </div>
           <div className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">
@@ -122,7 +156,18 @@ export default function Triggers() {
           </div>
         </div>
 
-        <form onSubmit={fireTrigger} className="mt-5 grid lg:grid-cols-[1fr_1fr_1fr_auto] gap-3 items-end">
+        <form onSubmit={fireTrigger} className="mt-5 grid lg:grid-cols-[1fr_1fr_1fr_1fr_auto] gap-3 items-end">
+          <label className="block">
+            <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Home Health</span>
+            <select
+              value={selectedHhahId}
+              onChange={(event) => setSelectedHhahId(event.target.value)}
+              className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+            >
+              <option value="">{loadingScope ? 'Loading HHAHs...' : 'Select HHAH'}</option>
+              {hhahs.map((hhah) => <option key={hhah.id} value={hhah.id}>{hhah.name}</option>)}
+            </select>
+          </label>
           <label className="block">
             <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Patient + order Excel</span>
             <button

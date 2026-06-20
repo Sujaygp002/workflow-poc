@@ -6,7 +6,7 @@ export default async function handler(req, res) {
     if (req.method === 'GET') {
       const orders = req.query.pgUnsigned === '1'
         ? await listPgUnsignedOrders(req.query.pgId || null)
-        : await listOrders();
+        : await listOrders({ hhahId: req.query.hhahId || null });
       return sendJson(res, 200, { orders });
     }
 

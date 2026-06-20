@@ -155,6 +155,21 @@ export async function findWorkflowRunBySourceLabel(workflowId, sourceLabel) {
   return rows[0] || null;
 }
 
+export async function findWorkflowItemByIssueSignature(workflowId, issueSignature) {
+  if (!issueSignature) return null;
+  const sql = getSql();
+  const rows = await sql`
+    SELECT i.*, r.id AS run_id, r.source_label
+    FROM workflow_items i
+    JOIN workflow_runs r ON r.id = i.run_id
+    WHERE r.workflow_id = ${workflowId}
+      AND i.extraction_payload->>'issueSignature' = ${issueSignature}
+    ORDER BY i.created_at DESC
+    LIMIT 1
+  `;
+  return rows[0] || null;
+}
+
 // Delete a run and everything scoped to it (items, task runs, uploaded docs,
 // AI extractions) via ON DELETE CASCADE. Created domain records (patients,
 // orders, practitioners, etc.) are intentionally kept. Returns true if a row
@@ -1172,7 +1187,7 @@ export async function insertAiExtraction({ itemId, documentId, model, status, in
   return rows[0];
 }
 
-export async function listPatients() {
+export async function listPatients({ hhahId = null } = {}) {
   const sql = getSql();
   const rows = await sql`
     SELECT
@@ -1195,6 +1210,7 @@ export async function listPatients() {
     LEFT JOIN patient_admissions a ON a.patient_id = p.id
     LEFT JOIN patient_episodes e ON e.admission_id = a.id
     LEFT JOIN orders o ON o.patient_id = p.id
+    WHERE (${hhahId}::uuid IS NULL OR p.agency_id = ${hhahId})
     GROUP BY p.id, pu.name, pu.dob, pu.mrn, pu.sex
     ORDER BY p.updated_at DESC, p.name
     LIMIT 200
@@ -1479,7 +1495,7 @@ export async function getPatientTree(patientId) {
   };
 }
 
-export async function listOrders() {
+export async function listOrders({ hhahId = null } = {}) {
   const sql = getSql();
   const rows = await sql`
     SELECT
@@ -1508,6 +1524,7 @@ export async function listOrders() {
       ORDER BY created_at DESC
       LIMIT 1
     ) d ON true
+    WHERE (${hhahId}::uuid IS NULL OR o.agency_id = ${hhahId})
     ORDER BY o.updated_at DESC, o.order_date DESC NULLS LAST
     LIMIT 250
   `;
@@ -1730,6 +1747,11 @@ export async function runBillingMonitorPass() {
     const episodeOrders = orders.filter((order) => order.episode_id === episode.id);
     const admissionOrders = orders.filter((order) => order.admission_id === episode.admission_id);
     const assessment = computeEpisodeAssessment(episode, episodeOrders, admissionOrders);
+    const hhah = {
+      id: episode.agency_id,
+      name: episode.agency_name,
+      contact_info: episode.agency_contact_info || {},
+    };
     const updatedEpisode = (await sql`
       UPDATE patient_episodes
       SET status = ${assessment.status},
@@ -1766,7 +1788,7 @@ export async function runBillingMonitorPass() {
       `)[0];
       updatedCpoMonths.push(updated);
       if (assessment.billable && Number(updated.cpo_min || 0) < 30) {
-        issues.cpoMinutes.push({ episode: updatedEpisode, cpoMonth: updated });
+        issues.cpoMinutes.push({ episode: updatedEpisode, cpoMonth: updated, hhah });
       }
     }
 
@@ -1777,16 +1799,13 @@ export async function runBillingMonitorPass() {
       issues.missingDocuments.push({
         episode: updatedEpisode,
         missingDocuments: missing,
-        hhah: {
-          id: episode.agency_id,
-          name: episode.agency_name,
-          contact_info: episode.agency_contact_info || {},
-        },
+        hhah,
         reason: assessment.reason,
       });
     } else if (!assessment.billable && assessment.reason.unsignedOrderNumbers.length > 0) {
       issues.physicianReminders.push({
         episode: updatedEpisode,
+        hhah,
         unsignedOrderNumbers: assessment.reason.unsignedOrderNumbers,
         orders: episodeOrders.filter((order) => !isOrderSigned(order)),
       });
