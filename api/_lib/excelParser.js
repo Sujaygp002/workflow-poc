@@ -241,7 +241,8 @@ function makeOrderPayload(orderRow, patientRow, referencePayload) {
     order_status: {
       order_status: 'received',
       order_sent_date: '',
-      order_signed_date: parseDate(orderRow?.SignedDate) || '',
+      SignedByPhyscianDate: parseDate(orderRow?.SignedDate) || '',
+      SignedByPhysician_Status: !!parseDate(orderRow?.SignedDate),
       order_EHR_upload_date: '',
     },
     order_admission_details: {

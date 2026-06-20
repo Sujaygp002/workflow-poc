@@ -1,12 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ClipboardList, ExternalLink, FileText, Loader2, RefreshCw } from 'lucide-react';
+import { formatUiDate } from '../../lib/dateFormat';
 import { fetchOrders } from '../../lib/workflowApi';
-
-function fmt(value) {
-  if (!value) return 'Missing';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString();
-}
 
 function StatusChip({ active, label, inactiveLabel, tone }) {
   const cls = active
@@ -42,7 +37,7 @@ function OrderCard({ order, selected, onClick }) {
       <div className="mt-2">
         <EligibilityChips status={order.episode_status} />
       </div>
-      <div className="text-[11px] text-slate-400 mt-1">{fmt(order.order_date)}</div>
+      <div className="text-[11px] text-slate-400 mt-1">{formatUiDate(order.order_date)}</div>
     </button>
   );
 }
@@ -140,7 +135,7 @@ export default function Orders() {
               <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
                 <div className="text-xs font-bold uppercase tracking-wide text-violet-700">Order</div>
                 <h2 className="text-2xl font-bold text-slate-900 mt-1">{selected.order_number}</h2>
-                <p className="text-sm text-slate-600 mt-1">{selected.order_type || 'No type'} | {fmt(selected.order_date)}</p>
+                <p className="text-sm text-slate-600 mt-1">{selected.order_type || 'No type'} | {formatUiDate(selected.order_date)}</p>
                 <div className="mt-3">
                   <EligibilityChips status={selected.episode_status} />
                 </div>

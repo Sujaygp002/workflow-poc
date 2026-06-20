@@ -82,11 +82,48 @@ export async function fetchPatients() {
   return body.patients || [];
 }
 
+export async function fetchPatientUnits() {
+  const res = await fetch('/api/patients?view=units');
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Unable to load patient units');
+  return body.units || [];
+}
+
 export async function fetchOrders() {
   const res = await fetch('/api/orders');
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || 'Unable to load orders');
   return body.orders || [];
+}
+
+export async function fetchPgUnsignedOrders(pgId = '') {
+  const qs = `?pgUnsigned=1${pgId ? `&pgId=${encodeURIComponent(pgId)}` : ''}`;
+  const res = await fetch(`/api/orders${qs}`);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Unable to load PG unsigned orders');
+  return body.orders || [];
+}
+
+export async function bulkSignPgOrders({ orderIds, pgId = '', date = '' }) {
+  const res = await fetch('/api/orders', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'bulkSign', orderIds, pgId, date }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Unable to bulk sign orders');
+  return body;
+}
+
+export async function runBillingMonitor() {
+  const res = await fetch('/api/workflow-runs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'runBillingMonitor' }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Unable to run billing monitor');
+  return body;
 }
 
 export async function fetchPatientTree(patientId) {

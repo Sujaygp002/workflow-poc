@@ -1,17 +1,12 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeft, BellRing, Building2, CheckCircle2, ChevronRight, ExternalLink, FileArchive, FileSpreadsheet, FileText, GitBranch, Loader2, Lock, RefreshCw, Upload, UserRound } from 'lucide-react';
+import { ArrowLeft, BellRing, Building2, CheckCircle2, ExternalLink, FileArchive, FileSpreadsheet, FileText, GitBranch, Loader2, Lock, RefreshCw, Upload, UserRound } from 'lucide-react';
+import PatientHierarchyView from '../../components/PatientHierarchyView';
+import { formatUiDate, formatUiDateTime } from '../../lib/dateFormat';
 import { fetchAreaIntakeStatus, fetchOrders, fetchPatientTree, fetchPatients, startBulkUploadRun } from '../../lib/workflowApi';
 
 const DEFAULT_AREA_NAME = 'Boise-Ada Metro Intake';
 const DEFAULT_AREA_TYPE = 'metro_statistical_area';
 const DEFAULT_HHAH_NAME = 'Boise Home Health';
-
-function formatDate(value) {
-  if (!value) return 'Missing';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleDateString();
-}
 
 // Computed status: eligible = has 485 + active F2F. Billable = all orders signed.
 // Patient status is the latest episode status.
@@ -50,101 +45,6 @@ function Metric({ label, value }) {
     <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
       <div className="text-lg font-bold text-slate-800">{value}</div>
       <div className="text-[11px] uppercase tracking-wide text-slate-400">{label}</div>
-    </div>
-  );
-}
-
-function PatientFlow({ tree }) {
-  const [openEpisodeId, setOpenEpisodeId] = useState(null);
-  const patient = tree?.patient;
-  if (!patient) return null;
-
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 overflow-x-auto">
-      <div className="min-w-[760px]">
-        <div className="flex items-center gap-3">
-          <div className="w-48 rounded-2xl border-2 border-sky-300 bg-sky-50 p-3">
-            <div className="text-[10px] font-bold text-sky-600 uppercase">Patient</div>
-            <div className="font-bold text-slate-800 mt-1">{patient.name}</div>
-            <div className="text-xs text-slate-500 mt-1">DOB {formatDate(patient.dob)}</div>
-            <div className="text-xs text-slate-500">MRN {patient.mrn || 'Missing'}</div>
-            <div className="mt-2">
-              <EligibilityChips status={patient.latest_episode_status} />
-            </div>
-          </div>
-          <ChevronRight className="text-slate-300 shrink-0" />
-          <div className="flex flex-col gap-4">
-            {(tree.admissions || []).map((admission) => (
-              <div key={admission.id} className="flex items-start gap-3">
-                <div className="w-56 rounded-2xl border-2 border-emerald-300 bg-emerald-50 p-3">
-                  <div className="text-[10px] font-bold text-emerald-700 uppercase">Admission Object</div>
-                  <div className="text-sm font-bold text-slate-800 mt-1">
-                    {formatDate(admission.soc)} to {formatDate(admission.eoc)}
-                  </div>
-                  <div className="text-xs text-slate-500 mt-1">{admission.agency_name || 'No HHAH linked'}</div>
-                  <div className="text-xs text-slate-500">{admission.pg_name || 'No PG linked'}</div>
-                </div>
-                <ChevronRight className="text-slate-300 mt-10 shrink-0" />
-                <div className="flex flex-col gap-2">
-                  {(admission.episodes || []).map((episode) => {
-                    const isOpen = openEpisodeId === episode.id;
-                    const orders = episode.orders || [];
-                    return (
-                      <div key={episode.id} className="flex items-start gap-3">
-                        <button
-                          type="button"
-                          onClick={() => setOpenEpisodeId(isOpen ? null : episode.id)}
-                          className={`w-56 text-left rounded-2xl border-2 p-3 transition-colors ${isOpen ? 'border-amber-400 bg-amber-50' : 'border-amber-200 bg-white hover:bg-amber-50'}`}
-                        >
-                          <div className="flex items-center justify-between gap-1">
-                            <div className="text-[10px] font-bold text-amber-700 uppercase">Episode Object</div>
-                          </div>
-                          <div className="text-sm font-bold text-slate-800 mt-1">
-                            {formatDate(episode.soe)} to {formatDate(episode.eoe)}
-                          </div>
-                          <div className="mt-2">
-                            <EligibilityChips status={episode.status} />
-                          </div>
-                          <div className="text-xs text-slate-500 mt-1">{orders.length} order{orders.length === 1 ? '' : 's'}</div>
-                        </button>
-                        {isOpen && (
-                          <>
-                            <ChevronRight className="text-slate-300 mt-10 shrink-0" />
-                            <div className="grid gap-2">
-                              {orders.length === 0 ? (
-                                <div className="w-56 rounded-xl border border-dashed border-slate-300 bg-white px-3 py-2 text-xs text-slate-400">
-                                  No orders linked to this episode.
-                                </div>
-                              ) : orders.map((order) => (
-                                <div key={order.id} className="w-64 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2">
-                                  <div className="text-[10px] font-bold text-violet-700 uppercase">Order</div>
-                                  <div className="font-bold text-slate-800">{order.order_number}</div>
-                                  <div className="text-xs text-slate-500">{order.order_type || 'No type'} | {formatDate(order.order_date)}</div>
-                                  <div className="text-xs text-slate-500">Billing NPI {order.billing_provider_npi || 'Missing'}</div>
-                                </div>
-                              ))}
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    );
-                  })}
-                  {(admission.orders || []).length > 0 && (
-                    <div className="rounded-xl border border-violet-100 bg-white p-3 text-xs text-slate-500">
-                      {admission.orders.length} admission-level order{admission.orders.length === 1 ? '' : 's'}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-        {(tree.ordersWithoutEpisode || []).length > 0 && (
-          <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
-            {tree.ordersWithoutEpisode.length} order{tree.ordersWithoutEpisode.length === 1 ? '' : 's'} are linked to the patient but not an episode.
-          </div>
-        )}
-      </div>
     </div>
   );
 }
@@ -254,7 +154,7 @@ function NotificationBanner({ notifications }) {
               </span>
             </div>
             <div className="mt-1 text-xs text-slate-500">
-              {n.hhah_name ? `${n.hhah_name} · ` : ''}{n.sent_at ? new Date(n.sent_at).toLocaleString() : 'pending'}
+              {n.hhah_name ? `${n.hhah_name} · ` : ''}{n.sent_at ? formatUiDateTime(n.sent_at) : 'pending'}
             </div>
           </div>
         ))}
@@ -498,7 +398,7 @@ export default function HhhLogin() {
                   <div className="flex items-center justify-between gap-2">
                     <div className="font-bold text-slate-800">{patient.name}</div>
                   </div>
-                  <div className="text-xs text-slate-500 mt-0.5">DOB {formatDate(patient.dob)} | MRN {patient.mrn || 'Missing'}</div>
+                  <div className="text-xs text-slate-500 mt-0.5">DOB {formatUiDate(patient.dob)} | MRN {patient.mrn || 'Missing'}</div>
                   <div className="mt-2">
                     <EligibilityChips status={patient.latest_episode_status} />
                   </div>
@@ -530,7 +430,7 @@ export default function HhhLogin() {
                     <EligibilityChips status={order.episode_status} />
                   </div>
                   <div className="flex gap-2 mt-2 text-[11px] text-slate-500">
-                    <span>{formatDate(order.order_date)}</span>
+                    <span>{formatUiDate(order.order_date)}</span>
                     <span className="ml-auto font-bold text-violet-700">Open order</span>
                   </div>
                 </button>
@@ -547,7 +447,7 @@ export default function HhhLogin() {
                 <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
                   <div className="text-xs font-bold uppercase tracking-wide text-violet-700">Order</div>
                   <h2 className="text-2xl font-bold text-slate-900 mt-1">{selectedOrder.order_number}</h2>
-                  <p className="text-sm text-slate-600 mt-1">{selectedOrder.order_type || 'No type'} | {formatDate(selectedOrder.order_date)}</p>
+                  <p className="text-sm text-slate-600 mt-1">{selectedOrder.order_type || 'No type'} | {formatUiDate(selectedOrder.order_date)}</p>
                   <div className="mt-3">
                     <EligibilityChips status={selectedOrder.episode_status} />
                   </div>
@@ -583,7 +483,7 @@ export default function HhhLogin() {
                 <button onClick={() => { setSelectedPatient(null); setSelectedTree(null); }} className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800">
                   <ArrowLeft size={15} /> Back to patient list
                 </button>
-                <PatientFlow tree={selectedTree} />
+                <PatientHierarchyView tree={selectedTree} />
               </div>
             )}
           </div>

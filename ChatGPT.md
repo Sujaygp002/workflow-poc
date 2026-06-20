@@ -13,10 +13,11 @@
   - Seeded area: `Boise-Ada Metro Intake`.
   - Area links to expected HHAHs and tracks whether each HHAH uploaded within the daily 24-hour window.
   - Missing uploads create logged notification records in the DB; real email delivery can be wired later.
-- Added three trigger layers:
+- Added four trigger layers:
   - Trigger 1: onboarding successful starts the ongoing area monitor.
   - Trigger 2: HHAH uploads Excel + PDF ZIP, which starts wf7.
-  - Trigger 3: order document ready starts the signing follow-up workflow.
+  - Trigger 3: Send To Physician sends ready unsigned orders to the PG signing bucket.
+  - Trigger 4: Make Patients Billable runs every 10 seconds from Orchestrator while Live is enabled.
 - Upload workflow processing now runs patient instances in parallel instead of stopping the whole run on the first blocked patient. A blocked patient waits on human work while other patients continue.
 - wf7 no longer checks/branches on physician group or practitioner existence. PG/practitioner data can still be stored if present, but missing PG/NPI will not create a workflow task or block patient/order processing.
 - Latest wf7 object model:
@@ -25,6 +26,33 @@
   - A changed HHAH/PG creates a new Patient Record under the same Unit; unit-only changes update the existing Unit/Record.
   - Admission is resolved after SOC is present, and Episode is resolved after SOE/EOE are present.
   - Duplicate order numbers are skipped and logged; existing orders are not overwritten or deleted.
+- Patient Unit is now treated as the source of truth for identity fields. Patient reads prefer `patient_units.name/dob/mrn/sex`; duplicate identity columns on `patients` are deprecated compatibility fields.
+- Patient archive display is computed at read time, not persisted:
+  - Patient Unit -> Patient Record -> Admission Archive + Latest Admission -> Episode Archive + Latest Episode -> Order Archive + Signed/Unsigned Orders.
+  - Older admissions archive only when the next newer admission exists and `nextAdmission.SOC - oldAdmission.EOC >= 90 days`.
+  - Archived admissions cascade all child episodes and orders into archive.
+  - Inside the latest admission, the latest episode stays current; earlier episodes and their orders show in archive.
+  - Latest episode orders split into signed and unsigned using `order_status.SignedByPhysician_Status === true` plus legacy-compatible signed reads.
+  - UI dates render as `MM/DD/YYYY`.
+  - Archived orders are displayed inside their archived episode cards; duplicate standalone archive-order sections are hidden.
+  - Prior admissions that do not meet the archive gap rule are not shown in the Patient hierarchy UI.
+- Seed data now includes demo Patient Unit `Maya Thompson / MRN-DEMO-ARCHIVE-001`:
+  - two Patient Records under the same Patient Unit,
+  - one archived Patient Record,
+  - one archived admission,
+  - one prior admission that does not archive because the next SOC gap is under 90 days,
+  - one latest admission,
+  - one episode archive,
+  - one latest episode,
+  - archived, signed, and unsigned orders.
+- CPO Month is now a module under Episode:
+  - Table: `cpo_months`.
+  - Fields: `episode_id`, `cpo_month`, `cpo_min`, `status`, `reason`.
+  - CPO month is billable when its episode is billable and `cpo_min >= 30`.
+- Episode status rules:
+  - Eligible: episode has a 485 cert/recert order and the admission has an F2F order within 180 days of episode EOE.
+  - Billable: eligible and all episode orders are signed.
+  - Patient status follows the latest episode status.
 
 ## HHH Portal
 
@@ -34,9 +62,25 @@
   - Password: `test123`
 - After login, the HHH portal shows:
   - Bulk upload form for one `.xlsx` workbook.
-  - Optional ZIP upload for order PDFs.
+  - Unsigned and signed ZIP upload fields for order PDFs.
   - Patient browsing section.
   - Patient flow chart: patient -> admissions -> episodes -> orders.
+
+## PG Portal
+
+- New route: `/pg-login`.
+- Login credentials:
+  - Username: `test123`
+  - Password: `test123`
+- Screens:
+  - Dashboard: placeholder / coming soon.
+  - Bulk Sign: lists orders sent to physician and not yet signed.
+- Bulk Sign writes only:
+  - `order_status.SignedByPhyscianDate = YYYY-MM-DD`
+  - `order_status.SignedByPhysician_Status = true`
+- Trigger 3 Send To Physician writes only:
+  - `order_status.SentToPhysicianDate = YYYY-MM-DD`
+  - `order_status.SendToPhysician_Status = true`
 
 ## Upload Rules
 
@@ -54,6 +98,10 @@
 
 - `GET /api/orders`
   - Returns uploaded/created orders with patient, HHAH, PG, and practitioner links.
+- `GET /api/orders?pgUnsigned=1&pgId=<id>`
+  - Returns PG orders that were sent to physician and are not signed.
+- `POST /api/orders` with `{ "action": "bulkSign" }`
+  - Bulk signs selected PG orders.
 - `GET /api/reference-data`
   - Returns practitioners, physician groups, and HHAH records.
 - `POST /api/reference-data/map-pg-practitioner`
@@ -69,20 +117,25 @@
   - Returns active DB workflow definitions for visualization: area onboarding monitor, bulk upload, and document signing follow-up.
 - `GET /api/workflow-runs`
   - Returns workflow run history with task runs.
+- `POST /api/workflow-runs` with `{ "action": "runBillingMonitor" }`
+  - Runs Trigger 4 billing monitor, recomputes statuses, creates missing CPO months, and creates manual tasks for missing signatures or CPO minutes.
 - `GET /api/work-items?userId=u1`
   - Returns pending/completed human work for a dummy user.
 - `POST /api/work-items/:taskRunId/complete`
   - Completes a human task and resumes workflow automation.
 - `GET /api/patients`
   - Returns patients with admission/episode/order counts.
+- `GET /api/patients?view=units`
+  - Returns Patient Unit summaries for the Admin Patients hierarchy page.
 - `GET /api/patients/:id`
-  - Returns patient tree data for the flow chart.
+  - Returns patient tree data plus `unitHierarchy` with current/archive patient record, admission, episode, and order buckets.
 
 ## Frontend Changes
 
 - `/triggers` is back in FlowPOC and starts the DB-backed bulk upload trigger.
-- `/triggers` now shows the three trigger concepts: onboarding successful, HHAH upload, and order document ready/signing.
+- `/triggers` now shows a cleaned four-trigger overview and the Trigger 2 bulk-upload form. Internal condition flags were removed from this screen.
 - `/builder/workflows` now pulls only DB workflow definitions and no longer shows local dummy workflows.
+- `/builder/workflows` shows Trigger 4 under independent monitors, not as `END -> Trigger 4` after the Trigger 2/3 chain.
 - `/orchestrator` now shows only DB workflow runs and renders wf7 as one aggregate loop body instead of one repeated flow per patient/order row.
 - `/orchestrator` now includes an Area Intake Monitor above workflow runs:
   - Shows selected statistical area.
@@ -103,18 +156,31 @@
 - `/orchestrator` object lifecycle excludes HHAH from created/updated/found counts because HHAH comes from the login context.
 - `/orders` shows order records, patient/reference details, and the matched order PDF.
 - `/orders` and `/hhh-login` show explicit Eligible and Billable chips from the computed episode status.
+- `/patients` shows the Admin Patient Unit hierarchy with admission-based archive buckets.
+- `/hhh-login` reuses the same Patient Unit hierarchy component inside the patient detail panel.
 - `/reference-data` shows practitioners, physician groups, HHAH records, and supports mapping PG to practitioner.
 - `/worker` and `/worker/bucket/:userId` use the dummy users but show DB-assigned tasks only.
 - Worker task cards show matched order PDF side-by-side with the record.
 - Missing fields are highlighted and can be entered before completing the human task.
 - wf7 now treats Admission and Episode as explicit objects through the date-check branches: `admission.resolve` writes/reuses Admission after SOC is ready, and `episode.resolve` writes/reuses Episode after SOE/EOE are ready.
-- `wf-signing` starts after a written order has an uploaded document. It checks signing readiness, routes document fixes to a human when needed, sends to physician, waits for the 48-hour signature check, then updates signed status or logs an overdue physician email.
+- `wf-signing` starts after a written order has an uploaded document. It checks signing readiness, routes document fixes to a human when needed, sends to physician, immediately checks whether the physician signed, then either updates signed status automatically or creates a manual `Email Physician — Signature Overdue` task. There is no 48-hour wait in Trigger 3.
+- `wf-billing-monitor` displays as one mega task: `Make Patients Billable`.
+  - System: Check If Patient Is Eligible.
+  - If not eligible: manual `Email HHAH — Missing Document` task using SMTP.
+  - If eligible: system Check If Patient Is Billable.
+  - If not billable due to signature: manual `Email Physician/PG To Sign` task using SMTP.
+  - If CPO month is not billable: manual `Add 30 Min CPO` task.
 - Skipped duplicate orders do not start `wf-signing`; only newly written orders continue into the signing follow-up.
 - `/hhh-login` is a standalone route without the builder sidebar and is not shown inside FlowPOC navigation.
 - `/hhh-login` includes patient and order browsing after upload; order detail opens the matched PDF instead of JSON.
+- `/pg-login` is also a standalone route without the builder sidebar.
+- Work Bucket supports Trigger 4 manual tasks:
+  - physician signature reminder email,
+  - CPO minutes capture with a minimum of 30 minutes.
 
 ## Notes
 
+- Use production URL: `https://workflow-poc-tawny.vercel.app`.
 - Environment values are currently hardcoded in `api/_lib/config.js` for personal testing.
 - For real production use, move secrets back to environment variables and rotate exposed keys.
 - Vercel Blob is used when `BLOB_READ_WRITE_TOKEN` is configured; otherwise uploads can still run but PDF blob storage is skipped.

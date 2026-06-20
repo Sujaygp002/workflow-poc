@@ -1,13 +1,16 @@
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
-import { Activity, ClipboardList, Database, GitBranch, Inbox, Zap } from 'lucide-react';
+import { Activity, ClipboardList, Database, GitBranch, Inbox, Network, UserRound, Zap } from 'lucide-react';
 import WorkflowList from './pages/builder/WorkflowList';
 import WorkBucket from './pages/workbucket/WorkBucket';
 import UserSelect from './pages/workbucket/UserSelect';
 import Orchestrator from './pages/orchestrator/Orchestrator';
 import HhhLogin from './pages/hhh/HhhLogin';
+import PgLogin from './pages/pg/PgLogin';
+import Patients from './pages/patients/Patients';
 import Triggers from './pages/triggers/Triggers';
 import ReferenceData from './pages/reference/ReferenceData';
 import Orders from './pages/orders/Orders';
+import NetworkMap from './pages/map/NetworkMap';
 
 function Sidebar() {
   const navItem = (to, icon, label, end) => (
@@ -36,6 +39,8 @@ function Sidebar() {
         {navItem('/triggers', <Zap size={16} />, 'Trigger', true)}
         {navItem('/builder/workflows', <GitBranch size={16} />, 'Workflow', true)}
         {navItem('/orchestrator', <Activity size={16} />, 'Orchestrator', true)}
+        {navItem('/map', <Network size={16} />, 'Coverage Map', true)}
+        {navItem('/patients', <UserRound size={16} />, 'Patients', true)}
         {navItem('/orders', <ClipboardList size={16} />, 'Orders', true)}
         {navItem('/reference-data', <Database size={16} />, 'Reference Data', true)}
         {navItem('/worker', <Inbox size={16} />, 'Work Buckets', true)}
@@ -62,7 +67,7 @@ export default function App() {
 
 function AppShell() {
   const location = useLocation();
-  const standalone = location.pathname.startsWith('/hhh-login');
+  const standalone = location.pathname.startsWith('/hhh-login') || location.pathname.startsWith('/pg-login');
 
   return (
     <div className="flex min-h-screen bg-slate-50">
@@ -74,11 +79,14 @@ function AppShell() {
           <Route path="/builder/workflows" element={<WorkflowList />} />
           <Route path="/builder/create" element={<Navigate to="/builder/workflows" replace />} />
           <Route path="/orchestrator" element={<Orchestrator />} />
+          <Route path="/map" element={<NetworkMap />} />
+          <Route path="/patients" element={<Patients />} />
           <Route path="/orders" element={<Orders />} />
           <Route path="/reference-data" element={<ReferenceData />} />
           <Route path="/worker" element={<UserSelect />} />
           <Route path="/worker/bucket/:userId" element={<WorkBucket />} />
           <Route path="/hhh-login" element={<HhhLogin />} />
+          <Route path="/pg-login" element={<PgLogin />} />
         </Routes>
       </main>
     </div>

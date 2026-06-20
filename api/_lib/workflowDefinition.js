@@ -403,9 +403,9 @@ export const WF7_DEFINITION = {
 
 export const WF_SIGNING_DEFINITION = {
   id: 'wf-signing',
-  name: 'Document Signing Follow-up',
+  name: 'Send To Physician',
   description:
-    'Starts after the patient is created/updated and an order document is uploaded. It reviews document readiness, sends the document to the physician for signature, waits up to 48 hours, then updates signed status or sends an overdue email.',
+    'Starts after the patient is created/updated and an order document is uploaded. It reviews document readiness and sends the document to the physician signing bucket.',
   trigger: {
     id: 'trigger-order-document-ready',
     type: 'order_document_ready',
@@ -413,15 +413,15 @@ export const WF_SIGNING_DEFINITION = {
   conditions: {
     document_ready_for_signing: 'document has the fields and PDF needed for signing',
     document_not_ready_for_signing: 'document is missing fields or PDF readiness checks',
-    signed_within_48h: 'physician signed the document within 48 hours',
-    signing_overdue: 'physician has not signed within 48 hours',
+    physician_signed: 'physician has signed the document',
+    physician_signature_missing: 'physician has not signed the document yet',
   },
   // The visible flowchart collapses all steps into one "Review Document For Signing"
   // mega-task box. The View button expands the inner sub-task flowchart.
   megaTask: {
     id: 'sign-monitor',
-    name: 'Review Document For Signing',
-    info: 'Reviews whether the order document is ready for signing, sends it to the physician, waits up to 48 hours, then either marks the order signed or emails the physician an overdue reminder.',
+    name: 'Send Orders To Physician',
+    info: 'Reviews whether the order document is ready for signing, then sends it to the physician bucket for signature.',
   },
   steps: [
     {
@@ -453,9 +453,9 @@ export const WF_SIGNING_DEFINITION = {
     {
       id: 'sign-s4',
       actor: 'system',
-      taskKey: 'signing.checkSignedWithin48h',
-      name: 'Check Signed Within 48 Hours',
-      description: 'Check whether the physician signed the document before the 48-hour deadline.',
+      taskKey: 'signing.checkSigned',
+      name: 'Check Physician Signature',
+      description: 'Immediately check whether the physician has signed the document.',
       preReq: ['sign-s3'],
     },
     {
@@ -463,18 +463,110 @@ export const WF_SIGNING_DEFINITION = {
       actor: 'system',
       taskKey: 'signing.updateOrderSigned',
       name: 'Update Order Status — Signed',
-      description: 'Document was signed within 48 hours, so update the order status to signed.',
-      condition: 'signed_within_48h',
+      description: 'Document is signed, so update the order status automatically.',
+      condition: 'physician_signed',
       preReq: ['sign-s4'],
     },
     {
       id: 'sign-s6',
-      actor: 'system',
+      actor: 'human',
       taskKey: 'signing.emailPhysicianReminder',
       name: 'Email Physician — Signature Overdue',
-      description: 'Document was not signed within 48 hours, so send/log an email reminder to the physician.',
-      condition: 'signing_overdue',
+      description: 'Document is not signed. A person sends the physician a reminder email.',
+      condition: 'physician_signature_missing',
       preReq: ['sign-s4'],
+    },
+  ],
+};
+
+export const WF_BILLING_MONITOR_DEFINITION = {
+  id: 'wf-billing-monitor',
+  name: 'Make Patients Billable',
+  description:
+    'Runs on a short interval to check patient eligibility, billability, signatures, and CPO minutes, then creates manual tasks to make patients billable.',
+  trigger: {
+    id: 'trigger-billing-monitor',
+    type: 'time_interval',
+    intervalSeconds: 10,
+    label: 'Trigger 4 · every 10s',
+  },
+  conditions: {
+    patient_eligible: 'latest/episode record has required 485 and valid F2F documents',
+    patient_not_eligible: 'required 485 or F2F document is missing or outside the valid window',
+    patient_billable: 'eligible and all documents are signed',
+    patient_not_billable: 'eligible but not billable yet',
+    physician_signature_missing: 'billability is blocked by missing physician signature',
+    cpo_month_billable: 'episode is billable and CPO minutes are captured',
+    cpo_month_not_billable: 'CPO month needs at least 30 captured minutes',
+  },
+  megaTask: {
+    id: 'billing-monitor',
+    name: 'Make Patients Billable',
+    info: 'Checks eligibility and billability, requests missing documents or signatures, and captures CPO minutes when needed.',
+    innerStepIds: ['billing-s1', 'billing-s2', 'billing-s3', 'billing-s4', 'billing-s5', 'billing-s6', 'billing-s7'],
+  },
+  steps: [
+    {
+      id: 'billing-s1',
+      actor: 'system',
+      taskKey: 'billing.checkPatientEligible',
+      name: 'Check If Patient Is Eligible',
+      description: 'Check whether required 485 and valid F2F documents exist for the episode/admission.',
+      preReq: [],
+    },
+    {
+      id: 'billing-s2',
+      actor: 'human',
+      taskKey: 'billing.sendHhahMissingDocumentEmail',
+      name: 'Email HHAH — Missing Document',
+      description: 'Patient is not eligible. A person emails the HHAH to send the missing 485 or F2F document.',
+      condition: 'patient_not_eligible',
+      preReq: ['billing-s1'],
+    },
+    {
+      id: 'billing-s3',
+      actor: 'system',
+      taskKey: 'billing.checkPatientBillable',
+      name: 'Check If Patient Is Billable',
+      description: 'Patient is eligible. Check whether all episode documents are signed.',
+      condition: 'patient_eligible',
+      preReq: ['billing-s1'],
+    },
+    {
+      id: 'billing-s4',
+      actor: 'system',
+      taskKey: 'billing.checkSignatureMissing',
+      name: 'Check If Signature Is Missing',
+      description: 'Patient is not billable. Check whether missing physician signature is the blocker.',
+      condition: 'patient_not_billable',
+      preReq: ['billing-s3'],
+    },
+    {
+      id: 'billing-s5',
+      actor: 'human',
+      taskKey: 'billing.sendPhysicianReminder',
+      name: 'Email Physician/PG To Sign',
+      description: 'Signature is missing. A person emails the physician or PG to sign the document.',
+      condition: 'physician_signature_missing',
+      preReq: ['billing-s4'],
+    },
+    {
+      id: 'billing-s6',
+      actor: 'system',
+      taskKey: 'billing.checkCpoMonthBillable',
+      name: 'Check If CPO Month Is Billable',
+      description: 'Patient is billable. Check whether the CPO month has at least 30 captured minutes.',
+      condition: 'patient_billable',
+      preReq: ['billing-s3'],
+    },
+    {
+      id: 'billing-s7',
+      actor: 'human',
+      taskKey: 'billing.addCpoMinutes',
+      name: 'Add 30 Min CPO',
+      description: 'CPO month is not billable. Add at least 30 CPO minutes.',
+      condition: 'cpo_month_not_billable',
+      preReq: ['billing-s6'],
     },
   ],
 };
@@ -483,6 +575,7 @@ export const WORKFLOW_DEFINITIONS = [
   WF_AREA_ONBOARDING_DEFINITION,
   WF7_DEFINITION,
   WF_SIGNING_DEFINITION,
+  WF_BILLING_MONITOR_DEFINITION,
 ];
 
 export const SEEDED_USERS = [

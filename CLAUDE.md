@@ -66,6 +66,22 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-20** — Added the **Coverage Map** screen (`/map`): an interactive force-directed
+  "agency network" graph. Top level shows HHAH (agency) balls; clicking one zooms/fits to it
+  and expands its physician-group balls (with a practitioner-count badge) plus a patient-count
+  circle on each HHAH→PG line; clicking that circle expands aggregate Admission → Episode →
+  Order balls, and the Order ball splits into 485 / F2F / other. Clicking an open ball again
+  collapses it. SVG-based (no canvas, no graph lib), custom spring/repulsion + collision layout,
+  fit-to-content camera with +/−/fit zoom controls, and a 2.5s Live poll (rebuilds only when no
+  cluster is open). New files: `src/pages/map/NetworkMap.jsx` (page + imperative graph engine in
+  a ref) and `src/pages/map/graph.js` (client-side join — no new API). Data via existing
+  `fetchPatients`/`fetchOrders`/`fetchReferenceData`: edges aggregate patient records per
+  (HHAH, PG); adm/epi counts from patient row counts; order counts + type split from the orders
+  feed's `document_type`. Wired `/map` route + sidebar "Coverage Map" nav in `App.jsx`. Verified
+  in headless Chrome against mocked-but-real-shaped API: initial agencies → open → drill →
+  order-type split all render with zero console errors. lint + build pass. Prototype kept at
+  `map-network.html`.
+
 - **2026-06-14** — Pulled the missing-upload notification OUT of the area mega-task.
   `WF_AREA_ONBOARDING_DEFINITION.megaTask` gained `innerStepIds` (`area-s2/s3/s5/s6` stay
   inside TASK-HHAH Upload Monitor) and `outsideStepIds` (`area-s4`). `MegaTaskNode` now renders
@@ -74,7 +90,17 @@ Newest first. Add an entry for each change made by Claude Code.
   `START → TASK-HHAH Upload Monitor → [upload missing after 24h?] → Notification Trigger —
   Missing Upload → END`. Execution order is unchanged (visual grouping only). Reseeded.
 
-- **2026-06-14** — Fixed the mega-task `(n)` count + preloaded demo inputs.
+- **2026-06-19** — Fixed Eligible/Billable always reading `started`. `dayDiff` in
+  `repositories.js` built `new Date(\`${value}T00:00:00.000Z\`)`, which is `NaN` when the value
+  is a `Date` object (as the Neon driver returns `order_date`/`eoe`). That silently failed the
+  "F2F within 180 days of EOE" check, so `computeEpisodeAssessment` never marked any episode
+  eligible (and thus never billable) through the real read path (`listPatients`, patient
+  hierarchy, `/orders` + `/hhh-login` chips). `dayDiff` now delegates to the existing
+  `dateMs`/`dateOnly` helpers (which already handle `Date` objects — why the 90-day archive math
+  was unaffected). Also normalized `signedDateOf` output to `YYYY-MM-DD`. Verified via an
+  end-to-end wf7 run against the live DB: raw-`Date` rows now compute eligible/billable
+  correctly and Maya Thompson's latest record reads `eligible` (was `started`). lint + build
+  pass. No schema/seed change.
   - `(n)` now counts **distinct items (instances)** a task processed (items with ≥1 ran step
     in the group), not the number of inner step-runs. The HHAH Upload Monitor reads 3 (one per
     expected HHAH) instead of 4; wf7/signing read their row/order counts. Generalises to all

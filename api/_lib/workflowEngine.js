@@ -196,10 +196,9 @@ async function startBulkSigningRun(wf7RunId) {
           ...item.order_payload,
           order_status: {
             ...(item.order_payload?.order_status || {}),
-            order_status: 'signed',
-            signed: true,
-            order_signed_date:
-              item.order_payload?.order_status?.order_signed_date || new Date().toISOString().slice(0, 10),
+            SignedByPhyscianDate:
+              item.order_payload?.order_status?.SignedByPhyscianDate || new Date().toISOString().slice(0, 10),
+            SignedByPhysician_Status: true,
           },
         }
       : item.order_payload;

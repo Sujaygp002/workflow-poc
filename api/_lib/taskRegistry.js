@@ -1,10 +1,15 @@
 import {
   findHhahByName,
   findOrder,
+  findOrderById,
   findPatient,
   findPatientUnit,
   insertAiExtraction,
+  isOrderSigned,
+  markOrderSignedByPhysician,
+  markOrderSentToPhysician,
   updateItem,
+  updateCpoMinutes,
   writeAdmissionBundle,
   writeEpisodeBundle,
   writeOrderBundle,
@@ -314,7 +319,19 @@ export async function evaluateCondition(condition, item) {
     const { decisions } = await markReferenceDecisions(item);
     return decisions[condition] === true;
   }
-  if (['document_ready_for_signing', 'document_not_ready_for_signing', 'signed_within_48h', 'signing_overdue'].includes(condition)) {
+  if (['document_ready_for_signing', 'document_not_ready_for_signing', 'physician_signed', 'physician_signature_missing', 'signed_within_48h', 'signing_overdue'].includes(condition)) {
+    const known = item.decisions || {};
+    return known[condition] === true;
+  }
+  if ([
+    'patient_eligible',
+    'patient_not_eligible',
+    'patient_billable',
+    'patient_not_billable',
+    'physician_signature_missing',
+    'cpo_month_billable',
+    'cpo_month_not_billable',
+  ].includes(condition)) {
     const known = item.decisions || {};
     return known[condition] === true;
   }
@@ -397,7 +414,8 @@ export const taskRegistry = {
           order_date: orderPatch.order_date,
         },
         order_status: {
-          order_signed_date: orderPatch.signed_date,
+          SignedByPhyscianDate: orderPatch.signed_date,
+          SignedByPhysician_Status: !!orderPatch.signed_date,
         },
         order_admission_details: {
           billing_provider: {
@@ -716,44 +734,173 @@ export const taskRegistry = {
   },
 
   'signing.sendToPhysician': async ({ item }) => {
+    const date = new Date().toISOString().slice(0, 10);
+    const orderId = item.extraction_payload?.orderId;
+    if (orderId) await markOrderSentToPhysician(orderId, date);
+    const orderPayload = mergeDeep(item.order_payload, {
+      order_status: {
+        SentToPhysicianDate: date,
+        SendToPhysician_Status: true,
+      },
+    });
     const decisions = setDecisions(item, {
       signing_sent_to_physician: true,
-      signing_sent_at: new Date().toISOString(),
+      signing_sent_at: date,
     });
-    await updateItem(item.id, { decisions });
-    return { ok: true, output: { sent: true } };
+    await updateItem(item.id, { orderPayload, decisions });
+    return { ok: true, output: { sent: true, orderId, SentToPhysicianDate: date } };
   },
 
-  'signing.checkSignedWithin48h': async ({ item }) => {
-    const signed = Boolean(item.order_payload?.order_status?.order_signed_date || item.order_payload?.order_status?.signed);
-    const sentAt = item.decisions?.signing_sent_at ? new Date(item.decisions.signing_sent_at) : new Date();
-    const deadlinePassed = Date.now() - sentAt.getTime() >= 48 * 60 * 60 * 1000;
+  'signing.checkSigned': async ({ item }) => {
+    const persisted = await findOrderById(item.extraction_payload?.orderId);
+    const signed = isOrderSigned({ order_status: item.order_payload?.order_status || {} }) || (persisted ? isOrderSigned(persisted) : false);
     const decisions = setDecisions(item, {
+      physician_signed: signed,
+      physician_signature_missing: !signed,
       signed_within_48h: signed,
-      signing_overdue: !signed && deadlinePassed,
+      signing_overdue: !signed,
     });
     await updateItem(item.id, { decisions });
-    if (!signed && !deadlinePassed) {
-      return { ok: true, waiting: true, output: { waiting: true, signedWithin48h: false, deadlinePassed } };
-    }
-    return { ok: true, output: { signedWithin48h: signed, deadlinePassed } };
+    return { ok: true, output: { physicianSigned: signed } };
   },
 
   'signing.updateOrderSigned': async ({ item }) => {
+    const date = new Date().toISOString().slice(0, 10);
+    if (item.extraction_payload?.orderId) {
+      await markOrderSignedByPhysician(item.extraction_payload.orderId, item.order_payload?.order_status?.SignedByPhyscianDate || date);
+    }
     const orderPayload = mergeDeep(item.order_payload, {
       order_status: {
-        order_status: 'signed',
-        signed: true,
-        order_signed_date: item.order_payload?.order_status?.order_signed_date || new Date().toISOString().slice(0, 10),
+        SignedByPhyscianDate: item.order_payload?.order_status?.SignedByPhyscianDate || date,
+        SignedByPhysician_Status: true,
       },
     });
     await updateItem(item.id, { orderPayload, decisions: setDecisions(item, { signing_status_updated: true }) });
     return { ok: true, output: { orderStatus: 'signed' } };
   },
 
-  'signing.emailPhysicianReminder': async ({ item }) => {
+  'signing.emailPhysicianReminder': async ({ item, payload }) => {
+    const recipient = payload?.recipient
+      || item.reference_payload?.practitioner?.contact_info?.email
+      || item.reference_payload?.practitioner?.email
+      || '';
+    const orderNumber = item.order_payload?.order_info?.order_number || item.order_key || 'the order document';
+    const subject = payload?.subject || 'Signature required for order document';
+    const text = payload?.notes || `Please sign ${orderNumber}.`;
+    const mail = await sendEmail({ to: recipient, subject, text });
     await updateItem(item.id, { decisions: setDecisions(item, { physician_reminder_email_sent: true }) });
-    return { ok: true, output: { emailLogged: true } };
+    return {
+      ok: true,
+      output: {
+        email_sent: mail.sent,
+        email_skipped: mail.skipped || false,
+        email_reason: mail.reason || null,
+        recipient,
+        orderNumber,
+      },
+    };
+  },
+
+  'billing.checkPatientEligible': async ({ item }) => {
+    const eligible = item.extraction_payload?.eligible === true;
+    await updateItem(item.id, {
+      decisions: setDecisions(item, {
+        patient_eligible: eligible,
+        patient_not_eligible: !eligible,
+      }),
+    });
+    return { ok: true, output: { eligible } };
+  },
+
+  'billing.sendHhahMissingDocumentEmail': async ({ item, payload }) => {
+    const hhah = item.reference_payload?.HHAH || {};
+    const missing = item.extraction_payload?.missingDocuments || [];
+    const recipient = payload?.recipient || hhah.contact_info?.email || hhah.email || '';
+    const subject = payload?.subject || 'Missing document required for billing';
+    const text = payload?.notes
+      || `Please send the missing document(s): ${missing.join(', ') || '485/F2F document'}.`;
+    const mail = await sendEmail({ to: recipient, subject, text });
+    await updateItem(item.id, {
+      decisions: setDecisions(item, { hhah_missing_document_email_sent: true }),
+    });
+    return {
+      ok: true,
+      output: {
+        email_sent: mail.sent,
+        email_skipped: mail.skipped || false,
+        email_reason: mail.reason || null,
+        recipient,
+        missingDocuments: missing,
+      },
+    };
+  },
+
+  'billing.checkPatientBillable': async ({ item }) => {
+    const billable = item.extraction_payload?.billable === true;
+    await updateItem(item.id, {
+      decisions: setDecisions(item, {
+        patient_billable: billable,
+        patient_not_billable: !billable,
+      }),
+    });
+    return { ok: true, output: { billable } };
+  },
+
+  'billing.checkSignatureMissing': async ({ item }) => {
+    const missing = Array.isArray(item.extraction_payload?.unsignedOrderNumbers)
+      && item.extraction_payload.unsignedOrderNumbers.length > 0;
+    await updateItem(item.id, {
+      decisions: setDecisions(item, { physician_signature_missing: missing }),
+    });
+    return { ok: true, output: { physicianSignatureMissing: missing } };
+  },
+
+  'billing.sendPhysicianReminder': async ({ item, payload }) => {
+    const recipient = payload?.recipient
+      || item.reference_payload?.practitioner?.contact_info?.email
+      || item.reference_payload?.practitioner?.email
+      || '';
+    const unsigned = item.extraction_payload?.unsignedOrderNumbers || [];
+    const subject = payload?.subject || 'Signature required for CPO billing';
+    const text = payload?.notes
+      || `Please sign the following order document(s): ${unsigned.join(', ') || 'unsigned orders'}.`;
+    const mail = await sendEmail({ to: recipient, subject, text });
+    await updateItem(item.id, {
+      decisions: setDecisions(item, { physician_reminder_email_sent: true }),
+    });
+    return {
+      ok: true,
+      output: {
+        email_sent: mail.sent,
+        email_skipped: mail.skipped || false,
+        email_reason: mail.reason || null,
+        recipient,
+        unsignedOrderNumbers: unsigned,
+      },
+    };
+  },
+
+  'billing.checkCpoMonthBillable': async ({ item }) => {
+    const billable = item.extraction_payload?.cpoMonthBillable === true;
+    await updateItem(item.id, {
+      decisions: setDecisions(item, {
+        cpo_month_billable: billable,
+        cpo_month_not_billable: !billable,
+      }),
+    });
+    return { ok: true, output: { cpoMonthBillable: billable } };
+  },
+
+  'billing.addCpoMinutes': async ({ item, payload }) => {
+    const cpoMonthId = item.extraction_payload?.cpoMonthId;
+    if (!cpoMonthId) return { ok: false, error: 'CPO month id is missing' };
+    const raw = payload?.cpoMin ?? payload?.cpo_min ?? 30;
+    const cpoMin = Math.max(30, Number(raw) || 30);
+    const cpoMonth = await updateCpoMinutes({ cpoMonthId, cpoMin });
+    await updateItem(item.id, {
+      decisions: setDecisions(item, { cpo_minutes_captured: true }),
+    });
+    return { ok: true, output: { cpoMonthId, cpoMin: cpoMonth.cpo_min, status: cpoMonth.status } };
   },
 
   // ── Area Upload Monitor tasks ────────────────────────────────────────────

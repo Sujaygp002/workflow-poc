@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { AlertCircle, ArrowLeft, CheckCircle2, Clock, FileText, Inbox, Loader2, Mail, RefreshCw } from 'lucide-react';
 import { getUsers } from '../../store';
+import { formatUiDate, formatUiDateTime } from '../../lib/dateFormat';
 import { completeDbWorkItem, dbWorkItemToAction, fetchWorkItems } from '../../lib/workflowApi';
 
 const AVATAR_COLORS = [
@@ -327,6 +328,148 @@ function MissingUploadEmailPanel({ item, onSend, loading }) {
   );
 }
 
+function PhysicianReminderPanel({ item, onSend, loading }) {
+  const refs = item.dbPayload?.references || {};
+  const practitioner = refs.practitioner || {};
+  const unsigned = item.dbPayload?.extraction?.unsignedOrderNumbers || [];
+  const [to, setTo] = useState(practitioner.contact_info?.email || practitioner.email || '');
+  const [subject, setSubject] = useState('Signature required for CPO billing');
+  const [body, setBody] = useState(
+    `Hi,\n\nPlease sign the following order document(s): ${unsigned.join(', ') || 'unsigned orders'}.\n\nThank you.`,
+  );
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+        This episode is eligible, but it is not billable because physician signature is missing.
+      </div>
+      <label className="block">
+        <span className="text-xs font-bold uppercase tracking-wide text-slate-500">To</span>
+        <input
+          value={to}
+          onChange={(e) => setTo(e.target.value)}
+          placeholder="physician email address"
+          className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+        />
+      </label>
+      <label className="block">
+        <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Subject</span>
+        <input
+          value={subject}
+          onChange={(e) => setSubject(e.target.value)}
+          className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+        />
+      </label>
+      <label className="block">
+        <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Message</span>
+        <textarea
+          rows={6}
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          className="mt-1 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+        />
+      </label>
+      <button
+        onClick={() => onSend({ recipient: to, subject, notes: body })}
+        disabled={loading}
+        className="inline-flex items-center gap-2 rounded-xl bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {loading ? <Loader2 size={16} className="animate-spin" /> : <Mail size={16} />}
+        {loading ? 'Sending...' : 'Send reminder & continue'}
+      </button>
+    </div>
+  );
+}
+
+function HhahMissingDocumentPanel({ item, onSend, loading }) {
+  const hhah = item.dbPayload?.references?.HHAH || {};
+  const missing = item.dbPayload?.extraction?.missingDocuments || [];
+  const [to, setTo] = useState(hhah.contact_info?.email || hhah.email || '');
+  const [subject, setSubject] = useState('Missing document required for billing');
+  const [body, setBody] = useState(
+    `Hi ${hhah.name || ''},\n\nPlease send the missing document(s): ${missing.join(', ') || '485/F2F document'}.\n\nThank you.`,
+  );
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
+        Patient is not eligible because required billing documents are missing or invalid.
+      </div>
+      <label className="block">
+        <span className="text-xs font-bold uppercase tracking-wide text-slate-500">To</span>
+        <input
+          value={to}
+          onChange={(e) => setTo(e.target.value)}
+          placeholder="HHAH email address"
+          className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-300"
+        />
+      </label>
+      <label className="block">
+        <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Subject</span>
+        <input
+          value={subject}
+          onChange={(e) => setSubject(e.target.value)}
+          className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-300"
+        />
+      </label>
+      <label className="block">
+        <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Message</span>
+        <textarea
+          rows={6}
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          className="mt-1 w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-300"
+        />
+      </label>
+      <button
+        onClick={() => onSend({ recipient: to, subject, notes: body })}
+        disabled={loading}
+        className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {loading ? <Loader2 size={16} className="animate-spin" /> : <Mail size={16} />}
+        {loading ? 'Sending...' : 'Send email & continue'}
+      </button>
+    </div>
+  );
+}
+
+function CpoMinutesPanel({ item, onSave, loading }) {
+  const extraction = item.dbPayload?.extraction || {};
+  const [cpoMin, setCpoMin] = useState(String(extraction.cpoMin && extraction.cpoMin >= 30 ? extraction.cpoMin : 30));
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-xl border border-sky-200 bg-sky-50 p-3 text-sm text-sky-800">
+        Episode is billable, but this CPO month needs at least 30 captured minutes.
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="rounded-xl border border-slate-200 bg-white p-3">
+          <div className="text-xs font-bold uppercase tracking-wide text-slate-400">CPO Month</div>
+          <div className="mt-1 font-bold text-slate-800">{formatUiDate(extraction.cpoMonth)}</div>
+        </div>
+        <label className="block rounded-xl border border-slate-200 bg-white p-3">
+          <span className="text-xs font-bold uppercase tracking-wide text-slate-500">CPO minutes</span>
+          <input
+            type="number"
+            min="30"
+            value={cpoMin}
+            onChange={(event) => setCpoMin(event.target.value)}
+            className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-sky-300"
+          />
+        </label>
+      </div>
+      <button
+        onClick={() => onSave({ cpoMin: Number(cpoMin) || 30 })}
+        disabled={loading}
+        className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {loading ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+        {loading ? 'Saving...' : 'Save CPO minutes'}
+      </button>
+    </div>
+  );
+}
+
 function ActionCard({ item, onComplete }) {
   const [open, setOpen] = useState(false);
   const [notes, setNotes] = useState('');
@@ -334,6 +477,9 @@ function ActionCard({ item, onComplete }) {
   const [loading, setLoading] = useState(false);
   const missingFields = item.dbPayload?.missingFields || [];
   const isMissingUploadEmail = item.taskKind === 'area.sendMissingUploadNotification';
+  const isHhahMissingDocument = item.taskKind === 'billing.sendHhahMissingDocumentEmail';
+  const isPhysicianReminder = item.taskKind === 'billing.sendPhysicianReminder' || item.taskKind === 'signing.emailPhysicianReminder';
+  const isCpoMinutes = item.taskKind === 'billing.addCpoMinutes';
 
   async function handleComplete() {
     setLoading(true);
@@ -348,6 +494,15 @@ function ActionCard({ item, onComplete }) {
     setLoading(true);
     try {
       await onComplete(item, payload.notes, payload);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleCompleteWithPayload(payload) {
+    setLoading(true);
+    try {
+      await onComplete(item, notes, payload);
     } finally {
       setLoading(false);
     }
@@ -375,7 +530,7 @@ function ActionCard({ item, onComplete }) {
             <span className="text-slate-300">|</span>
             <span className="flex items-center gap-1">
               <Clock size={10} />
-              {new Date(item.launchedAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+              {formatUiDateTime(item.launchedAt)}
             </span>
           </div>
         </div>
@@ -390,6 +545,12 @@ function ActionCard({ item, onComplete }) {
         <div className="border-t border-slate-100 bg-slate-50/50 p-4">
           {isMissingUploadEmail ? (
             <MissingUploadEmailPanel item={item} onSend={handleSendEmail} loading={loading} />
+          ) : isHhahMissingDocument ? (
+            <HhahMissingDocumentPanel item={item} onSend={handleSendEmail} loading={loading} />
+          ) : isPhysicianReminder ? (
+            <PhysicianReminderPanel item={item} onSend={handleSendEmail} loading={loading} />
+          ) : isCpoMinutes ? (
+            <CpoMinutesPanel item={item} onSave={(payload) => handleCompleteWithPayload(payload)} loading={loading} />
           ) : (
             <div className="grid xl:grid-cols-[minmax(0,1fr)_520px] gap-4">
               <div className="space-y-3">

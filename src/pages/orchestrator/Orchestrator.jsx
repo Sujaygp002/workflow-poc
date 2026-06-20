@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Activity, RefreshCw, Trash2, Clock } from 'lucide-react';
 import {
   deleteWorkflowRun,
   fetchAreaIntakeStatus,
   fetchWorkflowRuns,
+  runBillingMonitor,
   runAreaIntakeCheck,
 } from '../../lib/workflowApi';
 import {
@@ -15,6 +16,7 @@ import {
   TriggerChainConnector,
   WorkflowFlow,
 } from '../../components/WorkflowDefinitionFlow';
+import { formatUiDateTime } from '../../lib/dateFormat';
 
 // Area intake sub-panel shown inside the wf-area-onboarding run card.
 function AreaIntakeSubPanel({ areas, loadingAreaId, onRunCheck }) {
@@ -110,7 +112,7 @@ function RunCard({ run, onDelete, areas, loadingAreaId, onRunCheck }) {
             <span className="font-mono text-[11px] text-slate-400">{run.workflow_id}</span>
           </div>
           <div className="mt-0.5 text-xs text-slate-500">
-            {run.source_label || '—'} · {new Date(run.created_at).toLocaleString()}
+            {run.source_label || '—'} · {formatUiDateTime(run.created_at)}
           </div>
         </button>
         <div className="ml-auto flex items-center gap-2">
@@ -195,6 +197,8 @@ export default function Orchestrator() {
   const [live, setLive] = useState(true);
   const [lastSync, setLastSync] = useState(null);
   const [checkingAreaId, setCheckingAreaId] = useState(null);
+  const [billingError, setBillingError] = useState(null);
+  const billingRunning = useRef(false);
 
   async function refresh() {
     try {
@@ -247,6 +251,27 @@ export default function Orchestrator() {
     return () => clearInterval(id);
   }, [live]);
 
+  // Trigger 4: billing monitor every 10s while Orchestrator is live.
+  useEffect(() => {
+    if (!live) return undefined;
+    async function tick() {
+      if (document.hidden || billingRunning.current) return;
+      billingRunning.current = true;
+      try {
+        await runBillingMonitor();
+        setBillingError(null);
+        await refresh();
+      } catch (err) {
+        setBillingError(err.message);
+      } finally {
+        billingRunning.current = false;
+      }
+    }
+    tick();
+    const id = setInterval(tick, 10000);
+    return () => clearInterval(id);
+  }, [live]);
+
   const running = runs.filter((r) => r.status === 'running');
   const completed = runs.filter((r) => r.status === 'completed');
   const manualBacklog = runs.reduce((sum, r) => sum + (r.tasks || []).filter((t) => t.status === 'active' && t.actor === 'human').length, 0);
@@ -256,7 +281,8 @@ export default function Orchestrator() {
   const areaRuns = runs.filter((r) => r.workflow_id === 'wf-area-onboarding').sort(sortDesc);
   const wf7Runs = runs.filter((r) => r.workflow_id === 'wf7').sort(sortDesc);
   const signingRuns = runs.filter((r) => r.workflow_id === 'wf-signing').sort(sortDesc);
-  const otherRuns = runs.filter((r) => !['wf-area-onboarding', 'wf7', 'wf-signing'].includes(r.workflow_id)).sort(sortDesc);
+  const billingRuns = runs.filter((r) => r.workflow_id === 'wf-billing-monitor').sort(sortDesc);
+  const otherRuns = runs.filter((r) => !['wf-area-onboarding', 'wf7', 'wf-signing', 'wf-billing-monitor'].includes(r.workflow_id)).sort(sortDesc);
 
   const filterRun = (r) => (
     filter === 'running' ? r.status === 'running'
@@ -267,7 +293,7 @@ export default function Orchestrator() {
   const runCardProps = { onDelete: handleDelete, areas, loadingAreaId: checkingAreaId, onRunCheck: handleRunAreaCheck };
 
   // Flatten filtered runs for simple "All" count chips.
-  const allFiltered = [...areaRuns, ...wf7Runs, ...signingRuns, ...otherRuns].filter(filterRun);
+  const allFiltered = [...areaRuns, ...wf7Runs, ...signingRuns, ...billingRuns, ...otherRuns].filter(filterRun);
 
   return (
     <div className="p-6">
@@ -311,7 +337,9 @@ export default function Orchestrator() {
       {areaError && (
         <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">Area intake error: {areaError}</div>
       )}
-
+      {billingError && (
+        <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">Trigger 4 error: {billingError}</div>
+      )}
       <Legend />
 
       <div className="mb-4 flex gap-2">
@@ -355,16 +383,33 @@ export default function Orchestrator() {
             </div>
           )}
 
-          {/* ── Trigger 3: Document Signing Follow-up ── */}
+          {/* ── Trigger 3: Send To Physician ── */}
           {signingRuns.filter(filterRun).length > 0 && (
             <>
-              <TriggerChainConnector triggerNum={3} label="Document Signing Follow-up" />
+              <TriggerChainConnector triggerNum={3} label="Send To Physician" />
               <div className="space-y-4">
                 {signingRuns.filter(filterRun).map((run) => (
                   <RunCard key={run.id} run={run} {...runCardProps} />
                 ))}
               </div>
             </>
+          )}
+
+          {/* ── Trigger 4: Make Patients Billable ── */}
+          {billingRuns.filter(filterRun).length > 0 && (
+            <div className="mt-8">
+              <div className="mb-3 flex items-center gap-2">
+                <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[11px] font-black uppercase tracking-wide text-amber-700">
+                  Trigger 4 · Make Patients Billable
+                </span>
+                <span className="text-[11px] text-slate-400">runs independently every 10 seconds</span>
+              </div>
+              <div className="space-y-4">
+                {billingRuns.filter(filterRun).map((run) => (
+                  <RunCard key={run.id} run={run} {...runCardProps} />
+                ))}
+              </div>
+            </div>
           )}
 
           {/* ── Other runs (not in the main chain) ── */}

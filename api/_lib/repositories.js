@@ -378,6 +378,13 @@ export async function findOrder(orderNumber) {
   return rows[0] || null;
 }
 
+export async function findOrderById(orderId) {
+  if (!orderId) return null;
+  const sql = getSql();
+  const rows = await sql`SELECT * FROM orders WHERE id = ${orderId} LIMIT 1`;
+  return rows[0] || null;
+}
+
 // Admission is identified by patient + Start of Care.
 export async function findAdmission(patientId, soc) {
   if (!patientId) return null;
@@ -741,34 +748,410 @@ export async function writeOrderBundle(item, patientBundle) {
   return { order: storedOrder, skipped: false };
 }
 
-// ── Episode status (computed, never stored) ──────────────
-// eligible = episode has a 485 + an active F2F (within 6 months of the F2F
-//            order's order_date), even if unsigned.
-// billable = all of the episode's orders (incl. 485) are signed.
-function isSigned(order) {
+// ── Episode / CPO status ─────────────────────────────────
+// eligible = episode has a 485 + an admission-level F2F whose order_date is
+//            within 180 days of the episode EOE, even if unsigned.
+// billable = eligible + all of the episode's orders are signed.
+export function isOrderSigned(order) {
   const s = order.order_status || {};
-  return !!(s.signed === true || s.order_signed_date || s.signedDate || order.signed_date);
+  return !!(
+    s.SignedByPhysician_Status === true
+    || s.SignedByPhysician_Status === 'true'
+    || s.SignedByPhyscianDate
+    // Backward-compatible reads for records created before the new field contract.
+    || s.signed === true
+    || s.order_signed_date
+    || s.signedDate
+    || order.signed_date
+  );
 }
 
 function docTypeOf(order) {
   return String(order.document_type || order.order_type || '').toLowerCase();
 }
 
-export function computeEpisodeStatus(orders = []) {
-  if (!orders.length) return 'none';
-  const has485 = orders.some(o => docTypeOf(o).includes('485'));
-  const f2f = orders.find(o => docTypeOf(o).includes('f2f') || docTypeOf(o).includes('face'));
-  let f2fActive = false;
-  if (f2f && f2f.order_date) {
-    const ageMs = Date.now() - new Date(f2f.order_date).getTime();
-    f2fActive = ageMs >= 0 && ageMs <= 1000 * 60 * 60 * 24 * 183; // ~6 months
+function dayDiff(fromDate, toDate) {
+  // Normalize through dateMs/dateOnly so this works whether the dates arrive as
+  // 'YYYY-MM-DD' strings (Excel/AI payloads) or as Date objects (straight from
+  // the DB driver). Naive `${value}T...` interpolation produced NaN for Date
+  // objects, which silently failed the F2F-within-180-days eligibility check.
+  const from = dateMs(fromDate);
+  const to = dateMs(toDate);
+  if (from === null || to === null) return null;
+  return Math.floor((to - from) / (1000 * 60 * 60 * 24));
+}
+
+export function computeEpisodeAssessment(episode = {}, episodeOrders = [], admissionOrders = episodeOrders) {
+  if (!episodeOrders.length) {
+    return {
+      status: 'started',
+      eligible: false,
+      billable: false,
+      reason: {
+        has485: false,
+        hasF2f: false,
+        f2fWithin180DaysOfEoe: false,
+        allEpisodeOrdersSigned: false,
+        unsignedOrderNumbers: [],
+      },
+    };
   }
-  const eligible = has485 && f2fActive;
-  const allSigned = orders.every(isSigned);
-  const billable = has485 && allSigned;
-  if (billable) return 'billable';
-  if (eligible) return 'eligible';
-  return 'started';
+
+  const has485 = episodeOrders.some((order) => docTypeOf(order).includes('485'));
+  const f2fOrders = admissionOrders.filter((order) => docTypeOf(order).includes('f2f') || docTypeOf(order).includes('face'));
+  const validF2f = f2fOrders.find((order) => {
+    if (!order.order_date || !episode.eoe) return false;
+    const days = dayDiff(order.order_date, episode.eoe);
+    return days !== null && days >= 0 && days <= 180;
+  });
+  const unsignedOrderNumbers = episodeOrders
+    .filter((order) => !isOrderSigned(order))
+    .map((order) => order.order_number)
+    .filter(Boolean);
+  const allEpisodeOrdersSigned = unsignedOrderNumbers.length === 0;
+  const eligible = has485 && !!validF2f;
+  const billable = eligible && allEpisodeOrdersSigned;
+
+  return {
+    status: billable ? 'billable' : eligible ? 'eligible' : 'started',
+    eligible,
+    billable,
+    reason: {
+      has485,
+      hasF2f: f2fOrders.length > 0,
+      f2fWithin180DaysOfEoe: !!validF2f,
+      f2fOrderNumber: validF2f?.order_number || null,
+      episodeEoe: episode.eoe || null,
+      allEpisodeOrdersSigned,
+      unsignedOrderNumbers,
+    },
+  };
+}
+
+export function computeEpisodeStatus(orders = [], episode = {}, admissionOrders = orders) {
+  return computeEpisodeAssessment(episode, orders, admissionOrders).status;
+}
+
+const ADMISSION_ARCHIVE_GAP_DAYS = 90;
+
+function dateOnly(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  const str = String(value).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(str) ? str : null;
+}
+
+function dateMs(value) {
+  const ymd = dateOnly(value);
+  if (!ymd) return null;
+  const time = new Date(`${ymd}T00:00:00.000Z`).getTime();
+  return Number.isNaN(time) ? null : time;
+}
+
+function compareDateAsc(aValue, bValue, aFallback, bFallback) {
+  const aTime = dateMs(aValue);
+  const bTime = dateMs(bValue);
+  if (aTime !== null && bTime !== null) return aTime - bTime;
+  if (aTime !== null) return 1;
+  if (bTime !== null) return -1;
+  return new Date(aFallback || 0).getTime() - new Date(bFallback || 0).getTime();
+}
+
+function compareNewest(a, b) {
+  const aTime = new Date(a.updated_at || a.created_at || 0).getTime();
+  const bTime = new Date(b.updated_at || b.created_at || 0).getTime();
+  return bTime - aTime;
+}
+
+function daysBetween(fromValue, toValue) {
+  const from = dateMs(fromValue);
+  const to = dateMs(toValue);
+  if (from === null || to === null) return null;
+  return Math.floor((to - from) / (1000 * 60 * 60 * 24));
+}
+
+function signedDateOf(order = {}) {
+  const status = order.order_status || {};
+  const raw = status.SignedByPhyscianDate
+    || status.physicianSignedDate
+    || status.order_signed_date
+    || status.signedDate
+    || order.signed_date
+    || null;
+  // Normalize to YYYY-MM-DD so display is consistent whether the value came from
+  // a payload string or a DB Date object.
+  return raw ? (dateOnly(raw) || raw) : null;
+}
+
+function archiveDecisionForAdmission(admission, nextAdmission) {
+  if (!nextAdmission) {
+    return { archived: false, reason: 'latest_admission', gapDays: null };
+  }
+  const gapDays = daysBetween(admission?.eoc, nextAdmission?.soc);
+  if (gapDays === null) {
+    return { archived: false, reason: 'missing_eoc_or_next_soc', gapDays: null };
+  }
+  if (gapDays >= ADMISSION_ARCHIVE_GAP_DAYS) {
+    return { archived: true, reason: 'admission_gap_90_days', gapDays };
+  }
+  return { archived: false, reason: 'admission_gap_under_90_days', gapDays };
+}
+
+function decorateOrder(order, archiveReason = null) {
+  const signed = isOrderSigned(order);
+  return {
+    ...order,
+    signed,
+    signed_status: signed ? 'signed' : 'unsigned',
+    signed_date: signedDateOf(order),
+    archive_reason: archiveReason,
+  };
+}
+
+function splitSignedOrders(orders = []) {
+  return {
+    signed_orders: orders.filter((order) => order.signed),
+    unsigned_orders: orders.filter((order) => !order.signed),
+  };
+}
+
+function buildEpisodeEntry(episode, orders, admissionOrders, cpoMonths, archiveReason = null) {
+  const episodeOrders = orders.map((order) => decorateOrder(order, archiveReason));
+  const assessment = computeEpisodeAssessment(episode, orders, admissionOrders);
+  return {
+    ...episode,
+    orders: episodeOrders,
+    cpoMonths: cpoMonths.filter((month) => month.episode_id === episode.id),
+    status: assessment.status,
+    status_reason: assessment.reason,
+    archive_reason: archiveReason,
+    ...splitSignedOrders(episodeOrders),
+  };
+}
+
+function buildArchivedAdmissionEntry(admission, episodes, orders, cpoMonths, archiveDecision) {
+  const admissionOrders = orders.filter((order) => order.admission_id === admission.id);
+  const archivedEpisodes = episodes.map((episode) => buildEpisodeEntry(
+    episode,
+    orders.filter((order) => order.episode_id === episode.id),
+    admissionOrders,
+    cpoMonths,
+    archiveDecision.reason,
+  ));
+  const episodeOrderIds = new Set(archivedEpisodes.flatMap((episode) => (episode.orders || []).map((order) => order.id)));
+  const archivedAdmissionOrders = admissionOrders
+    .filter((order) => !episodeOrderIds.has(order.id))
+    .map((order) => decorateOrder(order, archiveDecision.reason));
+
+  return {
+    ...admission,
+    archive_reason: archiveDecision.reason,
+    archive_gap_days: archiveDecision.gapDays,
+    episodes: archivedEpisodes,
+    archived_episodes: archivedEpisodes,
+    orders: [...archivedEpisodes.flatMap((episode) => episode.orders || []), ...archivedAdmissionOrders],
+    archived_orders: [...archivedEpisodes.flatMap((episode) => episode.orders || []), ...archivedAdmissionOrders],
+  };
+}
+
+function buildLatestAdmissionEntry(admission, episodes, orders, cpoMonths) {
+  if (!admission) return null;
+  const admissionOrders = orders.filter((order) => order.admission_id === admission.id);
+  const sortedEpisodes = [...episodes].sort((a, b) => compareDateAsc(a.soe, b.soe, a.created_at, b.created_at));
+  const latestEpisodeRaw = sortedEpisodes[sortedEpisodes.length - 1] || null;
+  const archivedEpisodeRaws = sortedEpisodes.slice(0, -1);
+  const episodeArchive = archivedEpisodeRaws.map((episode) => buildEpisodeEntry(
+    episode,
+    orders.filter((order) => order.episode_id === episode.id),
+    admissionOrders,
+    cpoMonths,
+    'older_episode_in_latest_admission',
+  ));
+  const latestEpisode = latestEpisodeRaw
+    ? buildEpisodeEntry(
+        latestEpisodeRaw,
+        orders.filter((order) => order.episode_id === latestEpisodeRaw.id),
+        admissionOrders,
+        cpoMonths,
+      )
+    : null;
+  const latestEpisodeOrderIds = new Set((latestEpisode?.orders || []).map((order) => order.id));
+  const archivedEpisodeOrderIds = new Set(episodeArchive.flatMap((episode) => (episode.orders || []).map((order) => order.id)));
+  const orderArchive = admissionOrders
+    .filter((order) => !latestEpisodeOrderIds.has(order.id))
+    .map((order) => decorateOrder(
+      order,
+      archivedEpisodeOrderIds.has(order.id) ? 'older_episode_in_latest_admission' : 'not_linked_to_latest_episode',
+    ));
+
+  return {
+    ...admission,
+    latest_episode: latestEpisode,
+    episode_archive: episodeArchive,
+    order_archive: orderArchive,
+    signed_orders: latestEpisode?.signed_orders || [],
+    unsigned_orders: latestEpisode?.unsigned_orders || [],
+    episodes: latestEpisode ? [latestEpisode] : [],
+    archived_episodes: episodeArchive,
+  };
+}
+
+function latestAdmissionForRecord(record, admissionsByPatient) {
+  const admissions = [...(admissionsByPatient.get(record.id) || [])]
+    .sort((a, b) => compareDateAsc(a.soc, b.soc, a.created_at, b.created_at));
+  return admissions[admissions.length - 1] || null;
+}
+
+function buildPatientRecordHierarchy(record, grouped) {
+  const admissions = [...(grouped.admissionsByPatient.get(record.id) || [])]
+    .sort((a, b) => compareDateAsc(a.soc, b.soc, a.created_at, b.created_at));
+  const latestAdmissionRaw = admissions[admissions.length - 1] || null;
+  const admissionArchive = [];
+  const priorAdmissionsNotArchived = [];
+
+  for (let index = 0; index < admissions.length - 1; index += 1) {
+    const admission = admissions[index];
+    const nextAdmission = admissions[index + 1];
+    const decision = archiveDecisionForAdmission(admission, nextAdmission);
+    if (decision.archived) {
+      admissionArchive.push(buildArchivedAdmissionEntry(
+        admission,
+        grouped.episodesByAdmission.get(admission.id) || [],
+        grouped.ordersByPatient.get(record.id) || [],
+        grouped.cpoMonths,
+        decision,
+      ));
+    } else {
+      priorAdmissionsNotArchived.push({
+        ...buildLatestAdmissionEntry(
+          admission,
+          grouped.episodesByAdmission.get(admission.id) || [],
+          grouped.ordersByPatient.get(record.id) || [],
+          grouped.cpoMonths,
+        ),
+        not_archived_reason: decision.reason,
+        gap_days: decision.gapDays,
+      });
+    }
+  }
+
+  const latestAdmission = latestAdmissionRaw
+    ? buildLatestAdmissionEntry(
+        latestAdmissionRaw,
+        grouped.episodesByAdmission.get(latestAdmissionRaw.id) || [],
+        grouped.ordersByPatient.get(record.id) || [],
+        grouped.cpoMonths,
+      )
+    : null;
+
+  const latestEpisode = latestAdmission?.latest_episode || null;
+  return {
+    ...record,
+    archive_status: 'current',
+    admission_archive: admissionArchive,
+    prior_admissions_not_archived: priorAdmissionsNotArchived,
+    latest_admission: latestAdmission,
+    episode_archive: latestAdmission?.episode_archive || [],
+    latest_episode: latestEpisode,
+    order_archive: latestAdmission?.order_archive || [],
+    signed_orders: latestAdmission?.signed_orders || [],
+    unsigned_orders: latestAdmission?.unsigned_orders || [],
+  };
+}
+
+function patientRecordArchiveDecision(record, nextRecord, admissionsByPatient) {
+  if (!nextRecord) return { archived: false, reason: 'current_patient_record', gapDays: null };
+  const latestAdmission = latestAdmissionForRecord(record, admissionsByPatient);
+  const nextLatestAdmission = latestAdmissionForRecord(nextRecord, admissionsByPatient);
+  const gapDays = daysBetween(latestAdmission?.eoc, nextLatestAdmission?.soc);
+  if (gapDays === null) return { archived: false, reason: 'missing_latest_eoc_or_next_soc', gapDays: null };
+  if (gapDays >= ADMISSION_ARCHIVE_GAP_DAYS) return { archived: true, reason: 'patient_record_gap_90_days', gapDays };
+  return { archived: false, reason: 'patient_record_gap_under_90_days', gapDays };
+}
+
+function buildUnitHierarchy({ unit, patientRecords, admissions, episodes, orders, cpoMonths, selectedPatientId = null }) {
+  const admissionsByPatient = new Map();
+  for (const admission of admissions) {
+    const list = admissionsByPatient.get(admission.patient_id) || [];
+    list.push(admission);
+    admissionsByPatient.set(admission.patient_id, list);
+  }
+
+  const episodesByAdmission = new Map();
+  for (const episode of episodes) {
+    const list = episodesByAdmission.get(episode.admission_id) || [];
+    list.push(episode);
+    episodesByAdmission.set(episode.admission_id, list);
+  }
+
+  const ordersByPatient = new Map();
+  for (const order of orders) {
+    const list = ordersByPatient.get(order.patient_id) || [];
+    list.push(order);
+    ordersByPatient.set(order.patient_id, list);
+  }
+
+  const grouped = { admissionsByPatient, episodesByAdmission, ordersByPatient, cpoMonths };
+  const sortedRecords = [...patientRecords].sort(compareNewest);
+  const currentRecordRaw = sortedRecords[0] || null;
+  const currentPatientRecord = currentRecordRaw ? buildPatientRecordHierarchy(currentRecordRaw, grouped) : null;
+  const patientRecordArchive = [];
+  const priorPatientRecordsNotArchived = [];
+
+  for (let index = 1; index < sortedRecords.length; index += 1) {
+    const record = sortedRecords[index];
+    const nextRecord = sortedRecords[index - 1];
+    const decision = patientRecordArchiveDecision(record, nextRecord, admissionsByPatient);
+    const entry = {
+      ...buildPatientRecordHierarchy(record, grouped),
+      archive_reason: decision.reason,
+      archive_gap_days: decision.gapDays,
+    };
+    if (decision.archived) {
+      patientRecordArchive.push({
+        ...entry,
+        archive_status: 'archived',
+        archived_admissions: [
+          ...(entry.admission_archive || []),
+          ...(entry.prior_admissions_not_archived || []),
+          ...(entry.latest_admission ? [entry.latest_admission] : []),
+        ],
+      });
+    } else {
+      priorPatientRecordsNotArchived.push({ ...entry, archive_status: 'not_archived', not_archived_reason: decision.reason });
+    }
+  }
+
+  const selectedPatientRecord = selectedPatientId
+    ? sortedRecords.find((record) => record.id === selectedPatientId) || currentPatientRecord
+    : currentPatientRecord;
+
+  return {
+    unit,
+    selected_patient_id: selectedPatientId || currentPatientRecord?.id || null,
+    current_patient_record: currentPatientRecord,
+    selected_patient_record: selectedPatientRecord?.id === currentPatientRecord?.id
+      ? currentPatientRecord
+      : selectedPatientRecord
+        ? buildPatientRecordHierarchy(selectedPatientRecord, grouped)
+        : null,
+    patient_record_archive: patientRecordArchive,
+    prior_patient_records_not_archived: priorPatientRecordsNotArchived,
+    patient_records: sortedRecords,
+    admission_archive: currentPatientRecord?.admission_archive || [],
+    prior_admissions_not_archived: currentPatientRecord?.prior_admissions_not_archived || [],
+    latest_admission: currentPatientRecord?.latest_admission || null,
+    episode_archive: currentPatientRecord?.episode_archive || [],
+    latest_episode: currentPatientRecord?.latest_episode || null,
+    order_archive: currentPatientRecord?.order_archive || [],
+    signed_orders: currentPatientRecord?.signed_orders || [],
+    unsigned_orders: currentPatientRecord?.unsigned_orders || [],
+    archive_rule: {
+      type: 'admission_gap',
+      gapDays: ADMISSION_ARCHIVE_GAP_DAYS,
+      description: 'Older admissions archive only when the next admission starts at least 90 days after the old admission ended.',
+    },
+  };
 }
 
 export async function insertAiExtraction({ itemId, documentId, model, status, inputSummary, outputData, errorMessage }) {
@@ -794,22 +1177,25 @@ export async function listPatients() {
   const rows = await sql`
     SELECT
       p.id,
-      p.name,
-      p.dob,
-      p.mrn,
-      p.sex,
+      COALESCE(pu.name, p.name) AS name,
+      COALESCE(pu.dob, p.dob) AS dob,
+      COALESCE(pu.mrn, p.mrn) AS mrn,
+      COALESCE(pu.sex, p.sex) AS sex,
       p.hhah_name,
       p.pg_name,
       p.unit_id,
+      p.latest_episode_status,
+      p.latest_episode_status_reason,
       p.updated_at,
       COUNT(DISTINCT a.id)::int AS admission_count,
       COUNT(DISTINCT e.id)::int AS episode_count,
       COUNT(DISTINCT o.id)::int AS order_count
     FROM patients p
+    LEFT JOIN patient_units pu ON pu.id = p.unit_id
     LEFT JOIN patient_admissions a ON a.patient_id = p.id
     LEFT JOIN patient_episodes e ON e.admission_id = a.id
     LEFT JOIN orders o ON o.patient_id = p.id
-    GROUP BY p.id
+    GROUP BY p.id, pu.name, pu.dob, pu.mrn, pu.sex
     ORDER BY p.updated_at DESC, p.name
     LIMIT 200
   `;
@@ -818,7 +1204,7 @@ export async function listPatients() {
   const ids = rows.map(r => r.id);
   if (!ids.length) return rows;
   const latestEpisodes = await sql`
-    SELECT DISTINCT ON (a.patient_id) a.patient_id, e.id AS episode_id
+    SELECT DISTINCT ON (a.patient_id) a.patient_id, e.id AS episode_id, e.soe, e.eoe, e.admission_id
     FROM patient_episodes e
     JOIN patient_admissions a ON a.id = e.admission_id
     WHERE a.patient_id = ANY(${ids})
@@ -826,7 +1212,11 @@ export async function listPatients() {
   `;
   const episodeIds = latestEpisodes.map(r => r.episode_id);
   const episodeOrders = episodeIds.length
-    ? await sql`SELECT episode_id, order_type, document_type, order_date, order_status FROM orders WHERE episode_id = ANY(${episodeIds})`
+    ? await sql`SELECT id, admission_id, episode_id, order_number, order_type, document_type, order_date, order_status FROM orders WHERE episode_id = ANY(${episodeIds})`
+    : [];
+  const admissionIds = [...new Set(episodeOrders.map((order) => order.admission_id).filter(Boolean))];
+  const admissionOrders = admissionIds.length
+    ? await sql`SELECT id, admission_id, episode_id, order_number, order_type, document_type, order_date, order_status FROM orders WHERE admission_id = ANY(${admissionIds})`
     : [];
   const ordersByEpisode = new Map();
   for (const o of episodeOrders) {
@@ -836,21 +1226,133 @@ export async function listPatients() {
   }
   const statusByPatient = new Map();
   for (const le of latestEpisodes) {
-    statusByPatient.set(le.patient_id, computeEpisodeStatus(ordersByEpisode.get(le.episode_id) || []));
+    const eo = ordersByEpisode.get(le.episode_id) || [];
+    const ao = admissionOrders.filter((order) => order.admission_id === le.admission_id);
+    statusByPatient.set(le.patient_id, computeEpisodeStatus(eo, le, ao));
   }
-  return rows.map(r => ({ ...r, latest_episode_status: statusByPatient.get(r.id) || 'none' }));
+  return rows.map(r => ({ ...r, latest_episode_status: statusByPatient.get(r.id) || r.latest_episode_status || 'none' }));
+}
+
+export async function listPatientUnits() {
+  const sql = getSql();
+  const units = await sql`
+    SELECT
+      pu.id,
+      pu.unit_key,
+      pu.name,
+      pu.dob,
+      pu.mrn,
+      pu.sex,
+      pu.updated_at,
+      COUNT(DISTINCT p.id)::int AS patient_record_count,
+      COUNT(DISTINCT a.id)::int AS admission_count,
+      COUNT(DISTINCT e.id)::int AS episode_count,
+      COUNT(DISTINCT o.id)::int AS order_count
+    FROM patient_units pu
+    LEFT JOIN patients p ON p.unit_id = pu.id
+    LEFT JOIN patient_admissions a ON a.patient_id = p.id
+    LEFT JOIN patient_episodes e ON e.admission_id = a.id
+    LEFT JOIN orders o ON o.patient_id = p.id
+    GROUP BY pu.id
+    ORDER BY pu.updated_at DESC, pu.name
+    LIMIT 200
+  `;
+  const unitIds = units.map((unit) => unit.id);
+  if (!unitIds.length) return [];
+
+  const records = await sql`
+    SELECT
+      p.id,
+      p.unit_id,
+      p.hhah_name,
+      p.pg_name,
+      p.latest_episode_status,
+      p.latest_episode_status_reason,
+      p.created_at,
+      p.updated_at,
+      h.name AS agency_name,
+      pg.name AS physician_group_name
+    FROM patients p
+    LEFT JOIN home_health_agencies h ON h.id = p.agency_id
+    LEFT JOIN physician_groups pg ON pg.id = p.pg_id
+    WHERE p.unit_id = ANY(${unitIds})
+    ORDER BY p.updated_at DESC, p.created_at DESC
+  `;
+  const recordsByUnit = new Map();
+  for (const record of records) {
+    const list = recordsByUnit.get(record.unit_id) || [];
+    list.push(record);
+    recordsByUnit.set(record.unit_id, list);
+  }
+
+  return units.map((unit) => {
+    const unitRecords = (recordsByUnit.get(unit.id) || []).sort(compareNewest);
+    const current = unitRecords[0] || null;
+    return {
+      ...unit,
+      id: current?.id || unit.id,
+      unit_id: unit.id,
+      patient_unit_id: unit.id,
+      current_patient_id: current?.id || null,
+      current_hhah_name: current?.agency_name || current?.hhah_name || null,
+      current_pg_name: current?.physician_group_name || current?.pg_name || null,
+      latest_episode_status: current?.latest_episode_status || 'none',
+      latest_episode_status_reason: current?.latest_episode_status_reason || {},
+      archived_patient_record_count: Math.max(0, unitRecords.length - 1),
+      archive_status: current ? 'current' : 'empty',
+    };
+  });
 }
 
 export async function getPatientTree(patientId) {
   const sql = getSql();
   const patients = await sql`
-    SELECT *
-    FROM patients
-    WHERE id = ${patientId}
+    SELECT
+      p.*,
+      COALESCE(pu.name, p.name) AS name,
+      COALESCE(pu.dob, p.dob) AS dob,
+      COALESCE(pu.mrn, p.mrn) AS mrn,
+      COALESCE(pu.sex, p.sex) AS sex,
+      pu.id AS patient_unit_id,
+      pu.unit_key,
+      pu.name AS unit_name,
+      pu.dob AS unit_dob,
+      pu.mrn AS unit_mrn,
+      pu.sex AS unit_sex
+    FROM patients p
+    LEFT JOIN patient_units pu ON pu.id = p.unit_id
+    WHERE p.id = ${patientId}
     LIMIT 1
   `;
   const patient = patients[0];
   if (!patient) return null;
+
+  const unit = {
+    id: patient.patient_unit_id || patient.unit_id,
+    unit_key: patient.unit_key,
+    name: patient.unit_name || patient.name,
+    dob: patient.unit_dob || patient.dob,
+    mrn: patient.unit_mrn || patient.mrn,
+    sex: patient.unit_sex || patient.sex,
+  };
+
+  const patientRecords = await sql`
+    SELECT
+      p.*,
+      COALESCE(pu.name, p.name) AS name,
+      COALESCE(pu.dob, p.dob) AS dob,
+      COALESCE(pu.mrn, p.mrn) AS mrn,
+      COALESCE(pu.sex, p.sex) AS sex,
+      h.name AS agency_name,
+      pg.name AS physician_group_name
+    FROM patients p
+    LEFT JOIN patient_units pu ON pu.id = p.unit_id
+    LEFT JOIN home_health_agencies h ON h.id = p.agency_id
+    LEFT JOIN physician_groups pg ON pg.id = p.pg_id
+    WHERE p.unit_id = ${patient.unit_id}
+    ORDER BY p.updated_at DESC, p.created_at DESC
+  `;
+  const patientIds = patientRecords.map((record) => record.id);
 
   const admissions = await sql`
     SELECT
@@ -863,17 +1365,19 @@ export async function getPatientTree(patientId) {
     LEFT JOIN home_health_agencies h ON h.id = a.agency_id
     LEFT JOIN physician_groups pg ON pg.id = a.pg_id
     LEFT JOIN practitioners pr ON pr.id = a.care_provider_id
-    WHERE a.patient_id = ${patientId}
+    WHERE a.patient_id = ANY(${patientIds})
     ORDER BY a.soc NULLS LAST, a.created_at
   `;
 
-  const episodes = await sql`
-    SELECT e.*
-    FROM patient_episodes e
-    JOIN patient_admissions a ON a.id = e.admission_id
-    WHERE a.patient_id = ${patientId}
-    ORDER BY e.soe NULLS LAST, e.created_at
-  `;
+  const admissionIds = admissions.map((admission) => admission.id);
+  const episodes = admissionIds.length
+    ? await sql`
+        SELECT e.*
+        FROM patient_episodes e
+        WHERE e.admission_id = ANY(${admissionIds})
+        ORDER BY e.soe NULLS LAST, e.created_at
+      `
+    : [];
 
   const orders = await sql`
     SELECT
@@ -881,38 +1385,97 @@ export async function getPatientTree(patientId) {
       h.name AS agency_name,
       pg.name AS pg_name,
       pr.physician_name AS billing_provider_name,
-      pr.npi_digits AS billing_provider_npi
+      pr.npi_digits AS billing_provider_npi,
+      d.file_name AS pdf_file_name,
+      d.blob_url AS pdf_blob_url
     FROM orders o
     LEFT JOIN home_health_agencies h ON h.id = o.agency_id
     LEFT JOIN physician_groups pg ON pg.id = o.pg_id
     LEFT JOIN practitioners pr ON pr.id = o.billing_provider_id
-    WHERE o.patient_id = ${patientId}
+    LEFT JOIN LATERAL (
+      SELECT file_name, blob_url
+      FROM uploaded_documents
+      WHERE lower(regexp_replace(file_name, '\\.pdf$', '', 'i')) = lower(o.order_number)
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) d ON true
+    WHERE o.patient_id = ANY(${patientIds})
     ORDER BY o.order_date NULLS LAST, o.created_at
   `;
 
+  const cpoMonths = episodes.length
+    ? await sql`
+        SELECT *
+        FROM cpo_months
+        WHERE episode_id = ANY(${episodes.map((episode) => episode.id)})
+        ORDER BY cpo_month
+      `
+    : [];
+
+  const unitHierarchy = buildUnitHierarchy({
+    unit,
+    patientRecords,
+    admissions,
+    episodes,
+    orders,
+    cpoMonths,
+    selectedPatientId: patientId,
+  });
+
+  const selectedAdmissions = admissions.filter((admission) => admission.patient_id === patientId);
+  const selectedOrders = orders.filter((order) => order.patient_id === patientId);
+  const selectedAdmissionIds = new Set(selectedAdmissions.map((admission) => admission.id));
+  const selectedEpisodes = episodes.filter((episode) => selectedAdmissionIds.has(episode.admission_id));
   const episodesByAdmission = new Map();
-  for (const episode of episodes) {
-    const episodeOrders = orders.filter((order) => order.episode_id === episode.id);
-    const entry = { ...episode, orders: episodeOrders, status: computeEpisodeStatus(episodeOrders) };
+  for (const episode of selectedEpisodes) {
+    const episodeOrders = selectedOrders.filter((order) => order.episode_id === episode.id);
+    const admissionOrders = selectedOrders.filter((order) => order.admission_id === episode.admission_id);
+    const assessment = computeEpisodeAssessment(episode, episodeOrders, admissionOrders);
+    const entry = {
+      ...episode,
+      orders: episodeOrders.map((order) => decorateOrder(order)),
+      cpoMonths: cpoMonths.filter((month) => month.episode_id === episode.id),
+      status: assessment.status,
+      status_reason: assessment.reason,
+    };
     const list = episodesByAdmission.get(episode.admission_id) || [];
     list.push(entry);
     episodesByAdmission.set(episode.admission_id, list);
   }
 
   // Latest episode = last by soe order; surface its computed status on the patient.
-  const latestEpisode = episodes.length
-    ? { ...episodes[episodes.length - 1], status: computeEpisodeStatus(orders.filter(o => o.episode_id === episodes[episodes.length - 1].id)) }
+  const latestEpisode = selectedEpisodes.length
+    ? {
+        ...selectedEpisodes[selectedEpisodes.length - 1],
+        status: computeEpisodeAssessment(
+          selectedEpisodes[selectedEpisodes.length - 1],
+          selectedOrders.filter(o => o.episode_id === selectedEpisodes[selectedEpisodes.length - 1].id),
+          selectedOrders.filter(o => o.admission_id === selectedEpisodes[selectedEpisodes.length - 1].admission_id),
+        ).status,
+      }
     : null;
 
-  const ordersWithoutEpisode = orders.filter((order) => !order.episode_id);
+  const ordersWithoutEpisode = selectedOrders.filter((order) => !order.episode_id).map((order) => decorateOrder(order));
   return {
     patient: { ...patient, latest_episode_status: latestEpisode?.status || 'none' },
-    admissions: admissions.map((admission) => ({
+    admissions: selectedAdmissions.map((admission) => ({
       ...admission,
       episodes: episodesByAdmission.get(admission.id) || [],
-      orders: orders.filter((order) => order.admission_id === admission.id && !order.episode_id),
+      orders: selectedOrders.filter((order) => order.admission_id === admission.id && !order.episode_id).map((order) => decorateOrder(order)),
     })),
     ordersWithoutEpisode,
+    unit,
+    unitHierarchy,
+    current_patient_record: unitHierarchy.current_patient_record,
+    patient_record_archive: unitHierarchy.patient_record_archive,
+    admission_archive: unitHierarchy.admission_archive,
+    prior_admissions_not_archived: unitHierarchy.prior_admissions_not_archived,
+    latest_admission: unitHierarchy.latest_admission,
+    episode_archive: unitHierarchy.episode_archive,
+    latest_episode: unitHierarchy.latest_episode,
+    order_archive: unitHierarchy.order_archive,
+    signed_orders: unitHierarchy.signed_orders,
+    unsigned_orders: unitHierarchy.unsigned_orders,
   };
 }
 
@@ -921,16 +1484,20 @@ export async function listOrders() {
   const rows = await sql`
     SELECT
       o.*,
-      p.name AS patient_name,
-      p.mrn AS patient_mrn,
+      COALESCE(pu.name, p.name) AS patient_name,
+      COALESCE(pu.mrn, p.mrn) AS patient_mrn,
       h.name AS agency_name,
       pg.name AS pg_name,
       pr.physician_name AS billing_provider_name,
       pr.npi_digits AS billing_provider_npi,
+      pe.soe AS episode_soe,
+      pe.eoe AS episode_eoe,
       d.file_name AS pdf_file_name,
       d.blob_url AS pdf_blob_url
     FROM orders o
     LEFT JOIN patients p ON p.id = o.patient_id
+    LEFT JOIN patient_units pu ON pu.id = p.unit_id
+    LEFT JOIN patient_episodes pe ON pe.id = o.episode_id
     LEFT JOIN home_health_agencies h ON h.id = o.agency_id
     LEFT JOIN physician_groups pg ON pg.id = o.pg_id
     LEFT JOIN practitioners pr ON pr.id = o.billing_provider_id
@@ -949,10 +1516,18 @@ export async function listOrders() {
   if (!episodeIds.length) return rows.map((row) => ({ ...row, episode_status: 'none' }));
 
   const episodeOrders = await sql`
-    SELECT episode_id, order_type, document_type, order_date, order_status
+    SELECT id, admission_id, episode_id, order_number, order_type, document_type, order_date, order_status
     FROM orders
     WHERE episode_id = ANY(${episodeIds})
   `;
+  const admissionIds = [...new Set(episodeOrders.map((order) => order.admission_id).filter(Boolean))];
+  const admissionOrders = admissionIds.length
+    ? await sql`
+        SELECT id, admission_id, episode_id, order_number, order_type, document_type, order_date, order_status
+        FROM orders
+        WHERE admission_id = ANY(${admissionIds})
+      `
+    : [];
   const ordersByEpisode = new Map();
   for (const order of episodeOrders) {
     const list = ordersByEpisode.get(order.episode_id) || [];
@@ -962,8 +1537,291 @@ export async function listOrders() {
 
   return rows.map((row) => ({
     ...row,
-    episode_status: row.episode_id ? computeEpisodeStatus(ordersByEpisode.get(row.episode_id) || []) : 'none',
+    episode_status: row.episode_id
+      ? computeEpisodeStatus(
+          ordersByEpisode.get(row.episode_id) || [],
+          { ...row, soe: row.episode_soe, eoe: row.episode_eoe },
+          admissionOrders.filter((order) => order.admission_id === row.admission_id),
+        )
+      : 'none',
   }));
+}
+
+function todayYmd() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+export async function markOrderSentToPhysician(orderId, date = todayYmd()) {
+  const sql = getSql();
+  const rows = await sql`
+    UPDATE orders
+    SET order_status = order_status || ${await jsonParam({
+      SentToPhysicianDate: date,
+      SendToPhysician_Status: true,
+    })}::jsonb,
+        updated_at = now()
+    WHERE id = ${orderId}
+    RETURNING *
+  `;
+  return rows[0] || null;
+}
+
+export async function markOrderSignedByPhysician(orderId, date = todayYmd()) {
+  const sql = getSql();
+  const rows = await sql`
+    UPDATE orders
+    SET order_status = order_status || ${await jsonParam({
+      SignedByPhyscianDate: date,
+      SignedByPhysician_Status: true,
+    })}::jsonb,
+        updated_at = now()
+    WHERE id = ${orderId}
+    RETURNING *
+  `;
+  return rows[0] || null;
+}
+
+export async function listPgUnsignedOrders(pgId = null) {
+  const sql = getSql();
+  return sql`
+    SELECT
+      o.*,
+      COALESCE(pu.name, p.name) AS patient_name,
+      COALESCE(pu.mrn, p.mrn) AS patient_mrn,
+      h.name AS agency_name,
+      pg.name AS pg_name,
+      pr.physician_name AS billing_provider_name,
+      pr.npi_digits AS billing_provider_npi,
+      d.file_name AS pdf_file_name,
+      d.blob_url AS pdf_blob_url
+    FROM orders o
+    LEFT JOIN patients p ON p.id = o.patient_id
+    LEFT JOIN patient_units pu ON pu.id = p.unit_id
+    LEFT JOIN home_health_agencies h ON h.id = o.agency_id
+    LEFT JOIN physician_groups pg ON pg.id = o.pg_id
+    LEFT JOIN practitioners pr ON pr.id = o.billing_provider_id
+    LEFT JOIN LATERAL (
+      SELECT file_name, blob_url
+      FROM uploaded_documents
+      WHERE lower(regexp_replace(file_name, '\\.pdf$', '', 'i')) = lower(o.order_number)
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) d ON true
+    WHERE (${pgId}::uuid IS NULL OR o.pg_id = ${pgId})
+      AND (o.order_status->>'SendToPhysician_Status')::boolean IS TRUE
+      AND COALESCE((o.order_status->>'SignedByPhysician_Status')::boolean, false) IS FALSE
+    ORDER BY o.updated_at DESC, o.order_date DESC NULLS LAST
+    LIMIT 250
+  `;
+}
+
+export async function bulkSignOrders({ orderIds = [], pgId = null, date = todayYmd() }) {
+  const ids = [...new Set(orderIds.filter(Boolean))];
+  if (!ids.length) return { updated: [], skipped: [] };
+  const sql = getSql();
+  const rows = await sql`
+    UPDATE orders
+    SET order_status = order_status || ${await jsonParam({
+      SignedByPhyscianDate: date,
+      SignedByPhysician_Status: true,
+    })}::jsonb,
+        updated_at = now()
+    WHERE id = ANY(${ids})
+      AND (${pgId}::uuid IS NULL OR pg_id = ${pgId})
+      AND (order_status->>'SendToPhysician_Status')::boolean IS TRUE
+      AND COALESCE((order_status->>'SignedByPhysician_Status')::boolean, false) IS FALSE
+    RETURNING *
+  `;
+  const updatedIds = new Set(rows.map((row) => row.id));
+  return {
+    updated: rows,
+    skipped: ids.filter((id) => !updatedIds.has(id)),
+  };
+}
+
+function parseDateOnly(value) {
+  if (!value) return null;
+  const parsed = new Date(`${String(value).slice(0, 10)}T00:00:00.000Z`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function monthStart(date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+}
+
+function addMonths(date, count) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + count, 1));
+}
+
+function cpoMonthDatesForEpisode(episode) {
+  const start = parseDateOnly(episode.soe);
+  const end = parseDateOnly(episode.eoe);
+  if (!start || !end || end <= start) return [];
+  const terminalMonth = monthStart(end);
+  const exclusiveEnd = end.getUTCDate() === 1 ? terminalMonth : addMonths(terminalMonth, 1);
+  const months = [];
+  for (let cursor = monthStart(start); cursor < exclusiveEnd; cursor = addMonths(cursor, 1)) {
+    months.push(cursor.toISOString().slice(0, 10));
+  }
+  return months;
+}
+
+function cpoStatusForMonth(cpoMonth, episodeStatus) {
+  const hasMinutes = Number(cpoMonth.cpo_min || 0) >= 30;
+  const episodeBillable = episodeStatus === 'billable';
+  return {
+    status: episodeBillable && hasMinutes ? 'billable' : 'not_billable',
+    reason: {
+      episodeBillable,
+      cpoMin: Number(cpoMonth.cpo_min || 0),
+      cpoMinutesCaptured: hasMinutes,
+    },
+  };
+}
+
+export async function updateCpoMinutes({ cpoMonthId, cpoMin = 30 }) {
+  const sql = getSql();
+  const current = (await sql`
+    SELECT cm.*, e.status AS episode_status
+    FROM cpo_months cm
+    JOIN patient_episodes e ON e.id = cm.episode_id
+    WHERE cm.id = ${cpoMonthId}
+    LIMIT 1
+  `)[0];
+  if (!current) throw new Error('CPO month not found');
+  const next = cpoStatusForMonth({ ...current, cpo_min: cpoMin }, current.episode_status);
+  const rows = await sql`
+    UPDATE cpo_months
+    SET cpo_min = ${Number(cpoMin) || 0},
+        status = ${next.status},
+        reason = ${await jsonParam(next.reason)}::jsonb,
+        updated_at = now()
+    WHERE id = ${cpoMonthId}
+    RETURNING *
+  `;
+  return rows[0];
+}
+
+export async function runBillingMonitorPass() {
+  const sql = getSql();
+  const episodes = await sql`
+    SELECT e.*, a.patient_id, a.agency_id, h.name AS agency_name, h.contact_info AS agency_contact_info
+    FROM patient_episodes e
+    JOIN patient_admissions a ON a.id = e.admission_id
+    LEFT JOIN home_health_agencies h ON h.id = a.agency_id
+    ORDER BY e.updated_at DESC
+    LIMIT 500
+  `;
+  const episodeIds = episodes.map((episode) => episode.id);
+  const admissionIds = [...new Set(episodes.map((episode) => episode.admission_id).filter(Boolean))];
+  const orders = episodeIds.length
+    ? await sql`
+        SELECT id, admission_id, episode_id, order_number, order_type, document_type, order_date, order_status, billing_provider_id
+        FROM orders
+        WHERE episode_id = ANY(${episodeIds}) OR admission_id = ANY(${admissionIds})
+      `
+    : [];
+
+  const issues = { missingDocuments: [], physicianReminders: [], cpoMinutes: [] };
+  const updatedEpisodes = [];
+  const updatedCpoMonths = [];
+
+  for (const episode of episodes) {
+    const episodeOrders = orders.filter((order) => order.episode_id === episode.id);
+    const admissionOrders = orders.filter((order) => order.admission_id === episode.admission_id);
+    const assessment = computeEpisodeAssessment(episode, episodeOrders, admissionOrders);
+    const updatedEpisode = (await sql`
+      UPDATE patient_episodes
+      SET status = ${assessment.status},
+          status_reason = ${await jsonParam(assessment.reason)}::jsonb,
+          updated_at = now()
+      WHERE id = ${episode.id}
+      RETURNING *
+    `)[0];
+    updatedEpisodes.push(updatedEpisode);
+
+    for (const cpoMonth of cpoMonthDatesForEpisode(episode)) {
+      await sql`
+        INSERT INTO cpo_months (episode_id, cpo_month)
+        VALUES (${episode.id}, ${cpoMonth})
+        ON CONFLICT (episode_id, cpo_month) DO NOTHING
+      `;
+    }
+
+    const cpoRows = await sql`
+      SELECT *
+      FROM cpo_months
+      WHERE episode_id = ${episode.id}
+      ORDER BY cpo_month
+    `;
+    for (const cpoMonth of cpoRows) {
+      const next = cpoStatusForMonth(cpoMonth, assessment.status);
+      const updated = (await sql`
+        UPDATE cpo_months
+        SET status = ${next.status},
+            reason = ${await jsonParam(next.reason)}::jsonb,
+            updated_at = now()
+        WHERE id = ${cpoMonth.id}
+        RETURNING *
+      `)[0];
+      updatedCpoMonths.push(updated);
+      if (assessment.billable && Number(updated.cpo_min || 0) < 30) {
+        issues.cpoMinutes.push({ episode: updatedEpisode, cpoMonth: updated });
+      }
+    }
+
+    if (!assessment.eligible) {
+      const missing = [];
+      if (!assessment.reason.has485) missing.push('485 cert/recert');
+      if (!assessment.reason.hasF2f || !assessment.reason.f2fWithin180DaysOfEoe) missing.push('valid F2F');
+      issues.missingDocuments.push({
+        episode: updatedEpisode,
+        missingDocuments: missing,
+        hhah: {
+          id: episode.agency_id,
+          name: episode.agency_name,
+          contact_info: episode.agency_contact_info || {},
+        },
+        reason: assessment.reason,
+      });
+    } else if (!assessment.billable && assessment.reason.unsignedOrderNumbers.length > 0) {
+      issues.physicianReminders.push({
+        episode: updatedEpisode,
+        unsignedOrderNumbers: assessment.reason.unsignedOrderNumbers,
+        orders: episodeOrders.filter((order) => !isOrderSigned(order)),
+      });
+    }
+  }
+
+  const patientIds = [...new Set(episodes.map((episode) => episode.patient_id).filter(Boolean))];
+  const updatedPatients = [];
+  for (const patientId of patientIds) {
+    const latest = (await sql`
+      SELECT e.*
+      FROM patient_episodes e
+      JOIN patient_admissions a ON a.id = e.admission_id
+      WHERE a.patient_id = ${patientId}
+      ORDER BY e.soe DESC NULLS LAST, e.created_at DESC
+      LIMIT 1
+    `)[0];
+    if (!latest) continue;
+    const row = (await sql`
+      UPDATE patients
+      SET latest_episode_status = ${latest.status || 'none'},
+          latest_episode_status_reason = ${await jsonParam(latest.status_reason || {})}::jsonb,
+          updated_at = now()
+      WHERE id = ${patientId}
+      RETURNING id, latest_episode_status, latest_episode_status_reason
+    `)[0];
+    updatedPatients.push(row);
+  }
+
+  return {
+    updatedEpisodes,
+    updatedPatients,
+    updatedCpoMonths,
+    issues,
+  };
 }
 
 export async function listReferenceData() {

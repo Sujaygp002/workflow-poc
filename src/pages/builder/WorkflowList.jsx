@@ -15,12 +15,14 @@ const TRIGGER_META = {
   'wf-area-onboarding': { num: 1, color: 'violet' },
   'wf7':                { num: 2, color: 'sky' },
   'wf-signing':         { num: 3, color: 'emerald' },
+  'wf-billing-monitor': { num: 4, color: 'amber' },
 };
 
 const TRIGGER_COLOR = {
   violet:  { badge: 'bg-violet-100 text-violet-700 border-violet-200', ring: 'border-violet-200' },
   sky:     { badge: 'bg-sky-100 text-sky-700 border-sky-200',          ring: 'border-sky-200' },
   emerald: { badge: 'bg-emerald-100 text-emerald-700 border-emerald-200', ring: 'border-emerald-200' },
+  amber:   { badge: 'bg-amber-100 text-amber-700 border-amber-200',    ring: 'border-amber-200' },
 };
 
 function WorkflowCard({ wf }) {
@@ -87,10 +89,11 @@ function WorkflowCard({ wf }) {
 
 // Chain order for the Workflows page.
 // Trigger 1 (area monitor) is NOT chained to Trigger 2 — it runs independently
-// and only notifies HHAHs. Trigger 2 → Trigger 3 remains a real chain.
+// and only notifies HHAHs. Trigger 4 is also independent and runs every 10s.
 const CHAIN_ORDER = ['wf-area-onboarding', 'wf7', 'wf-signing'];
+const INDEPENDENT_ORDER = ['wf-billing-monitor'];
 const CHAIN_CONNECTOR = {
-  'wf-signing': { triggerNum: 3, label: 'Document Signing Follow-up' },
+  'wf-signing': { triggerNum: 3, label: 'Send To Physician' },
 };
 // Workflows that begin a new standalone chain (shown with a section divider, not a connector).
 const STANDALONE_HEADER = {
@@ -120,7 +123,9 @@ export default function WorkflowList() {
 
   const byId = Object.fromEntries(workflows.map((wf) => [wf.id, wf]));
   const chained = CHAIN_ORDER.map((id) => byId[id]).filter(Boolean);
-  const extras = workflows.filter((wf) => !CHAIN_ORDER.includes(wf.id));
+  const independent = INDEPENDENT_ORDER.map((id) => byId[id]).filter(Boolean);
+  const visibleWorkflowIds = new Set([...CHAIN_ORDER, ...INDEPENDENT_ORDER]);
+  const extras = workflows.filter((wf) => !visibleWorkflowIds.has(wf.id));
 
   return (
     <div className="p-6">
@@ -147,7 +152,7 @@ export default function WorkflowList() {
         </div>
       ) : (
         <div>
-          {/* Trigger 1 standalone · Trigger 2 → Trigger 3 chain */}
+          {/* Trigger 1 standalone · Trigger 2 → Trigger 3 chain · Trigger 4 standalone monitor */}
           {chained.map((wf) => (
             <div key={wf.id}>
               {STANDALONE_HEADER[wf.id] && (
@@ -167,6 +172,20 @@ export default function WorkflowList() {
               <WorkflowCard wf={wf} />
             </div>
           ))}
+
+          {independent.length > 0 && (
+            <div className="mt-8">
+              <div className="mb-3 flex items-center gap-2">
+                <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[11px] font-black uppercase tracking-wide text-amber-700">
+                  Independent monitors
+                </span>
+                <span className="text-[11px] text-slate-400">run on their own schedule, outside the upload/signing chain</span>
+              </div>
+              <div className="grid gap-4">
+                {independent.map((wf) => <WorkflowCard key={wf.id} wf={wf} />)}
+              </div>
+            </div>
+          )}
 
           {/* Any extra workflows outside the main chain */}
           {extras.length > 0 && (

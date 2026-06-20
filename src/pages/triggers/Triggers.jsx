@@ -1,37 +1,53 @@
 import { useRef, useState } from 'react';
-import { AlertCircle, CheckCircle2, FileArchive, FileSpreadsheet, Play, RefreshCw, Upload, Zap } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Clock, FileArchive, FileSpreadsheet, Mail, Play, RefreshCw, Upload, Zap } from 'lucide-react';
 import { startBulkUploadRun } from '../../lib/workflowApi';
-
-const CONDITIONS = [
-  'onboarding_successful',
-  'upload_received_within_24h',
-  'upload_missing_after_24h',
-  'excel_row_complete',
-  'excel_row_incomplete',
-  'upload_context_ready',
-  'admission_dates_missing',
-  'episode_dates_missing',
-  'patient_exists',
-  'patient_not_exists',
-  'order_exists',
-  'order_not_exists',
-  'document_ready_for_signing',
-  'document_not_ready_for_signing',
-  'signed_within_48h',
-  'signing_overdue',
-  'notification_sent',
-];
 
 const DEFAULT_AREA_NAME = 'Boise-Ada Metro Intake';
 const DEFAULT_AREA_TYPE = 'metro_statistical_area';
 const DEFAULT_HHAH_NAME = 'Boise Home Health';
 
-function DiamondCondition({ label }) {
+const TRIGGERS = [
+  {
+    number: 1,
+    title: 'Area Upload Monitor',
+    description: 'Tracks expected HHAH daily uploads and creates a missing-upload notification task when needed.',
+    tone: 'border-violet-200 bg-violet-50 text-violet-700',
+    icon: Clock,
+  },
+  {
+    number: 2,
+    title: 'HHAH Uploads Documents',
+    description: 'Starts patient, admission, episode, and order intake from the Excel workbook and PDF ZIPs.',
+    tone: 'border-sky-200 bg-sky-50 text-sky-700',
+    icon: Upload,
+  },
+  {
+    number: 3,
+    title: 'Send To Physician',
+    description: 'Sends ready unsigned order documents to the PG signing bucket.',
+    tone: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    icon: Mail,
+  },
+  {
+    number: 4,
+    title: 'Make Patients Billable',
+    description: 'Every 10 seconds checks eligibility, billability, signatures, and CPO minutes.',
+    tone: 'border-amber-200 bg-amber-50 text-amber-700',
+    icon: RefreshCw,
+  },
+];
+
+function TriggerCard({ trigger }) {
+  const Icon = trigger.icon;
   return (
-    <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-800">
-      <span className="inline-flex h-3 w-3 rotate-45 border border-amber-500 bg-white" />
-      {label}
-    </span>
+    <div className={`rounded-2xl border p-4 ${trigger.tone}`}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-[11px] font-black uppercase tracking-wide">Trigger {trigger.number}</div>
+        <Icon size={18} />
+      </div>
+      <div className="mt-2 font-bold text-slate-900">{trigger.title}</div>
+      <p className="mt-1 text-xs leading-5 text-slate-600">{trigger.description}</p>
+    </div>
   );
 }
 
@@ -81,36 +97,22 @@ export default function Triggers() {
         </div>
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Trigger</h1>
-          <p className="text-sm text-slate-500">Start the DB-backed bulk upload workflow.</p>
+          <p className="text-sm text-slate-500">Start uploads and review the four workflow triggers.</p>
         </div>
       </div>
 
-      <section className="mb-4 grid lg:grid-cols-3 gap-3">
-        <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
-          <div className="text-[11px] font-black uppercase tracking-wide text-violet-600">Trigger 1</div>
-          <div className="mt-1 font-bold text-slate-900">Onboarding Successful</div>
-          <p className="mt-1 text-xs text-slate-600">Starts the ongoing area monitor for expected HHAH uploads.</p>
-        </div>
-        <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4">
-          <div className="text-[11px] font-black uppercase tracking-wide text-sky-600">Trigger 2</div>
-          <div className="mt-1 font-bold text-slate-900">HHAH Uploads Documents</div>
-          <p className="mt-1 text-xs text-slate-600">Starts wf7 when Excel + PDF ZIP is uploaded.</p>
-        </div>
-        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-          <div className="text-[11px] font-black uppercase tracking-wide text-emerald-600">Trigger 3</div>
-          <div className="mt-1 font-bold text-slate-900">Order Document Ready</div>
-          <p className="mt-1 text-xs text-slate-600">Starts signing follow-up after patient/order creation and document upload.</p>
-        </div>
+      <section className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        {TRIGGERS.map((trigger) => <TriggerCard key={trigger.number} trigger={trigger} />)}
       </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5">
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-lg font-bold text-slate-900">Bulk Upload Patient & Order</h2>
-              <span className="rounded-full bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-700 border border-sky-100">trigger-7</span>
+              <h2 className="text-lg font-bold text-slate-900">Trigger 2 · Bulk Upload Patient & Order</h2>
+              <span className="rounded-full bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-700 border border-sky-100">file upload</span>
             </div>
-            <p className="text-sm text-slate-500 mt-1">Upload one Excel workbook and a ZIP of order PDFs. The workflow groups rows by patient and runs patient instances in parallel.</p>
+            <p className="text-sm text-slate-500 mt-1">Upload one Excel workbook plus unsigned/signed order PDF ZIPs. The workflow creates patient, admission, episode, and order records, then routes ready documents to physician signing.</p>
             <p className="mt-2 text-xs font-semibold text-slate-500">
               Scope: {DEFAULT_AREA_NAME} · {DEFAULT_HHAH_NAME}
             </p>
@@ -118,10 +120,6 @@ export default function Triggers() {
           <div className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">
             <Play size={13} className="inline mr-1" /> File upload trigger
           </div>
-        </div>
-
-        <div className="mt-4 flex flex-wrap gap-2">
-          {CONDITIONS.map((condition) => <DiamondCondition key={condition} label={condition} />)}
         </div>
 
         <form onSubmit={fireTrigger} className="mt-5 grid lg:grid-cols-[1fr_1fr_1fr_auto] gap-3 items-end">
