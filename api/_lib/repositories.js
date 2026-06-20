@@ -170,6 +170,24 @@ export async function findWorkflowItemByIssueSignature(workflowId, issueSignatur
   return rows[0] || null;
 }
 
+export async function findActiveWorkflowRunForHhah(workflowId, hhahId = null, hhahName = null) {
+  const sql = getSql();
+  const rows = await sql`
+    SELECT *
+    FROM workflow_runs
+    WHERE workflow_id = ${workflowId}
+      AND status = 'running'
+      AND (
+        (${hhahId}::uuid IS NOT NULL AND hhah_id = ${hhahId})
+        OR (${hhahId}::uuid IS NULL AND ${hhahName}::text IS NOT NULL AND input_summary->>'hhahName' = ${hhahName})
+        OR (${hhahId}::uuid IS NULL AND ${hhahName}::text IS NULL AND (hhah_id IS NULL AND COALESCE(input_summary->>'hhahName', '') = 'Unknown HHAH'))
+      )
+    ORDER BY created_at DESC
+    LIMIT 1
+  `;
+  return rows[0] || null;
+}
+
 // Delete a run and everything scoped to it (items, task runs, uploaded docs,
 // AI extractions) via ON DELETE CASCADE. Created domain records (patients,
 // orders, practitioners, etc.) are intentionally kept. Returns true if a row
@@ -344,7 +362,7 @@ export async function updateRunStatus(runId) {
     WHERE run_id = ${runId}
   `;
   const { total, completed, failed } = counts[0] || { total: 0, completed: 0, blocked: 0, failed: 0 };
-  const status = total > 0 && completed === total ? 'completed' : failed > 0 ? 'running' : 'running';
+  const status = total > 0 && completed === total ? 'completed' : failed > 0 ? 'failed' : 'running';
   const rows = await sql`
     UPDATE workflow_runs
     SET status = ${status}, total_items = ${total}, completed_items = ${completed}, updated_at = now()

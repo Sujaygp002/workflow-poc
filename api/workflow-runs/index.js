@@ -4,6 +4,7 @@ import {
   createTaskRunsForItem,
   createWorkflowItem,
   createWorkflowRun,
+  findActiveWorkflowRunForHhah,
   findWorkflowItemByIssueSignature,
   findWorkflowRunBySourceLabel,
   getActiveWorkflow,
@@ -204,6 +205,23 @@ async function runBillingMonitorHandler() {
   }
 
   for (const group of groups.values()) {
+    const activeRun = await findActiveWorkflowRunForHhah(
+      workflow.id,
+      group.hhah?.id || null,
+      group.hhah?.name || null,
+    );
+    if (activeRun) {
+      tasks.push({
+        created: false,
+        skipped: true,
+        reason: 'active_hhah_billing_run_exists',
+        existingRunId: activeRun.id,
+        hhahId: group.hhah?.id || null,
+        hhahName: group.hhah?.name || 'Unknown HHAH',
+        issueCount: group.issues.length,
+      });
+      continue;
+    }
     tasks.push(await createHhahIssueRun({ workflow, group }));
   }
 

@@ -174,7 +174,7 @@
 - wf7 now treats Admission and Episode as explicit objects through the date-check branches: `admission.resolve` writes/reuses Admission after SOC is ready, and `episode.resolve` writes/reuses Episode after SOE/EOE are ready.
 - `wf-signing` starts after a written order has an uploaded document. It checks signing readiness, routes document fixes to a human when needed, sends to physician, immediately checks whether the physician signed, then either updates signed status automatically or creates a manual `Email Physician — Signature Overdue` task. There is no 48-hour wait in Trigger 3.
 - `wf-billing-monitor` displays as one mega task: `Make Patients Billable`.
-  - Trigger 4 groups new billing-monitor tasks HHAH by HHAH: one run per HHAH with patient/episode/CPO issues as items inside that run.
+  - Trigger 4 groups new billing-monitor tasks HHAH by HHAH: one active run per HHAH, with patient/episode/CPO issues as items inside that run. The 10-second trigger skips creating another run for that HHAH until the prior HHAH billing run is completed.
   - System: Check If Patient Is Eligible.
   - If not eligible: manual `Email HHAH — Missing Document` task using SMTP.
   - If eligible: system Check If Patient Is Billable.

@@ -66,6 +66,12 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-20** — Trigger 4 active-run guard. The 10-second billing monitor still evaluates
+  statuses, but it now skips creating a new HHAH billing workflow while a prior
+  `wf-billing-monitor` run for that same HHAH is still `running`; a new run can be created only
+  after the previous HHAH run completes. Also fixed `updateRunStatus` so runs with failed items
+  become `failed` instead of staying `running`, avoiding permanent active-run blocking.
+
 - **2026-06-20** — DB-backed Worker login. `/worker` now loads worker users from
   `/api/work-items`, requires selecting a DB worker plus the existing demo credentials
   (`test123` / `test123`), stores the selected worker in `sessionStorage`, and opens that
