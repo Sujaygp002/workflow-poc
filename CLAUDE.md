@@ -66,6 +66,10 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-20** — Coverage Map draggable balls. Map nodes now support mouse and touch
+  dragging via SVG pointer events; dragged balls stay connected because links redraw from the
+  node's live coordinates, and dragged patient-count edge nodes remain manually positioned.
+
 - **2026-06-20** — Coverage Map status-count drilldown. The HHAH→PG patient-count
   aggregate now derives old/new admission counts, old/new episode counts, billed/unbilled
   episode counts, and signed/unsigned order counts from the live patient/order payloads.

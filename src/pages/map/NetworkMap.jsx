@@ -11,13 +11,15 @@ const RAD = { hhah: 24, pg: 16, edge: 24, adm: 22, epi: 22, order: 22, otype: 19
 // Imperative force-graph engine bound to one <g> element. Kept in a ref so React
 // re-renders (chrome) don't tear down the simulation. Mirrors the verified prototype.
 function createEngine(nodesG, linksG, viewG, { onBanner }) {
-  let nodes = [], links = [], byId = {}, hover = null, zoomMul = 1, graph = { hhahs: [], edges: [], practitionersByPg: {} };
+  let nodes = [], links = [], byId = {}, hover = null, drag = null, zoomMul = 1, graph = { hhahs: [], edges: [], practitionersByPg: {} };
   const fmt = fmtCount;
 
   function addNode(o) {
     const n = Object.assign({ r: RAD[o.kind] || 10, open: false }, o);
     nodes.push(n); byId[n.id] = n;
     const g = document.createElementNS(SVGNS, 'g'); g.setAttribute('class', 'mapnode'); g.style.cursor = 'pointer';
+    g.style.touchAction = 'none';
+    g.style.userSelect = 'none';
     const glow = document.createElementNS(SVGNS, 'circle');
     const core = document.createElementNS(SVGNS, 'circle'); core.setAttribute('fill', COLORS[n.kind]); core.setAttribute('stroke', '#ffffff'); core.setAttribute('stroke-width', '2');
     const ring = document.createElementNS(SVGNS, 'circle'); ring.setAttribute('fill', 'none'); ring.setAttribute('stroke', COLORS[n.kind]); ring.setAttribute('stroke-dasharray', '2 3'); ring.setAttribute('opacity', '.7');
@@ -28,12 +30,75 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
     const label = document.createElementNS(SVGNS, 'text'); label.setAttribute('text-anchor', 'middle'); label.setAttribute('fill', '#0f172a'); label.setAttribute('font-weight', '700'); label.style.pointerEvents = 'none'; label.style.fontFamily = "'Inter',sans-serif";
     g.append(glow, core, ring, inner, badge, close, label); nodesG.appendChild(g);
     n.el = { g, glow, core, ring, inner, close, badge, bc, bt, label };
-    g.addEventListener('click', (ev) => { ev.stopPropagation(); onClick(n); });
+    g.addEventListener('pointerdown', (ev) => startDrag(n, ev));
+    g.addEventListener('pointermove', (ev) => moveDrag(n, ev));
+    g.addEventListener('pointerup', (ev) => endDrag(n, ev));
+    g.addEventListener('pointercancel', (ev) => endDrag(n, ev));
+    g.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      if (n.ignoreClick) {
+        n.ignoreClick = false;
+        return;
+      }
+      onClick(n);
+    });
     g.addEventListener('mouseenter', () => { hover = n; render(); });
     g.addEventListener('mouseleave', () => { hover = null; render(); });
     return n;
   }
   function addLink(a, b, kind) { const l = { a, b, kind }; links.push(l); const p = document.createElementNS(SVGNS, 'path'); p.setAttribute('fill', 'none'); linksG.appendChild(p); l.el = p; return l; }
+
+  function eventPoint(ev) {
+    const svg = nodesG.ownerSVGElement;
+    const matrix = viewG.getScreenCTM()?.inverse();
+    if (!svg || !matrix) return { x: 0, y: 0 };
+    const p = svg.createSVGPoint();
+    p.x = ev.clientX;
+    p.y = ev.clientY;
+    return p.matrixTransform(matrix);
+  }
+
+  function startDrag(n, ev) {
+    if (ev.button !== undefined && ev.button !== 0) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const p = eventPoint(ev);
+    drag = { id: ev.pointerId, node: n, dx: n.x - p.x, dy: n.y - p.y, sx: n.x, sy: n.y, moved: false };
+    n.dragging = true;
+    n.dragPinned = true;
+    n.fx = n.x;
+    n.fy = n.y;
+    n.el.g.style.cursor = 'grabbing';
+    n.el.g.setPointerCapture?.(ev.pointerId);
+    onBanner('Drag any ball to reposition it · connected lines stay attached');
+    render();
+  }
+
+  function moveDrag(n, ev) {
+    if (!drag || drag.node !== n || drag.id !== ev.pointerId) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const p = eventPoint(ev);
+    n.x = p.x + drag.dx;
+    n.y = p.y + drag.dy;
+    n.fx = n.x;
+    n.fy = n.y;
+    if (Math.hypot(n.x - drag.sx, n.y - drag.sy) > 3) drag.moved = true;
+    render();
+  }
+
+  function endDrag(n, ev) {
+    if (!drag || drag.node !== n || drag.id !== ev.pointerId) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    n.dragging = false;
+    n.ignoreClick = drag.moved;
+    n.el.g.style.cursor = 'pointer';
+    n.el.g.releasePointerCapture?.(ev.pointerId);
+    drag = null;
+    render();
+  }
+
   function removeSubtree(id) {
     const kids = links.filter((l) => l.a === id).map((l) => l.b);
     kids.forEach(removeSubtree);
@@ -135,7 +200,7 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
           if (d < min) { const push = (min - d) / 2, ux = dx / d, uy = dy / d; const aP = a.fx != null || a.kind === 'edge', bP = b.fx != null || b.kind === 'edge';
             if (aP && bP) continue; if (aP) { b.x += ux * push * 2; b.y += uy * push * 2; } else if (bP) { a.x -= ux * push * 2; a.y -= uy * push * 2; } else { a.x -= ux * push; a.y -= uy * push; b.x += ux * push; b.y += uy * push; } } } }
     }
-    nodes.filter((n) => n.kind === 'edge').forEach((e) => { const ids = links; const hl = ids.find((l) => l.b === e.id && byId[l.a]?.kind === 'hhah'); const pl = ids.find((l) => l.a === e.id && byId[l.b]?.kind === 'pg'); const A = hl && byId[hl.a], P = pl && byId[pl.b]; if (A && P) { e.x = (A.x + P.x) / 2; e.y = (A.y + P.y) / 2; } });
+    nodes.filter((n) => n.kind === 'edge' && !n.dragPinned).forEach((e) => { const ids = links; const hl = ids.find((l) => l.b === e.id && byId[l.a]?.kind === 'hhah'); const pl = ids.find((l) => l.a === e.id && byId[l.b]?.kind === 'pg'); const A = hl && byId[hl.a], P = pl && byId[pl.b]; if (A && P) { e.x = (A.x + P.x) / 2; e.y = (A.y + P.y) / 2; } });
     for (let p = 0; p < 40; p++) { const edges = live.filter((n) => n.kind === 'edge'); for (const e of edges) for (const b of live) { if (b === e || b.kind === 'edge') continue; let dx = b.x - e.x, dy = b.y - e.y, d = Math.hypot(dx, dy) || 0.01, min = e.r + b.r + 18; if (d < min) { const push = min - d; b.x += (dx / d) * push; b.y += (dy / d) * push; } } }
     fitView(); render();
   }
