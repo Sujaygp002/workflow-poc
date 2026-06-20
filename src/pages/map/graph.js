@@ -67,7 +67,7 @@ export function buildGraph({ patients = [], orders = [], reference = {} } = {}) 
         patients: 0, admissions: 0, episodes: 0, orders: 0,
         oldAdmissions: 0, newAdmissions: 0,
         oldEpisodes: 0, newEpisodes: 0,
-        billedEpisodes: 0, unbilledEpisodes: 0,
+        billedEpisodes: 0, unbilledEpisodes: 0, eligibleEpisodes: 0,
         signedOrders: 0, unsignedOrders: 0,
         o485: 0, f2f: 0, other: 0,
         _admissionIds: new Set(),
@@ -78,6 +78,7 @@ export function buildGraph({ patients = [], orders = [], reference = {} } = {}) 
         _newEpisodeIds: new Set(),
         _billedEpisodeIds: new Set(),
         _unbilledEpisodeIds: new Set(),
+        _eligibleEpisodeIds: new Set(),
       };
       edgeMap.set(k, e);
     }
@@ -129,6 +130,10 @@ export function buildGraph({ patients = [], orders = [], reference = {} } = {}) 
       } else if (!e._billedEpisodeIds.has(episodeId)) {
         e._unbilledEpisodeIds.add(episodeId);
       }
+      // eligible = episode reached eligible OR billable (billable implies eligible)
+      if (o.episode_status === 'eligible' || o.episode_status === 'billable') {
+        e._eligibleEpisodeIds.add(episodeId);
+      }
     }
   }
 
@@ -142,6 +147,7 @@ export function buildGraph({ patients = [], orders = [], reference = {} } = {}) 
       e.newEpisodes = e._newEpisodeIds.size;
       e.billedEpisodes = e._billedEpisodeIds.size;
       e.unbilledEpisodes = e._unbilledEpisodeIds.size;
+      e.eligibleEpisodes = e._eligibleEpisodeIds.size;
       delete e._admissionIds;
       delete e._oldAdmissionIds;
       delete e._newAdmissionIds;
@@ -150,6 +156,7 @@ export function buildGraph({ patients = [], orders = [], reference = {} } = {}) 
       delete e._newEpisodeIds;
       delete e._billedEpisodeIds;
       delete e._unbilledEpisodeIds;
+      delete e._eligibleEpisodeIds;
       return e;
     })
     .filter((e) => e.patients > 0 || e.orders > 0);
@@ -199,5 +206,7 @@ export function edgesForHhah(graph, hhahId) {
 }
 
 export function fmtCount(n) {
-  return n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k` : `${n}`;
+  const v = Number(n);
+  const safe = Number.isFinite(v) ? v : 0;
+  return safe >= 1000 ? `${(safe / 1000).toFixed(1).replace(/\.0$/, '')}k` : `${safe}`;
 }

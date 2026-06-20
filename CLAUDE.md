@@ -66,6 +66,16 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-21** — Coverage Map: fixed "undefined" episode/admission ball labels + added an
+  **Eligible** episode bucket. `fmtCount(undefined)` rendered the literal string `"undefined"`
+  as the big inner number (the count source — `s.newEpisodes` etc. — was sometimes absent);
+  hardened `fmtCount` to coerce non-finite input to `0` and defaulted every spawn count to
+  `|| 0`. Per the requirement that an episode ball can only be old/new/billed/eligible, each
+  New/Old episode (`epBucket`) now expands into **Billed**, **Unbilled**, AND **Eligible**
+  balls. Added `eligibleEpisodes` aggregation to `graph.js` (episode_status `eligible` OR
+  `billable`). Verified against live data: HHAH1-demo-workflow→PG1 reads epi 2 / billed 1 /
+  unbilled 1 / eligible 1, no undefined. lint + build pass.
+
 - **2026-06-21** — Fixed Trigger 4 deadlock, added Trigger 3 auto-resolve, renamed demo
   HHAH/PG.
   - **Trigger 4 (billing monitor) was deadlocked by SMTP failures.** `sendEmail` (mailer.js)

@@ -150,22 +150,22 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
     } else if (n.kind === 'edge') {
       // patient-count → single Admissions ball (mirrors patient page: Patient → Admission)
       n.open = true; const s = n.ref.stats;
-      const blocks = [{ k: 'adm', c: s.admissions, stats: s }];
+      const blocks = [{ k: 'adm', c: s.admissions || 0, stats: s }];
       spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.k, () => '', (b) => ({ count: b.c, stats: b.stats }));
       onBanner('Click admissions to open new + old admissions');
     } else if (n.kind === 'adm') {
       // Admissions → clickable New + Old admission balls (each drills into its own episodes)
       n.open = true; const s = n.stats || {};
       const blocks = [
-        { k: 'newAdm', type: 'admBucket', c: s.newAdmissions, label: 'New Admissions', short: 'NEW ADM', age: 'new' },
-        { k: 'oldAdm', type: 'admBucket', c: s.oldAdmissions, label: 'Old Admissions', short: 'OLD ADM', age: 'old' },
+        { k: 'newAdm', type: 'admBucket', c: s.newAdmissions || 0, label: 'New Admissions', short: 'NEW ADM', age: 'new' },
+        { k: 'oldAdm', type: 'admBucket', c: s.oldAdmissions || 0, label: 'Old Admissions', short: 'OLD ADM', age: 'old' },
       ];
       spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.type, (b) => b.label || '', (b) => ({ count: b.c, stats: b.stats, statLabel: b.short || b.label, age: b.age }));
       onBanner('Click an admission bucket to show its episodes');
     } else if (n.kind === 'admBucket') {
       // New/Old admission → single Episodes ball scoped to this admission age
       n.open = true; const s = n.stats || {};
-      const epCount = n.age === 'old' ? s.oldEpisodes : s.newEpisodes;
+      const epCount = (n.age === 'old' ? s.oldEpisodes : s.newEpisodes) || 0;
       const blocks = [{ k: 'epi', type: 'epi', c: epCount, stats: s, age: n.age }];
       spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.type, () => '', (b) => ({ count: b.c, stats: b.stats, age: b.age }));
       onBanner('Click episodes to open new + old episodes');
@@ -173,8 +173,8 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
       // Episodes → clickable New + Old episode balls (billed/unbilled live UNDER these)
       n.open = true; const s = n.stats || {};
       const blocks = [
-        { k: 'newEp', type: 'epBucket', c: s.newEpisodes, label: 'New Episodes', short: 'NEW EP', age: 'new' },
-        { k: 'oldEp', type: 'epBucket', c: s.oldEpisodes, label: 'Old Episodes', short: 'OLD EP', age: 'old' },
+        { k: 'newEp', type: 'epBucket', c: s.newEpisodes || 0, label: 'New Episodes', short: 'NEW EP', age: 'new' },
+        { k: 'oldEp', type: 'epBucket', c: s.oldEpisodes || 0, label: 'Old Episodes', short: 'OLD EP', age: 'old' },
       ];
       spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.type, (b) => b.label || '', (b) => ({ count: b.c, stats: b.stats, statLabel: b.short || b.label, age: b.age }));
       onBanner('Click an episode bucket to show billed + unbilled');
@@ -182,15 +182,16 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
       // New/Old episode → clickable Billed + Unbilled balls (each drills into its orders)
       n.open = true; const s = n.stats || {};
       const blocks = [
-        { k: 'billed', type: 'billBucket', c: s.billedEpisodes, label: 'Billed', short: 'BILLED', billed: true },
-        { k: 'unbilled', type: 'billBucket', c: s.unbilledEpisodes, label: 'Unbilled', short: 'UNBILLED', billed: false },
+        { k: 'billed', type: 'billBucket', c: s.billedEpisodes || 0, label: 'Billed', short: 'BILLED', billed: true },
+        { k: 'unbilled', type: 'billBucket', c: s.unbilledEpisodes || 0, label: 'Unbilled', short: 'UNBILLED', billed: false },
+        { k: 'eligible', type: 'billBucket', c: s.eligibleEpisodes || 0, label: 'Eligible', short: 'ELIGIBLE', billed: true },
       ];
       spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.type, (b) => b.label || '', (b) => ({ count: b.c, stats: b.stats, statLabel: b.short || b.label, age: n.age, billed: b.billed }));
       onBanner('Click billed or unbilled to show its orders');
     } else if (n.kind === 'billBucket') {
       // Billed/Unbilled episode → single Orders ball scoped to this bucket
       n.open = true; const s = n.stats || {};
-      const blocks = [{ k: 'order', type: 'order', c: s.orders, stats: s, bd: { o485: s.o485, f2f: s.f2f, other: s.other } }];
+      const blocks = [{ k: 'order', type: 'order', c: s.orders || 0, stats: s, bd: { o485: s.o485 || 0, f2f: s.f2f || 0, other: s.other || 0 } }];
       spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.type, () => '', (b) => ({ count: b.c, stats: b.stats, breakdown: b.bd }));
       onBanner('Click orders to show signed/unsigned and 485 · F2F · other');
     } else if (n.kind === 'order' && n.breakdown) {
