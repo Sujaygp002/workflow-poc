@@ -74,13 +74,24 @@ export function buildGraph({ patients = [], orders = [], reference = {} } = {}) 
   // pgCount per HHAH
   edges.forEach((e) => { const h = hhahByKey.get(key(e.hhahName)); if (h) h.pgCount += 1; });
 
-  // ---- practitioners per PG (badge). reference PGs may carry a count; else 0. ----
+  // ---- practitioners per PG (badge) ----
+  // The PG↔practitioner link lives on physician_groups.contact_info.physician_ids[]
+  // (set by mapPgToPractitioner). Count those; fall back to practitioner.history.PG_names.
   const practitionersByPg = {};
-  pgsRef.forEach((pg) => { practitionersByPg[clean(pg.name)] = 0; });
-  // attribute practitioners to PGs when the link is present in raw data; otherwise leave 0.
+  pgsRef.forEach((pg) => {
+    const ids = pg.contact_info?.physician_ids;
+    practitionersByPg[clean(pg.name)] = Array.isArray(ids) ? ids.length : 0;
+  });
+  // fallback / supplement: practitioners that name this PG in their history
   practitioners.forEach((pr) => {
-    const pgName = pr.physician_group_name || pr.pg_name || pr.raw_data?.PG?.name;
-    if (pgName && practitionersByPg[clean(pgName)] != null) practitionersByPg[clean(pgName)] += 1;
+    const names = pr.history?.PG_names || pr.history?.pg_names || [];
+    (Array.isArray(names) ? names : []).forEach((entry) => {
+      const nm = clean(entry?.name || entry);
+      if (nm && practitionersByPg[nm] === 0) {
+        // only use the fallback when the PG had no physician_ids recorded
+        practitionersByPg[nm] = (practitionersByPg[nm] || 0) + 1;
+      }
+    });
   });
 
   return {

@@ -66,6 +66,18 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-20** — Coverage Map: restyled to the light FlowPOC theme + added demo data.
+  `NetworkMap.jsx` chrome now matches the rest of the app (white top bar, violet logo tile,
+  slate text/borders, white search/zoom/legend on a `bg-slate-50` canvas); graph balls keep
+  their color encoding but use white strokes + dark labels for the light background. Fixed
+  `graph.js` practitioner-count to read `physician_groups.contact_info.physician_ids[]` (the
+  real PG↔practitioner link set by `mapPgToPractitioner`), falling back to
+  `practitioners.history.PG_names`. New `scripts/seed-map-demo.js` (additive, idempotent):
+  seeds 2 HHAHs (HHAH1/HHAH2), 2 PGs (PG1/PG2, with 3 and 2 practitioners linked), 5
+  Practitioners, 10 patients and 30 orders so every HHAH connects to both PGs and the
+  per-edge counts (patients/adm/epi/orders + 485/F2F/other) populate. Verified the live join
+  and rendered the light theme in headless Chrome (zero console errors). lint + build pass.
+
 - **2026-06-20** — Added the **Coverage Map** screen (`/map`): an interactive force-directed
   "agency network" graph. Top level shows HHAH (agency) balls; clicking one zooms/fits to it
   and expands its physician-group balls (with a practitioner-count badge) plus a patient-count

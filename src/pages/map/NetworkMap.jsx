@@ -7,7 +7,6 @@ const VW = 960, VH = 600;
 const SVGNS = 'http://www.w3.org/2000/svg';
 const COLORS = { hhah: '#38D9C4', pg: '#9C8CFF', edge: '#FFB454', adm: '#FFD27A', epi: '#7BE0B0', order: '#F26D7D', otype: '#F58AA0' };
 const RAD = { hhah: 24, pg: 16, edge: 24, adm: 22, epi: 22, order: 22, otype: 19 };
-const ZOOM_BTN = { background: '#141d31', borderColor: '#26344f', color: '#E6EDF6' };
 
 // Imperative force-graph engine bound to one <g> element. Kept in a ref so React
 // re-renders (chrome) don't tear down the simulation. Mirrors the verified prototype.
@@ -20,13 +19,13 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
     nodes.push(n); byId[n.id] = n;
     const g = document.createElementNS(SVGNS, 'g'); g.setAttribute('class', 'mapnode'); g.style.cursor = 'pointer';
     const glow = document.createElementNS(SVGNS, 'circle');
-    const core = document.createElementNS(SVGNS, 'circle'); core.setAttribute('fill', COLORS[n.kind]); core.setAttribute('stroke', 'rgba(11,18,32,.85)'); core.setAttribute('stroke-width', '1.5');
+    const core = document.createElementNS(SVGNS, 'circle'); core.setAttribute('fill', COLORS[n.kind]); core.setAttribute('stroke', '#ffffff'); core.setAttribute('stroke-width', '2');
     const ring = document.createElementNS(SVGNS, 'circle'); ring.setAttribute('fill', 'none'); ring.setAttribute('stroke', COLORS[n.kind]); ring.setAttribute('stroke-dasharray', '2 3'); ring.setAttribute('opacity', '.7');
     const inner = document.createElementNS(SVGNS, 'text'); inner.setAttribute('text-anchor', 'middle'); inner.style.pointerEvents = 'none'; inner.style.fontFamily = "'IBM Plex Mono',ui-monospace,Menlo,monospace";
     const close = document.createElementNS(SVGNS, 'text'); close.style.display = 'none'; close.style.pointerEvents = 'none'; close.setAttribute('font-weight', '800');
     const badge = document.createElementNS(SVGNS, 'g'); badge.style.display = 'none';
     const bc = document.createElementNS(SVGNS, 'circle'); const bt = document.createElementNS(SVGNS, 'text'); bt.setAttribute('text-anchor', 'middle'); bt.style.fontFamily = "'IBM Plex Mono',monospace"; badge.append(bc, bt);
-    const label = document.createElementNS(SVGNS, 'text'); label.setAttribute('text-anchor', 'middle'); label.setAttribute('fill', '#E6EDF6'); label.setAttribute('font-weight', '600'); label.style.pointerEvents = 'none'; label.style.fontFamily = "'Inter',sans-serif";
+    const label = document.createElementNS(SVGNS, 'text'); label.setAttribute('text-anchor', 'middle'); label.setAttribute('fill', '#0f172a'); label.setAttribute('font-weight', '700'); label.style.pointerEvents = 'none'; label.style.fontFamily = "'Inter',sans-serif";
     g.append(glow, core, ring, inner, badge, close, label); nodesG.appendChild(g);
     n.el = { g, glow, core, ring, inner, close, badge, bc, bt, label };
     g.addEventListener('click', (ev) => { ev.stopPropagation(); onClick(n); });
@@ -219,44 +218,44 @@ export default function NetworkMap() {
   const zoomFit = useCallback(() => engineRef.current?.zoomFit(), []);
 
   return (
-    <div className="relative h-screen w-full overflow-hidden" style={{ background: 'radial-gradient(1100px 700px at 20% -10%,#13203a 0%,transparent 55%),#0B1220', color: '#E6EDF6' }}>
-      {/* top bar */}
-      <div className="absolute top-0 left-0 right-0 z-20 flex items-center gap-4 px-6 py-3" style={{ background: 'linear-gradient(180deg,rgba(11,18,32,.95),rgba(11,18,32,.4) 70%,transparent)' }}>
+    <div className="relative h-screen w-full overflow-hidden bg-slate-50 text-slate-900">
+      {/* top bar — matches the FlowPOC light theme */}
+      <div className="absolute top-0 left-0 right-0 z-20 flex items-center gap-4 border-b border-slate-200 bg-white/95 px-6 py-3 backdrop-blur">
         <div className="flex items-center gap-3">
-          <div className="h-9 w-9 rounded-xl grid place-items-center border" style={{ background: 'linear-gradient(150deg,#1c2f4e,#13203a)', borderColor: '#26344f' }}>
-            <Network size={16} style={{ color: '#38D9C4' }} />
+          <div className="grid h-9 w-9 place-items-center rounded-xl bg-violet-600">
+            <Network size={16} className="text-white" />
           </div>
           <div>
-            <div className="text-[10px] tracking-[.22em] uppercase font-mono" style={{ color: '#38D9C4' }}>Intake Ops</div>
-            <div className="text-sm font-bold">Agency Network</div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Intake Ops</div>
+            <h1 className="text-base font-black text-slate-900">Coverage Map</h1>
           </div>
         </div>
         <div className="relative flex-1 max-w-[420px]">
-          <div className="flex items-center gap-2 rounded-xl border px-3 py-2" style={{ background: '#141d31', borderColor: '#26344f' }}>
-            <Search size={14} style={{ color: '#38D9C4' }} />
-            <input value={query} onChange={(e) => onSearch(e.target.value)} placeholder="Search an agency…" className="flex-1 bg-transparent outline-none text-sm placeholder:text-slate-500" />
+          <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
+            <Search size={14} className="text-slate-400" />
+            <input value={query} onChange={(e) => onSearch(e.target.value)} placeholder="Search an agency…" className="flex-1 bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-400" />
           </div>
           {suggest.length > 0 && (
-            <div className="absolute left-0 right-0 top-12 z-40 rounded-xl border overflow-hidden shadow-2xl" style={{ background: '#1b2742', borderColor: '#26344f' }}>
+            <div className="absolute left-0 right-0 top-12 z-40 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
               {suggest.map((h) => (
-                <button key={h.id} onClick={() => pick(h)} className="flex w-full items-center justify-between px-3 py-2.5 text-sm hover:bg-white/5">
-                  <span>{h.name}</span><span className="text-[11px] font-mono" style={{ color: '#8A9AB6' }}>{h.pgCount} PG</span>
+                <button key={h.id} onClick={() => pick(h)} className="flex w-full items-center justify-between px-3 py-2.5 text-sm text-slate-700 hover:bg-slate-50">
+                  <span>{h.name}</span><span className="text-[11px] font-bold text-slate-400">{h.pgCount} PG</span>
                 </button>
               ))}
             </div>
           )}
         </div>
-        <button onClick={() => setLive((v) => !v)} className="flex items-center gap-2 rounded-lg border px-3 py-2 text-[11px] font-mono" style={{ background: '#141d31', borderColor: '#26344f', color: '#8A9AB6' }}>
-          {live ? <Play size={12} style={{ color: '#38D9C4' }} /> : <Pause size={12} />}
-          {live ? `LIVE · ${stamp}` : 'PAUSED'}
+        <button onClick={() => setLive((v) => !v)} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">
+          {live ? <Play size={12} className="text-emerald-500" /> : <Pause size={12} />}
+          {live ? `Live · ${stamp}` : 'Paused'}
         </button>
-        <button onClick={load} className="flex items-center gap-2 rounded-lg border px-3 py-2 text-[11px] font-mono" style={{ background: '#141d31', borderColor: '#26344f', color: '#8A9AB6' }}>
-          <RefreshCw size={12} /> reset
+        <button onClick={load} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50">
+          <RefreshCw size={14} /> Reset
         </button>
       </div>
 
-      <div className="absolute left-1/2 top-[64px] z-10 -translate-x-1/2 font-mono text-[11px] tracking-wider" style={{ color: '#56678a' }}>{banner}</div>
-      {err && <div className="absolute left-1/2 top-[88px] z-10 -translate-x-1/2 font-mono text-[11px]" style={{ color: '#F26D7D' }}>{err}</div>}
+      <div className="absolute left-1/2 top-[68px] z-10 -translate-x-1/2 text-[12px] font-medium text-slate-400">{banner}</div>
+      {err && <div className="absolute left-1/2 top-[92px] z-10 -translate-x-1/2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1 text-[12px] text-rose-700">{err}</div>}
 
       <svg viewBox={`0 0 ${VW} ${VH}`} preserveAspectRatio="xMidYMid meet" className="absolute inset-0 h-full w-full">
         <g ref={viewRef}><g ref={linksRef} /><g ref={nodesRef} /></g>
@@ -264,13 +263,13 @@ export default function NetworkMap() {
 
       {/* zoom controls */}
       <div className="absolute bottom-5 right-5 z-20 flex flex-col gap-1.5">
-        <button title="Zoom in" onClick={zoomIn} className="h-9 w-9 grid place-items-center rounded-lg border" style={ZOOM_BTN}><Plus size={16} /></button>
-        <button title="Zoom out" onClick={zoomOut} className="h-9 w-9 grid place-items-center rounded-lg border" style={ZOOM_BTN}><Minus size={16} /></button>
-        <button title="Fit" onClick={zoomFit} className="h-9 w-9 grid place-items-center rounded-lg border" style={ZOOM_BTN}><Maximize size={16} /></button>
+        <button title="Zoom in" onClick={zoomIn} className="grid h-9 w-9 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-50"><Plus size={16} /></button>
+        <button title="Zoom out" onClick={zoomOut} className="grid h-9 w-9 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-50"><Minus size={16} /></button>
+        <button title="Fit" onClick={zoomFit} className="grid h-9 w-9 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-50"><Maximize size={16} /></button>
       </div>
 
       {/* legend */}
-      <div className="absolute bottom-4 left-6 z-20 flex flex-wrap gap-3 font-mono text-[10px] uppercase tracking-wider" style={{ color: '#8A9AB6' }}>
+      <div className="absolute bottom-4 left-6 z-20 flex flex-wrap gap-3 rounded-xl border border-slate-200 bg-white/90 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-500 shadow-sm">
         {[['agency', COLORS.hhah], ['patients', COLORS.edge], ['physician group', COLORS.pg], ['adm', COLORS.adm], ['epi', COLORS.epi], ['orders', COLORS.order]].map(([l, c]) => (
           <span key={l} className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full" style={{ background: c }} />{l}</span>
         ))}
