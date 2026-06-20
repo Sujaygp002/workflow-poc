@@ -74,12 +74,22 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
         if (!links.some((l) => l.a === n.id && l.b === edgeId)) addLink(n.id, edgeId, 'edge');
         if (!links.some((l) => l.a === edgeId && l.b === pgId)) addLink(edgeId, pgId, 'edge');
       });
-      onBanner('The ● shows the patient count · click it for adm → epi → orders · click the agency again to close');
+      onBanner('Click the patient count, then admissions, then episodes, then orders');
     } else if (n.kind === 'edge') {
       n.open = true; const s = n.ref.stats;
-      const blocks = [{ k: 'adm', c: s.admissions }, { k: 'epi', c: s.episodes }, { k: 'order', c: s.orders, bd: { o485: s.o485, f2f: s.f2f, other: s.other } }];
+      const blocks = [{ k: 'adm', c: s.admissions, stats: s }];
+      spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.k, () => '', (b) => ({ count: b.c, stats: b.stats }));
+      onBanner('Click admissions to show episodes');
+    } else if (n.kind === 'adm') {
+      n.open = true; const s = n.stats || {};
+      const blocks = [{ k: 'epi', c: s.episodes, stats: s }];
+      spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.k, () => '', (b) => ({ count: b.c, stats: b.stats }));
+      onBanner('Click episodes to show orders');
+    } else if (n.kind === 'epi') {
+      n.open = true; const s = n.stats || {};
+      const blocks = [{ k: 'order', c: s.orders, bd: { o485: s.o485, f2f: s.f2f, other: s.other } }];
       spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.k, () => '', (b) => ({ count: b.c, breakdown: b.bd }));
-      onBanner('Orders ball → 485 · F2F · other');
+      onBanner('Click orders to show 485 · F2F · other');
     } else if (n.kind === 'order' && n.breakdown) {
       n.open = true; const b = n.breakdown;
       spawn(n, [{ k: 'o485', l: '485 cert/recert', c: b.o485 }, { k: 'f2f', l: 'F2F', c: b.f2f }, { k: 'other', l: 'Other orders', c: b.other }], (t) => `otype:${n.id}:${t.k}`, 'otype', (t) => t.l, (t) => ({ count: t.c, statLabel: t.l }));
@@ -133,7 +143,7 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
       n.el.g.setAttribute('transform', `translate(${n.x.toFixed(1)},${n.y.toFixed(1)})`);
       n.el.glow.setAttribute('r', (r * 2.1).toFixed(1)); n.el.glow.setAttribute('fill', c); n.el.glow.setAttribute('opacity', '0.12');
       n.el.core.setAttribute('r', r.toFixed(1));
-      const expandable = ['hhah', 'edge'].includes(n.kind) || (n.kind === 'order' && n.breakdown);
+      const expandable = ['hhah', 'edge', 'adm', 'epi'].includes(n.kind) || (n.kind === 'order' && n.breakdown);
       n.el.ring.setAttribute('r', (r + 3).toFixed(1)); n.el.ring.style.display = expandable && !n.open ? '' : 'none';
       if (n.open) { n.el.close.style.display = ''; n.el.close.textContent = '×'; n.el.close.setAttribute('x', (r * 0.72).toFixed(1)); n.el.close.setAttribute('y', (-r * 0.62).toFixed(1)); n.el.close.setAttribute('font-size', '14'); n.el.close.setAttribute('fill', '#0B1220'); } else n.el.close.style.display = 'none';
       while (n.el.inner.firstChild) n.el.inner.removeChild(n.el.inner.firstChild);

@@ -66,6 +66,11 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-20** — Coverage Map staged drilldown. Clicking the HHAH→PG patient-count node
+  now opens only Admissions; clicking Admissions opens Episodes; clicking Episodes opens
+  Orders; clicking Orders still opens the 485/F2F/other breakdown. Updated the map banner text
+  to match the new click sequence.
+
 - **2026-06-20** — Trigger 4 active-run guard. The 10-second billing monitor still evaluates
   statuses, but it now skips creating a new HHAH billing workflow while a prior
   `wf-billing-monitor` run for that same HHAH is still `running`; a new run can be created only
