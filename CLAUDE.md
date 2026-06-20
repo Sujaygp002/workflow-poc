@@ -66,6 +66,25 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-20** — Coverage Map drilldown re-shaped to mirror the patient page hierarchy +
+  added spring animation. The HHAH→PG patient-count drilldown now nests strictly like the
+  Patient page (each level connects only to its parent): patient-count → **Admissions** →
+  clickable **New Admissions** / **Old Admissions** (`admBucket`) → each opens its own scoped
+  **Episodes** ball → clickable **New Episodes** / **Old Episodes** (`epBucket`) → each opens
+  clickable **Billed** / **Unbilled** (`billBucket`) → each opens its own scoped **Orders** ball
+  → **Signed** / **Unsigned** metrics + 485/F2F/other. So episodes hang off a specific new/old
+  admission, billed/unbilled hang off a specific new/old episode, and orders hang off a specific
+  billed/unbilled bucket (unique node ids carry the full path so new vs old branches never
+  collide). The old/new and billed/unbilled counts still come from the existing `graph.js`
+  derivation (order rows whose admission/episode end date is in the past = old; episode_status
+  === 'billable' = billed). New node kinds `admBucket`/`epBucket`/`billBucket` added to
+  `COLORS`/`RAD`/`countDisplay`/the expandable check + legend. Animation: nodes keep an eased
+  rendered position (`rx`/`ry`) separate from the logical/drag position, driven by a
+  `requestAnimationFrame` loop that springs `rx→x`/`ry→y` and scales freshly-spawned balls in
+  (`appear` 0→1); links draw from `rx`/`ry` so they stay glued mid-animation, and a dragged ball
+  tracks the pointer with zero lag. Engine exposes `stop()` (cancels the rAF) wired to React
+  cleanup. lint + build pass.
+
 - **2026-06-20** — Coverage Map draggable balls. Map nodes now support mouse and touch
   dragging via SVG pointer events; dragged balls stay connected because links redraw from the
   node's live coordinates, and dragged patient-count edge nodes remain manually positioned.

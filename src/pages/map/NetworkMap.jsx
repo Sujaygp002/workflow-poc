@@ -5,8 +5,8 @@ import { buildGraph, edgesForHhah, fmtCount } from './graph';
 
 const VW = 960, VH = 600;
 const SVGNS = 'http://www.w3.org/2000/svg';
-const COLORS = { hhah: '#38D9C4', pg: '#9C8CFF', edge: '#FFB454', adm: '#FFD27A', epi: '#7BE0B0', order: '#F26D7D', otype: '#F58AA0', metric: '#7AA7FF' };
-const RAD = { hhah: 24, pg: 16, edge: 24, adm: 22, epi: 22, order: 22, otype: 19, metric: 17 };
+const COLORS = { hhah: '#38D9C4', pg: '#9C8CFF', edge: '#FFB454', adm: '#FFD27A', admBucket: '#FFC25A', epi: '#7BE0B0', epBucket: '#5FD39E', billBucket: '#8FD16B', order: '#F26D7D', otype: '#F58AA0', metric: '#7AA7FF' };
+const RAD = { hhah: 24, pg: 16, edge: 24, adm: 22, admBucket: 20, epi: 22, epBucket: 20, billBucket: 18, order: 22, otype: 19, metric: 17 };
 
 // Imperative force-graph engine bound to one <g> element. Kept in a ref so React
 // re-renders (chrome) don't tear down the simulation. Mirrors the verified prototype.
@@ -16,6 +16,8 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
 
   function addNode(o) {
     const n = Object.assign({ r: RAD[o.kind] || 10, open: false }, o);
+    // rendered position eases toward the logical (x,y). New balls fade/scale in.
+    n.rx = n.x; n.ry = n.y; n.appear = 0;
     nodes.push(n); byId[n.id] = n;
     const g = document.createElementNS(SVGNS, 'g'); g.setAttribute('class', 'mapnode'); g.style.cursor = 'pointer';
     g.style.touchAction = 'none';
@@ -83,6 +85,9 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
     n.y = p.y + drag.dy;
     n.fx = n.x;
     n.fy = n.y;
+    // dragged ball tracks the pointer with zero lag (its links redraw from rx/ry)
+    n.rx = n.x;
+    n.ry = n.y;
     if (Math.hypot(n.x - drag.sx, n.y - drag.sy) > 3) drag.moved = true;
     render();
   }
@@ -96,7 +101,7 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
     n.el.g.style.cursor = 'pointer';
     n.el.g.releasePointerCapture?.(ev.pointerId);
     drag = null;
-    render();
+    animate();
   }
 
   function removeSubtree(id) {
@@ -119,7 +124,9 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
       const id = idFn(it); const k = typeof kind === 'function' ? kind(it) : kind;
       if (byId[id]) { if (!links.some((l) => l.a === parent.id && l.b === id)) addLink(parent.id, id, k); return; }
       const d = parent.r + (RAD[k] || 12) + (k === 'edge' ? 38 : 38), ang = base + (i / N) * 6.28;
-      addNode(Object.assign({ id, kind: k, label: labelFn(it), x: parent.x + Math.cos(ang) * d, y: parent.y + Math.sin(ang) * d, ref: it }, extraFn ? extraFn(it) : {}));
+      const child = addNode(Object.assign({ id, kind: k, label: labelFn(it), x: parent.x + Math.cos(ang) * d, y: parent.y + Math.sin(ang) * d, ref: it }, extraFn ? extraFn(it) : {}));
+      // start the new ball at the parent so it springs outward from where it was clicked
+      child.rx = parent.rx ?? parent.x; child.ry = parent.ry ?? parent.y;
       addLink(parent.id, id, k);
     });
   }
@@ -141,30 +148,51 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
       });
       onBanner('Click the patient count, then admissions, then episodes, then orders');
     } else if (n.kind === 'edge') {
+      // patient-count → single Admissions ball (mirrors patient page: Patient → Admission)
       n.open = true; const s = n.ref.stats;
       const blocks = [{ k: 'adm', c: s.admissions, stats: s }];
       spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.k, () => '', (b) => ({ count: b.c, stats: b.stats }));
-      onBanner('Click admissions to show episodes');
+      onBanner('Click admissions to open new + old admissions');
     } else if (n.kind === 'adm') {
+      // Admissions → clickable New + Old admission balls (each drills into its own episodes)
       n.open = true; const s = n.stats || {};
       const blocks = [
-        { k: 'newAdm', type: 'metric', c: s.newAdmissions, label: 'New admissions', short: 'NEW ADM' },
-        { k: 'oldAdm', type: 'metric', c: s.oldAdmissions, label: 'Old admissions', short: 'OLD ADM' },
-        { k: 'epi', type: 'epi', c: s.episodes, stats: s },
+        { k: 'newAdm', type: 'admBucket', c: s.newAdmissions, label: 'New Admissions', short: 'NEW ADM', age: 'new' },
+        { k: 'oldAdm', type: 'admBucket', c: s.oldAdmissions, label: 'Old Admissions', short: 'OLD ADM', age: 'old' },
       ];
-      spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.type, (b) => b.label || '', (b) => ({ count: b.c, stats: b.stats, statLabel: b.short || b.label }));
-      onBanner('Admissions show old/new counts · click episodes to continue');
+      spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.type, (b) => b.label || '', (b) => ({ count: b.c, stats: b.stats, statLabel: b.short || b.label, age: b.age }));
+      onBanner('Click an admission bucket to show its episodes');
+    } else if (n.kind === 'admBucket') {
+      // New/Old admission → single Episodes ball scoped to this admission age
+      n.open = true; const s = n.stats || {};
+      const epCount = n.age === 'old' ? s.oldEpisodes : s.newEpisodes;
+      const blocks = [{ k: 'epi', type: 'epi', c: epCount, stats: s, age: n.age }];
+      spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.type, () => '', (b) => ({ count: b.c, stats: b.stats, age: b.age }));
+      onBanner('Click episodes to open new + old episodes');
     } else if (n.kind === 'epi') {
+      // Episodes → clickable New + Old episode balls (billed/unbilled live UNDER these)
       n.open = true; const s = n.stats || {};
       const blocks = [
-        { k: 'newEp', type: 'metric', c: s.newEpisodes, label: 'New episodes', short: 'NEW EP' },
-        { k: 'oldEp', type: 'metric', c: s.oldEpisodes, label: 'Old episodes', short: 'OLD EP' },
-        { k: 'billedEp', type: 'metric', c: s.billedEpisodes, label: 'Billed episodes', short: 'BILLED EP' },
-        { k: 'unbilledEp', type: 'metric', c: s.unbilledEpisodes, label: 'Unbilled episodes', short: 'UNBILLED' },
-        { k: 'order', type: 'order', c: s.orders, stats: s, bd: { o485: s.o485, f2f: s.f2f, other: s.other } },
+        { k: 'newEp', type: 'epBucket', c: s.newEpisodes, label: 'New Episodes', short: 'NEW EP', age: 'new' },
+        { k: 'oldEp', type: 'epBucket', c: s.oldEpisodes, label: 'Old Episodes', short: 'OLD EP', age: 'old' },
       ];
-      spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.type, (b) => b.label || '', (b) => ({ count: b.c, stats: b.stats, breakdown: b.bd, statLabel: b.short || b.label }));
-      onBanner('Episodes show old/new and billed/unbilled counts · click orders to continue');
+      spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.type, (b) => b.label || '', (b) => ({ count: b.c, stats: b.stats, statLabel: b.short || b.label, age: b.age }));
+      onBanner('Click an episode bucket to show billed + unbilled');
+    } else if (n.kind === 'epBucket') {
+      // New/Old episode → clickable Billed + Unbilled balls (each drills into its orders)
+      n.open = true; const s = n.stats || {};
+      const blocks = [
+        { k: 'billed', type: 'billBucket', c: s.billedEpisodes, label: 'Billed', short: 'BILLED', billed: true },
+        { k: 'unbilled', type: 'billBucket', c: s.unbilledEpisodes, label: 'Unbilled', short: 'UNBILLED', billed: false },
+      ];
+      spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.type, (b) => b.label || '', (b) => ({ count: b.c, stats: b.stats, statLabel: b.short || b.label, age: n.age, billed: b.billed }));
+      onBanner('Click billed or unbilled to show its orders');
+    } else if (n.kind === 'billBucket') {
+      // Billed/Unbilled episode → single Orders ball scoped to this bucket
+      n.open = true; const s = n.stats || {};
+      const blocks = [{ k: 'order', type: 'order', c: s.orders, stats: s, bd: { o485: s.o485, f2f: s.f2f, other: s.other } }];
+      spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.type, () => '', (b) => ({ count: b.c, stats: b.stats, breakdown: b.bd }));
+      onBanner('Click orders to show signed/unsigned and 485 · F2F · other');
     } else if (n.kind === 'order' && n.breakdown) {
       n.open = true; const b = n.breakdown; const s = n.stats || {};
       spawn(n, [
@@ -202,13 +230,16 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
     }
     nodes.filter((n) => n.kind === 'edge' && !n.dragPinned).forEach((e) => { const ids = links; const hl = ids.find((l) => l.b === e.id && byId[l.a]?.kind === 'hhah'); const pl = ids.find((l) => l.a === e.id && byId[l.b]?.kind === 'pg'); const A = hl && byId[hl.a], P = pl && byId[pl.b]; if (A && P) { e.x = (A.x + P.x) / 2; e.y = (A.y + P.y) / 2; } });
     for (let p = 0; p < 40; p++) { const edges = live.filter((n) => n.kind === 'edge'); for (const e of edges) for (const b of live) { if (b === e || b.kind === 'edge') continue; let dx = b.x - e.x, dy = b.y - e.y, d = Math.hypot(dx, dy) || 0.01, min = e.r + b.r + 18; if (d < min) { const push = min - d; b.x += (dx / d) * push; b.y += (dy / d) * push; } } }
-    fitView(); render();
+    fitView(); animate();
   }
 
   function countDisplay(n) {
     if (n.kind === 'edge') return { num: fmt(n.ref.stats.patients), label: 'PATIENTS' };
     if (n.kind === 'adm') return { num: fmt(n.count), label: 'ADMISSIONS' };
+    if (n.kind === 'admBucket') return { num: fmt(n.count), label: (n.statLabel || '').toUpperCase().slice(0, 11) };
     if (n.kind === 'epi') return { num: fmt(n.count), label: 'EPISODES' };
+    if (n.kind === 'epBucket') return { num: fmt(n.count), label: (n.statLabel || '').toUpperCase().slice(0, 11) };
+    if (n.kind === 'billBucket') return { num: fmt(n.count), label: (n.statLabel || '').toUpperCase().slice(0, 11) };
     if (n.kind === 'order') return { num: fmt(n.count), label: 'ORDERS' };
     if (n.kind === 'otype') return { num: fmt(n.count), label: (n.statLabel || '').toUpperCase().slice(0, 11) };
     if (n.kind === 'metric') return { num: fmt(n.count), label: (n.statLabel || n.label || '').toUpperCase().slice(0, 11) };
@@ -216,16 +247,21 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
   }
   function render() {
     links.forEach((l) => { const a = byId[l.a], b = byId[l.b]; if (!a || !b || a.hidden || b.hidden) { if (l.el) l.el.style.display = 'none'; return; } l.el.style.display = '';
-      const sel = hover && (hover.id === a.id || hover.id === b.id); const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2 - 10;
-      l.el.setAttribute('d', `M${a.x.toFixed(1)},${a.y.toFixed(1)} Q${mx.toFixed(1)},${my.toFixed(1)} ${b.x.toFixed(1)},${b.y.toFixed(1)}`);
+      // draw from the RENDERED (eased/dragged) coords so links stay glued to the balls mid-animation
+      const ax = a.rx, ay = a.ry, bx = b.rx, by = b.ry;
+      const sel = hover && (hover.id === a.id || hover.id === b.id); const mx = (ax + bx) / 2, my = (ay + by) / 2 - 10;
+      l.el.setAttribute('d', `M${ax.toFixed(1)},${ay.toFixed(1)} Q${mx.toFixed(1)},${my.toFixed(1)} ${bx.toFixed(1)},${by.toFixed(1)}`);
       l.el.setAttribute('stroke', l.kind === 'pg' ? '#9C8CFF' : '#7892c0'); l.el.setAttribute('stroke-width', sel ? 2 : 1); l.el.setAttribute('opacity', sel ? 0.85 : 0.22);
     });
     nodes.forEach((n) => { if (n.hidden) { n.el.g.style.display = 'none'; return; } n.el.g.style.display = '';
       const r = n.r, c = COLORS[n.kind];
-      n.el.g.setAttribute('transform', `translate(${n.x.toFixed(1)},${n.y.toFixed(1)})`);
+      // appear: 0→1 spring-in scale for freshly spawned balls
+      const sc = 0.6 + 0.4 * (n.appear ?? 1);
+      n.el.g.setAttribute('transform', `translate(${n.rx.toFixed(1)},${n.ry.toFixed(1)}) scale(${sc.toFixed(3)})`);
+      n.el.g.style.opacity = (0.25 + 0.75 * (n.appear ?? 1)).toFixed(2);
       n.el.glow.setAttribute('r', (r * 2.1).toFixed(1)); n.el.glow.setAttribute('fill', c); n.el.glow.setAttribute('opacity', '0.12');
       n.el.core.setAttribute('r', r.toFixed(1));
-      const expandable = ['hhah', 'edge', 'adm', 'epi'].includes(n.kind) || (n.kind === 'order' && n.breakdown);
+      const expandable = ['hhah', 'edge', 'adm', 'admBucket', 'epi', 'epBucket', 'billBucket'].includes(n.kind) || (n.kind === 'order' && n.breakdown);
       n.el.ring.setAttribute('r', (r + 3).toFixed(1)); n.el.ring.style.display = expandable && !n.open ? '' : 'none';
       if (n.open) { n.el.close.style.display = ''; n.el.close.textContent = '×'; n.el.close.setAttribute('x', (r * 0.72).toFixed(1)); n.el.close.setAttribute('y', (-r * 0.62).toFixed(1)); n.el.close.setAttribute('font-size', '14'); n.el.close.setAttribute('fill', '#0B1220'); } else n.el.close.style.display = 'none';
       while (n.el.inner.firstChild) n.el.inner.removeChild(n.el.inner.firstChild);
@@ -243,6 +279,25 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
     });
   }
 
+  // ---- animation loop: ease rendered coords toward logical coords + spring-in new balls ----
+  let raf = 0;
+  function tick() {
+    let busy = false;
+    for (const n of nodes) {
+      if (n.hidden) continue;
+      if (!n.dragging) {
+        const dx = n.x - n.rx, dy = n.y - n.ry;
+        if (Math.abs(dx) > 0.4 || Math.abs(dy) > 0.4) { n.rx += dx * 0.18; n.ry += dy * 0.18; busy = true; }
+        else { n.rx = n.x; n.ry = n.y; }
+      }
+      if ((n.appear ?? 1) < 1) { n.appear = Math.min(1, (n.appear ?? 1) + 0.08); busy = true; }
+    }
+    render();
+    raf = busy ? requestAnimationFrame(tick) : 0;
+  }
+  function animate() { if (!raf) raf = requestAnimationFrame(tick); }
+  function stop() { if (raf) cancelAnimationFrame(raf); raf = 0; }
+
   // (re)build top-level HHAH balls from graph data, preserving open clusters when possible
   function setData(g) {
     graph = g;
@@ -254,6 +309,7 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
 
   return {
     setData,
+    stop,
     expandByName: (name) => { const n = byId[`hhah:${String(name).toLowerCase()}`]; if (n && !n.open) expand(n); },
     zoomBy: (f) => { zoomMul = Math.max(0.5, Math.min(3, zoomMul * f)); fitView(); },
     zoomFit: () => { zoomMul = 1; fitView(); },
@@ -290,6 +346,7 @@ export default function NetworkMap() {
   useEffect(() => {
     engineRef.current = createEngine(nodesRef.current, linksRef.current, viewRef.current, { onBanner: setBanner });
     load();
+    return () => engineRef.current?.stop?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -362,7 +419,7 @@ export default function NetworkMap() {
 
       {/* legend */}
       <div className="absolute bottom-4 left-6 z-20 flex flex-wrap gap-3 rounded-xl border border-slate-200 bg-white/90 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-500 shadow-sm">
-        {[['agency', COLORS.hhah], ['patients', COLORS.edge], ['physician group', COLORS.pg], ['adm', COLORS.adm], ['epi', COLORS.epi], ['orders', COLORS.order], ['status counts', COLORS.metric]].map(([l, c]) => (
+        {[['agency', COLORS.hhah], ['patients', COLORS.edge], ['physician group', COLORS.pg], ['adm', COLORS.adm], ['old/new adm', COLORS.admBucket], ['epi', COLORS.epi], ['old/new epi', COLORS.epBucket], ['billed/unbilled', COLORS.billBucket], ['orders', COLORS.order], ['status counts', COLORS.metric]].map(([l, c]) => (
           <span key={l} className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full" style={{ background: c }} />{l}</span>
         ))}
       </div>
