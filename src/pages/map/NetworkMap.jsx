@@ -5,8 +5,8 @@ import { buildGraph, edgesForHhah, fmtCount } from './graph';
 
 const VW = 960, VH = 600;
 const SVGNS = 'http://www.w3.org/2000/svg';
-const COLORS = { hhah: '#38D9C4', pg: '#9C8CFF', edge: '#FFB454', adm: '#FFD27A', epi: '#7BE0B0', order: '#F26D7D', otype: '#F58AA0' };
-const RAD = { hhah: 24, pg: 16, edge: 24, adm: 22, epi: 22, order: 22, otype: 19 };
+const COLORS = { hhah: '#38D9C4', pg: '#9C8CFF', edge: '#FFB454', adm: '#FFD27A', epi: '#7BE0B0', order: '#F26D7D', otype: '#F58AA0', metric: '#7AA7FF' };
+const RAD = { hhah: 24, pg: 16, edge: 24, adm: 22, epi: 22, order: 22, otype: 19, metric: 17 };
 
 // Imperative force-graph engine bound to one <g> element. Kept in a ref so React
 // re-renders (chrome) don't tear down the simulation. Mirrors the verified prototype.
@@ -82,18 +82,34 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
       onBanner('Click admissions to show episodes');
     } else if (n.kind === 'adm') {
       n.open = true; const s = n.stats || {};
-      const blocks = [{ k: 'epi', c: s.episodes, stats: s }];
-      spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.k, () => '', (b) => ({ count: b.c, stats: b.stats }));
-      onBanner('Click episodes to show orders');
+      const blocks = [
+        { k: 'newAdm', type: 'metric', c: s.newAdmissions, label: 'New admissions', short: 'NEW ADM' },
+        { k: 'oldAdm', type: 'metric', c: s.oldAdmissions, label: 'Old admissions', short: 'OLD ADM' },
+        { k: 'epi', type: 'epi', c: s.episodes, stats: s },
+      ];
+      spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.type, (b) => b.label || '', (b) => ({ count: b.c, stats: b.stats, statLabel: b.short || b.label }));
+      onBanner('Admissions show old/new counts · click episodes to continue');
     } else if (n.kind === 'epi') {
       n.open = true; const s = n.stats || {};
-      const blocks = [{ k: 'order', c: s.orders, bd: { o485: s.o485, f2f: s.f2f, other: s.other } }];
-      spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.k, () => '', (b) => ({ count: b.c, breakdown: b.bd }));
-      onBanner('Click orders to show 485 · F2F · other');
+      const blocks = [
+        { k: 'newEp', type: 'metric', c: s.newEpisodes, label: 'New episodes', short: 'NEW EP' },
+        { k: 'oldEp', type: 'metric', c: s.oldEpisodes, label: 'Old episodes', short: 'OLD EP' },
+        { k: 'billedEp', type: 'metric', c: s.billedEpisodes, label: 'Billed episodes', short: 'BILLED EP' },
+        { k: 'unbilledEp', type: 'metric', c: s.unbilledEpisodes, label: 'Unbilled episodes', short: 'UNBILLED' },
+        { k: 'order', type: 'order', c: s.orders, stats: s, bd: { o485: s.o485, f2f: s.f2f, other: s.other } },
+      ];
+      spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.type, (b) => b.label || '', (b) => ({ count: b.c, stats: b.stats, breakdown: b.bd, statLabel: b.short || b.label }));
+      onBanner('Episodes show old/new and billed/unbilled counts · click orders to continue');
     } else if (n.kind === 'order' && n.breakdown) {
-      n.open = true; const b = n.breakdown;
-      spawn(n, [{ k: 'o485', l: '485 cert/recert', c: b.o485 }, { k: 'f2f', l: 'F2F', c: b.f2f }, { k: 'other', l: 'Other orders', c: b.other }], (t) => `otype:${n.id}:${t.k}`, 'otype', (t) => t.l, (t) => ({ count: t.c, statLabel: t.l }));
-      onBanner('Order types: 485 · F2F · other');
+      n.open = true; const b = n.breakdown; const s = n.stats || {};
+      spawn(n, [
+        { k: 'signed', type: 'metric', l: 'Signed orders', short: 'SIGNED', c: s.signedOrders },
+        { k: 'unsigned', type: 'metric', l: 'Unsigned orders', short: 'UNSIGNED', c: s.unsignedOrders },
+        { k: 'o485', type: 'otype', l: '485 cert/recert', c: b.o485 },
+        { k: 'f2f', type: 'otype', l: 'F2F', c: b.f2f },
+        { k: 'other', type: 'otype', l: 'Other orders', c: b.other },
+      ], (t) => `${t.type}:${n.id}:${t.k}`, (t) => t.type, (t) => t.l, (t) => ({ count: t.c, statLabel: t.short || t.l }));
+      onBanner('Orders show signed/unsigned counts and 485 · F2F · other types');
     }
     layout();
   }
@@ -130,6 +146,7 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
     if (n.kind === 'epi') return { num: fmt(n.count), label: 'EPISODES' };
     if (n.kind === 'order') return { num: fmt(n.count), label: 'ORDERS' };
     if (n.kind === 'otype') return { num: fmt(n.count), label: (n.statLabel || '').toUpperCase().slice(0, 11) };
+    if (n.kind === 'metric') return { num: fmt(n.count), label: (n.statLabel || n.label || '').toUpperCase().slice(0, 11) };
     return null;
   }
   function render() {
@@ -157,7 +174,7 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
         n.el.bt.setAttribute('y', '3'); n.el.bt.setAttribute('font-size', '9'); n.el.bt.setAttribute('font-weight', '700'); n.el.bt.setAttribute('fill', c); n.el.bt.textContent = n.practitioners;
       } else n.el.badge.style.display = 'none';
       const named = ['hhah', 'pg'].includes(n.kind), showLabel = named || (hover && hover.id === n.id);
-      if (showLabel) { const lbl = named ? n.label : (cd ? cd.label.toLowerCase() : n.label); n.el.label.textContent = lbl.length > 22 ? `${lbl.slice(0, 21)}…` : lbl; n.el.label.setAttribute('y', (r + 14).toFixed(1)); n.el.label.setAttribute('font-size', '11'); } else n.el.label.textContent = '';
+      if (showLabel) { const lbl = named ? n.label : (n.label || (cd ? cd.label.toLowerCase() : '')); n.el.label.textContent = lbl.length > 22 ? `${lbl.slice(0, 21)}…` : lbl; n.el.label.setAttribute('y', (r + 14).toFixed(1)); n.el.label.setAttribute('font-size', '11'); } else n.el.label.textContent = '';
     });
   }
 
@@ -280,7 +297,7 @@ export default function NetworkMap() {
 
       {/* legend */}
       <div className="absolute bottom-4 left-6 z-20 flex flex-wrap gap-3 rounded-xl border border-slate-200 bg-white/90 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-500 shadow-sm">
-        {[['agency', COLORS.hhah], ['patients', COLORS.edge], ['physician group', COLORS.pg], ['adm', COLORS.adm], ['epi', COLORS.epi], ['orders', COLORS.order]].map(([l, c]) => (
+        {[['agency', COLORS.hhah], ['patients', COLORS.edge], ['physician group', COLORS.pg], ['adm', COLORS.adm], ['epi', COLORS.epi], ['orders', COLORS.order], ['status counts', COLORS.metric]].map(([l, c]) => (
           <span key={l} className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full" style={{ background: c }} />{l}</span>
         ))}
       </div>

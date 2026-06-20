@@ -66,6 +66,13 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-20** — Coverage Map status-count drilldown. The HHAH→PG patient-count
+  aggregate now derives old/new admission counts, old/new episode counts, billed/unbilled
+  episode counts, and signed/unsigned order counts from the live patient/order payloads.
+  Admissions expand to old/new admission metrics plus Episodes; Episodes expand to old/new
+  and billed/unbilled metrics plus Orders; Orders expand to signed/unsigned metrics plus the
+  485/F2F/other breakdown.
+
 - **2026-06-20** — Coverage Map staged drilldown. Clicking the HHAH→PG patient-count node
   now opens only Admissions; clicking Admissions opens Episodes; clicking Episodes opens
   Orders; clicking Orders still opens the 485/F2F/other breakdown. Updated the map banner text
