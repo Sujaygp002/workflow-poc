@@ -5,8 +5,16 @@ import { buildGraph, edgesForHhah, fmtCount } from './graph';
 
 const VW = 960, VH = 600;
 const SVGNS = 'http://www.w3.org/2000/svg';
-const COLORS = { hhah: '#38D9C4', pg: '#9C8CFF', edge: '#FFB454', adm: '#FFD27A', admBucket: '#FFC25A', epi: '#7BE0B0', epBucket: '#5FD39E', billBucket: '#8FD16B', order: '#F26D7D', otype: '#F58AA0', metric: '#7AA7FF' };
-const RAD = { hhah: 24, pg: 16, edge: 24, adm: 22, admBucket: 20, epi: 22, epBucket: 20, billBucket: 18, order: 22, otype: 19, metric: 17 };
+const COLORS = {
+  hhah: '#38D9C4', pg: '#9C8CFF', edge: '#FFB454',
+  adm: '#FFD27A', admBucket: '#FFC25A', epi: '#7BE0B0', epBucket: '#5FD39E', order: '#F26D7D',
+  // order leaves — color-coded by status (signature) and by document type
+  osigned: '#34C77B', ounsigned: '#F5A524', o485: '#5B8DEF', of2f: '#A879F0', oother: '#94A3B8',
+};
+const RAD = {
+  hhah: 24, pg: 16, edge: 24, adm: 22, admBucket: 20, epi: 22, epBucket: 20, order: 22,
+  osigned: 18, ounsigned: 18, o485: 18, of2f: 18, oother: 18,
+};
 
 // Imperative force-graph engine bound to one <g> element. Kept in a ref so React
 // re-renders (chrome) don't tear down the simulation. Mirrors the verified prototype.
@@ -154,54 +162,46 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
       spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.k, () => '', (b) => ({ count: b.c, stats: b.stats }));
       onBanner('Click admissions to open new + old admissions');
     } else if (n.kind === 'adm') {
-      // Admissions → clickable New + Old admission balls (each drills into its own episodes)
+      // Admissions → clickable Current + Past admission balls (each drills into its episodes)
       n.open = true; const s = n.stats || {};
       const blocks = [
-        { k: 'newAdm', type: 'admBucket', c: s.newAdmissions || 0, stats: s, label: 'New Admissions', short: 'NEW ADM', age: 'new' },
-        { k: 'oldAdm', type: 'admBucket', c: s.oldAdmissions || 0, stats: s, label: 'Old Admissions', short: 'OLD ADM', age: 'old' },
+        { k: 'newAdm', type: 'admBucket', c: s.newAdmissions || 0, stats: s, label: 'Current Admissions', short: 'CURRENT ADM', age: 'new' },
+        { k: 'oldAdm', type: 'admBucket', c: s.oldAdmissions || 0, stats: s, label: 'Past Admissions', short: 'PAST ADM', age: 'old' },
       ];
       spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.type, (b) => b.label || '', (b) => ({ count: b.c, stats: b.stats, statLabel: b.short || b.label, age: b.age }));
-      onBanner('Click an admission bucket to show its episodes');
+      onBanner('Click current or past admissions to show its episodes');
     } else if (n.kind === 'admBucket') {
-      // New/Old admission → single Episodes ball scoped to this admission age
+      // Current/Past admission → single Episodes ball scoped to this admission age
       n.open = true; const s = n.stats || {};
       const epCount = (n.age === 'old' ? s.oldEpisodes : s.newEpisodes) || 0;
       const blocks = [{ k: 'epi', type: 'epi', c: epCount, stats: s, age: n.age }];
       spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.type, () => '', (b) => ({ count: b.c, stats: b.stats, age: b.age }));
-      onBanner('Click episodes to open new + old episodes');
+      onBanner('Click episodes to open current + past episodes');
     } else if (n.kind === 'epi') {
-      // Episodes → clickable New + Old episode balls (billed/unbilled live UNDER these)
+      // Episodes → clickable Current + Past episode balls (each drills straight into orders)
       n.open = true; const s = n.stats || {};
       const blocks = [
-        { k: 'newEp', type: 'epBucket', c: s.newEpisodes || 0, stats: s, label: 'New Episodes', short: 'NEW EP', age: 'new' },
-        { k: 'oldEp', type: 'epBucket', c: s.oldEpisodes || 0, stats: s, label: 'Old Episodes', short: 'OLD EP', age: 'old' },
+        { k: 'newEp', type: 'epBucket', c: s.newEpisodes || 0, stats: s, label: 'Current Episodes', short: 'CURRENT EP', age: 'new' },
+        { k: 'oldEp', type: 'epBucket', c: s.oldEpisodes || 0, stats: s, label: 'Past Episodes', short: 'PAST EP', age: 'old' },
       ];
       spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.type, (b) => b.label || '', (b) => ({ count: b.c, stats: b.stats, statLabel: b.short || b.label, age: b.age }));
-      onBanner('Click an episode bucket to show billed + unbilled');
+      onBanner('Click a current or past episode to show its orders');
     } else if (n.kind === 'epBucket') {
-      // New/Old episode → clickable Billed + Unbilled balls (each drills into its orders)
-      n.open = true; const s = n.stats || {};
-      const blocks = [
-        { k: 'billed', type: 'billBucket', c: s.billedEpisodes || 0, stats: s, label: 'Billed', short: 'BILLED', billed: true },
-        { k: 'unbilled', type: 'billBucket', c: s.unbilledEpisodes || 0, stats: s, label: 'Unbilled', short: 'UNBILLED', billed: false },
-        { k: 'eligible', type: 'billBucket', c: s.eligibleEpisodes || 0, stats: s, label: 'Eligible', short: 'ELIGIBLE', billed: true },
-      ];
-      spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.type, (b) => b.label || '', (b) => ({ count: b.c, stats: b.stats, statLabel: b.short || b.label, age: n.age, billed: b.billed }));
-      onBanner('Click billed or unbilled to show its orders');
-    } else if (n.kind === 'billBucket') {
-      // Billed/Unbilled episode → single Orders ball scoped to this bucket
+      // Current/Past episode → Orders ball DIRECTLY (orders connect to the episode
+      // irrespective of status; billed/unbilled/eligible show as badges on this ball).
       n.open = true; const s = n.stats || {};
       const blocks = [{ k: 'order', type: 'order', c: s.orders || 0, stats: s, bd: { o485: s.o485 || 0, f2f: s.f2f || 0, other: s.other || 0 } }];
       spawn(n, blocks, (b) => `${b.k}:${n.id}`, (b) => b.type, () => '', (b) => ({ count: b.c, stats: b.stats, breakdown: b.bd }));
       onBanner('Click orders to show signed/unsigned and 485 · F2F · other');
     } else if (n.kind === 'order' && n.breakdown) {
+      // Orders → signed/unsigned (colored by signature) + 485/F2F/other (colored by type)
       n.open = true; const b = n.breakdown; const s = n.stats || {};
       spawn(n, [
-        { k: 'signed', type: 'metric', l: 'Signed orders', short: 'SIGNED', c: s.signedOrders },
-        { k: 'unsigned', type: 'metric', l: 'Unsigned orders', short: 'UNSIGNED', c: s.unsignedOrders },
-        { k: 'o485', type: 'otype', l: '485 cert/recert', c: b.o485 },
-        { k: 'f2f', type: 'otype', l: 'F2F', c: b.f2f },
-        { k: 'other', type: 'otype', l: 'Other orders', c: b.other },
+        { k: 'signed', type: 'osigned', l: 'Signed orders', short: 'SIGNED', c: s.signedOrders },
+        { k: 'unsigned', type: 'ounsigned', l: 'Unsigned orders', short: 'UNSIGNED', c: s.unsignedOrders },
+        { k: 'o485', type: 'o485', l: '485 cert/recert', c: b.o485 },
+        { k: 'f2f', type: 'of2f', l: 'F2F', c: b.f2f },
+        { k: 'other', type: 'oother', l: 'Other orders', c: b.other },
       ], (t) => `${t.type}:${n.id}:${t.k}`, (t) => t.type, (t) => t.l, (t) => ({ count: t.c, statLabel: t.short || t.l }));
       onBanner('Orders show signed/unsigned counts and 485 · F2F · other types');
     }
@@ -240,10 +240,10 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
     if (n.kind === 'admBucket') return { num: fmt(n.count), label: (n.statLabel || '').toUpperCase().slice(0, 11) };
     if (n.kind === 'epi') return { num: fmt(n.count), label: 'EPISODES' };
     if (n.kind === 'epBucket') return { num: fmt(n.count), label: (n.statLabel || '').toUpperCase().slice(0, 11) };
-    if (n.kind === 'billBucket') return { num: fmt(n.count), label: (n.statLabel || '').toUpperCase().slice(0, 11) };
     if (n.kind === 'order') return { num: fmt(n.count), label: 'ORDERS' };
-    if (n.kind === 'otype') return { num: fmt(n.count), label: (n.statLabel || '').toUpperCase().slice(0, 11) };
-    if (n.kind === 'metric') return { num: fmt(n.count), label: (n.statLabel || n.label || '').toUpperCase().slice(0, 11) };
+    if (['osigned', 'ounsigned', 'o485', 'of2f', 'oother'].includes(n.kind)) {
+      return { num: fmt(n.count), label: (n.statLabel || n.label || '').toUpperCase().slice(0, 11) };
+    }
     return null;
   }
   function render() {
@@ -262,7 +262,7 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
       n.el.g.style.opacity = (0.25 + 0.75 * (n.appear ?? 1)).toFixed(2);
       n.el.glow.setAttribute('r', (r * 2.1).toFixed(1)); n.el.glow.setAttribute('fill', c); n.el.glow.setAttribute('opacity', '0.12');
       n.el.core.setAttribute('r', r.toFixed(1));
-      const expandable = ['hhah', 'edge', 'adm', 'admBucket', 'epi', 'epBucket', 'billBucket'].includes(n.kind) || (n.kind === 'order' && n.breakdown);
+      const expandable = ['hhah', 'edge', 'adm', 'admBucket', 'epi', 'epBucket'].includes(n.kind) || (n.kind === 'order' && n.breakdown);
       n.el.ring.setAttribute('r', (r + 3).toFixed(1)); n.el.ring.style.display = expandable && !n.open ? '' : 'none';
       if (n.open) { n.el.close.style.display = ''; n.el.close.textContent = '×'; n.el.close.setAttribute('x', (r * 0.72).toFixed(1)); n.el.close.setAttribute('y', (-r * 0.62).toFixed(1)); n.el.close.setAttribute('font-size', '14'); n.el.close.setAttribute('fill', '#0B1220'); } else n.el.close.style.display = 'none';
       while (n.el.inner.firstChild) n.el.inner.removeChild(n.el.inner.firstChild);
@@ -275,8 +275,18 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
         n.el.bc.setAttribute('r', '8'); n.el.bc.setAttribute('fill', '#0B1220'); n.el.bc.setAttribute('stroke', c); n.el.bc.setAttribute('stroke-width', '1.5');
         n.el.bt.setAttribute('y', '3'); n.el.bt.setAttribute('font-size', '9'); n.el.bt.setAttribute('font-weight', '700'); n.el.bt.setAttribute('fill', c); n.el.bt.textContent = n.practitioners;
       } else n.el.badge.style.display = 'none';
-      const named = ['hhah', 'pg'].includes(n.kind), showLabel = named || (hover && hover.id === n.id);
-      if (showLabel) { const lbl = named ? n.label : (n.label || (cd ? cd.label.toLowerCase() : '')); n.el.label.textContent = lbl.length > 22 ? `${lbl.slice(0, 21)}…` : lbl; n.el.label.setAttribute('y', (r + 14).toFixed(1)); n.el.label.setAttribute('font-size', '11'); } else n.el.label.textContent = '';
+      // Episode balls carry a billed/unbilled/eligible status badge under them (always shown).
+      if (n.kind === 'epBucket') {
+        const st = n.stats || {};
+        const badge = `billed ${fmt(st.billedEpisodes || 0)} · unbilled ${fmt(st.unbilledEpisodes || 0)} · eligible ${fmt(st.eligibleEpisodes || 0)}`;
+        n.el.label.textContent = badge;
+        n.el.label.setAttribute('y', (r + 14).toFixed(1));
+        n.el.label.setAttribute('font-size', '8.5');
+        n.el.label.setAttribute('fill', '#0f172a');
+      } else {
+        const named = ['hhah', 'pg'].includes(n.kind), showLabel = named || (hover && hover.id === n.id);
+        if (showLabel) { const lbl = named ? n.label : (n.label || (cd ? cd.label.toLowerCase() : '')); n.el.label.textContent = lbl.length > 22 ? `${lbl.slice(0, 21)}…` : lbl; n.el.label.setAttribute('y', (r + 14).toFixed(1)); n.el.label.setAttribute('font-size', '11'); } else n.el.label.textContent = '';
+      }
     });
   }
 
@@ -420,7 +430,7 @@ export default function NetworkMap() {
 
       {/* legend */}
       <div className="absolute bottom-4 left-6 z-20 flex flex-wrap gap-3 rounded-xl border border-slate-200 bg-white/90 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-500 shadow-sm">
-        {[['agency', COLORS.hhah], ['patients', COLORS.edge], ['physician group', COLORS.pg], ['adm', COLORS.adm], ['old/new adm', COLORS.admBucket], ['epi', COLORS.epi], ['old/new epi', COLORS.epBucket], ['billed/unbilled', COLORS.billBucket], ['orders', COLORS.order], ['status counts', COLORS.metric]].map(([l, c]) => (
+        {[['agency', COLORS.hhah], ['patients', COLORS.edge], ['physician group', COLORS.pg], ['adm', COLORS.adm], ['current/past adm', COLORS.admBucket], ['epi', COLORS.epi], ['current/past epi', COLORS.epBucket], ['orders', COLORS.order], ['signed', COLORS.osigned], ['unsigned', COLORS.ounsigned], ['485', COLORS.o485], ['f2f', COLORS.of2f], ['other', COLORS.oother]].map(([l, c]) => (
           <span key={l} className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full" style={{ background: c }} />{l}</span>
         ))}
       </div>

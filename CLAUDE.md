@@ -66,6 +66,21 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-21** — Coverage Map drilldown reshaped per Lisa's feedback: orders connect
+  directly to the episode (irrespective of status), color-coded order leaves, and Current/Past
+  labels.
+  - **Orders hang directly off the episode.** Removed the Billed/Unbilled/Eligible drill level
+    (`billBucket` kind deleted). A Current/Past episode (`epBucket`) now expands straight into one
+    **Orders** ball; billed/unbilled/eligible are shown as a status **badge** under the episode
+    ball (`billed N · unbilled N · eligible N`).
+  - **Color-coded order leaves.** The Orders ball expands into status + type leaves, each its own
+    color: Signed = green (`osigned`), Unsigned = amber (`ounsigned`), 485 = blue (`o485`), F2F =
+    purple (`of2f`), Other = grey (`oother`). Replaced the old generic `metric`/`otype` leaves.
+  - **Current / Past labels** replace New / Old for both admissions and episodes (balls, banners,
+    legend). Legend now lists order status/type colors.
+  - lint + build pass. Verified leaf counts against live data (HHAH1→PG2: 5 orders = 2 signed /
+    3 unsigned, 1 485 / 1 F2F / 3 other).
+
 - **2026-06-21** — Coverage Map: fixed "1 new admission but 0 episodes" inconsistency.
   `graph.js` classified admission age (by EOC) and episode age (by EOE) independently, so an
   admission could be "new" while its only episode was "old" — leaving the New Admission → Episodes
