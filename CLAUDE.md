@@ -66,6 +66,13 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-06-20** — DB-backed Worker login. `/worker` now loads worker users from
+  `/api/work-items`, requires selecting a DB worker plus the existing demo credentials
+  (`test123` / `test123`), stores the selected worker in `sessionStorage`, and opens that
+  worker's bucket. `/worker/bucket/:userId` now reads worker identity from DB users instead of
+  local `store` users and includes a sign-out path back to the worker login. `ChatGPT.md`
+  updated.
+
 - **2026-06-20** — DB-scoped HHAH/PG portal selection + HHAH-grouped billing monitor.
   HHAH and PG login pages now load selectable agencies/practices from `/api/reference-data`
   and store the selected scope in `sessionStorage`; HHAH upload, notification, patient, and

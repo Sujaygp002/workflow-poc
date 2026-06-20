@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { AlertCircle, ArrowLeft, CheckCircle2, Clock, FileText, Inbox, Loader2, Mail, RefreshCw } from 'lucide-react';
-import { getUsers } from '../../store';
 import { formatUiDate, formatUiDateTime } from '../../lib/dateFormat';
-import { completeDbWorkItem, dbWorkItemToAction, fetchWorkItems } from '../../lib/workflowApi';
+import { completeDbWorkItem, dbWorkItemToAction, fetchWorkItems, fetchWorkUsers } from '../../lib/workflowApi';
+
+const WORKER_SCOPE_KEY = 'worker_selected_user';
+const WORKER_LOGIN_KEY = 'worker_logged_in';
 
 const AVATAR_COLORS = [
   'bg-violet-200 text-violet-700',
@@ -605,24 +607,32 @@ function CompletedCard({ item }) {
 export default function WorkBucket() {
   const { userId } = useParams();
   const navigate = useNavigate();
-  const users = getUsers();
-  const user = users.find((candidate) => candidate.id === userId);
-  const userIdx = users.findIndex((candidate) => candidate.id === userId);
+  const [users, setUsers] = useState([]);
   const [pending, setPending] = useState([]);
   const [completed, setCompleted] = useState([]);
+  const [loadingUser, setLoadingUser] = useState(true);
   const [dbError, setDbError] = useState(null);
 
   const refresh = useCallback(() => {
-    fetchWorkItems(userId)
+    setLoadingUser(true);
+    Promise.all([
+      fetchWorkUsers(),
+      fetchWorkItems(userId),
+    ])
       .then((data) => {
-        setPending((data.pending || []).map(dbWorkItemToAction));
-        setCompleted((data.completed || []).map(dbWorkItemToAction));
+        const [nextUsers, workItems] = data;
+        setUsers(nextUsers);
+        setPending((workItems.pending || []).map(dbWorkItemToAction));
+        setCompleted((workItems.completed || []).map(dbWorkItemToAction));
         setDbError(null);
+        setLoadingUser(false);
       })
       .catch((error) => {
+        setUsers([]);
         setPending([]);
         setCompleted([]);
         setDbError(error.message);
+        setLoadingUser(false);
       });
   }, [userId]);
 
@@ -637,6 +647,17 @@ export default function WorkBucket() {
       document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [refresh]);
+
+  const user = users.find((candidate) => candidate.id === userId);
+  const userIdx = Math.max(0, users.findIndex((candidate) => candidate.id === userId));
+
+  if (loadingUser) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-slate-400">
+        <Loader2 size={24} className="animate-spin" />
+      </div>
+    );
+  }
 
   if (!user) {
     return (
@@ -656,6 +677,12 @@ export default function WorkBucket() {
 
   const avatarCls = AVATAR_COLORS[userIdx % AVATAR_COLORS.length];
 
+  function signOut() {
+    sessionStorage.removeItem(WORKER_SCOPE_KEY);
+    sessionStorage.removeItem(WORKER_LOGIN_KEY);
+    navigate('/worker');
+  }
+
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="bg-white border-b border-slate-100 sticky top-0 z-10">
@@ -672,6 +699,9 @@ export default function WorkBucket() {
           </div>
           <button onClick={refresh} className="p-2 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors">
             <RefreshCw size={16} />
+          </button>
+          <button onClick={signOut} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50">
+            Sign out
           </button>
         </div>
       </header>

@@ -166,7 +166,9 @@
 - `/patients` shows the Admin Patient Unit hierarchy with admission-based archive buckets.
 - `/hhh-login` reuses the same Patient Unit hierarchy component inside the patient detail panel.
 - `/reference-data` shows practitioners, physician groups, HHAH records, and supports mapping PG to practitioner.
-- `/worker` and `/worker/bucket/:userId` use the dummy users but show DB-assigned tasks only.
+- `/worker` and `/worker/bucket/:userId` use DB-backed worker users and show DB-assigned tasks only.
+- `/worker` now loads worker users from the DB, requires selecting a worker plus `test123` / `test123`, stores the selected worker in session storage, and opens `/worker/bucket/:userId` for that DB worker.
+- `/worker/bucket/:userId` reads worker identity from the DB users endpoint rather than local browser store.
 - Worker task cards show matched order PDF side-by-side with the record.
 - Missing fields are highlighted and can be entered before completing the human task.
 - wf7 now treats Admission and Episode as explicit objects through the date-check branches: `admission.resolve` writes/reuses Admission after SOC is ready, and `episode.resolve` writes/reuses Episode after SOE/EOE are ready.
@@ -202,3 +204,4 @@
   - `npm run lint` passed.
   - `npm run build` passed.
   - Scoped portal/API paths no longer contain hardcoded `Boise Home Health` or `Lakeside Family Practice` behavior.
+  - Worker login DB-user update: `npm run lint` passed and `npm run build` passed.

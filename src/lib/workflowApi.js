@@ -160,6 +160,11 @@ export async function fetchWorkItems(userId) {
   return body;
 }
 
+export async function fetchWorkUsers() {
+  const body = await fetchWorkItems();
+  return body.users || [];
+}
+
 export function dbWorkflowToWorkflow(row) {
   const definition = row.definition || {};
   return {

@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Inbox } from 'lucide-react';
-import { getUsers } from '../../store';
-import { fetchWorkItems } from '../../lib/workflowApi';
+import { CheckCircle2, Inbox, Lock, UserRound } from 'lucide-react';
+import { fetchWorkItems, fetchWorkUsers } from '../../lib/workflowApi';
+
+const WORKER_SCOPE_KEY = 'worker_selected_user';
+const WORKER_LOGIN_KEY = 'worker_logged_in';
 
 const AVATAR_COLORS = [
   'bg-violet-200 text-violet-700',
@@ -11,35 +13,89 @@ const AVATAR_COLORS = [
   'bg-amber-200 text-amber-700',
 ];
 
+function readSelectedWorker() {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(WORKER_SCOPE_KEY) || 'null');
+    return parsed?.id && parsed?.name ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function UserSelect() {
   const navigate = useNavigate();
   const location = useLocation();
-  const [users, setUsers] = useState(getUsers);
+  const [users, setUsers] = useState([]);
+  const [selectedUserId, setSelectedUserId] = useState(() => readSelectedWorker()?.id || '');
   const [counts, setCounts] = useState({});
+  const [username, setUsername] = useState('test123');
+  const [password, setPassword] = useState('test123');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
+    const selected = readSelectedWorker();
+    if (sessionStorage.getItem(WORKER_LOGIN_KEY) === 'true' && selected?.id) {
+      navigate(location.pathname.startsWith('/worker') ? `/worker/bucket/${selected.id}` : `/bucket/${selected.id}`);
+      return undefined;
+    }
+    let cancelled = false;
     async function refresh() {
-      const nextUsers = getUsers();
-      setUsers(nextUsers);
-      const entries = await Promise.all(nextUsers.map(async (user) => {
-        try {
-          const data = await fetchWorkItems(user.id);
-          return [user.id, { pending: (data.pending || []).length, done: (data.completed || []).length }];
-        } catch {
-          return [user.id, { pending: 0, done: 0 }];
+      setLoading(true);
+      try {
+        const nextUsers = await fetchWorkUsers();
+        if (cancelled) return;
+        setUsers(nextUsers);
+        setSelectedUserId((current) => current || nextUsers[0]?.id || '');
+        const entries = await Promise.all(nextUsers.map(async (user) => {
+          try {
+            const data = await fetchWorkItems(user.id);
+            return [user.id, { pending: (data.pending || []).length, done: (data.completed || []).length }];
+          } catch {
+            return [user.id, { pending: 0, done: 0 }];
+          }
+        }));
+        if (!cancelled) {
+          setCounts(Object.fromEntries(entries));
+          setError('');
         }
-      }));
-      setCounts(Object.fromEntries(entries));
+      } catch (err) {
+        if (!cancelled) setError(err.message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     }
     refresh();
-    window.addEventListener('focus', refresh);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
-    return () => window.removeEventListener('focus', refresh);
-  }, []);
+    const onFocus = () => refresh();
+    const onVisibility = () => { if (!document.hidden) refresh(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [location.pathname, navigate]);
+
+  function submit(event) {
+    event.preventDefault();
+    const selected = users.find((user) => user.id === selectedUserId);
+    if (!selected) {
+      setError('Select a worker.');
+      return;
+    }
+    if (username !== 'test123' || password !== 'test123') {
+      setError('Invalid username or password.');
+      return;
+    }
+    sessionStorage.setItem(WORKER_SCOPE_KEY, JSON.stringify(selected));
+    sessionStorage.setItem(WORKER_LOGIN_KEY, 'true');
+    navigate(location.pathname.startsWith('/worker') ? `/worker/bucket/${selected.id}` : `/bucket/${selected.id}`);
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-violet-50 to-slate-100 flex flex-col items-center justify-center p-6">
-      <div className="w-full max-w-sm">
+      <form onSubmit={submit} className="w-full max-w-md">
         <div className="text-center mb-10">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-violet-600 shadow-lg mb-4">
             <Inbox size={28} className="text-white" />
@@ -49,6 +105,11 @@ export default function UserSelect() {
         </div>
 
         <div className="space-y-3">
+          {loading && users.length === 0 && (
+            <div className="rounded-2xl border border-slate-100 bg-white p-4 text-center text-sm text-slate-400 shadow-sm">
+              Loading workers...
+            </div>
+          )}
           {users.map((user, i) => {
             const pending = counts[user.id]?.pending || 0;
             const done = counts[user.id]?.done || 0;
@@ -57,8 +118,9 @@ export default function UserSelect() {
             return (
               <button
                 key={user.id}
-                onClick={() => navigate(location.pathname.startsWith('/worker') ? `/worker/bucket/${user.id}` : `/bucket/${user.id}`)}
-                className="w-full flex items-center gap-4 bg-white rounded-2xl p-4 shadow-sm border border-slate-100 hover:border-violet-300 hover:shadow-md transition-all group text-left"
+                type="button"
+                onClick={() => setSelectedUserId(user.id)}
+                className={`w-full flex items-center gap-4 bg-white rounded-2xl p-4 shadow-sm border transition-all group text-left ${selectedUserId === user.id ? 'border-violet-300 ring-2 ring-violet-100' : 'border-slate-100 hover:border-violet-300 hover:shadow-md'}`}
               >
                 <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-xl font-bold shrink-0 ${AVATAR_COLORS[i % AVATAR_COLORS.length]}`}>
                   {user.name[0]}
@@ -85,11 +147,33 @@ export default function UserSelect() {
                     {pending}
                   </div>
                 )}
+                {selectedUserId === user.id && <CheckCircle2 size={18} className="text-violet-600 shrink-0" />}
               </button>
             );
           })}
         </div>
-      </div>
+
+        <div className="mt-4 space-y-3 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+          <label className="block">
+            <span className="text-xs font-semibold text-slate-500 uppercase">Username</span>
+            <div className="mt-1 flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
+              <UserRound size={16} className="text-slate-400" />
+              <input value={username} onChange={(event) => setUsername(event.target.value)} className="w-full outline-none text-sm" autoComplete="username" />
+            </div>
+          </label>
+          <label className="block">
+            <span className="text-xs font-semibold text-slate-500 uppercase">Password</span>
+            <div className="mt-1 flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
+              <Lock size={16} className="text-slate-400" />
+              <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} className="w-full outline-none text-sm" autoComplete="current-password" />
+            </div>
+          </label>
+          {error && <div className="text-sm text-rose-600">{error}</div>}
+          <button className="w-full rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-violet-700">
+            Login
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
