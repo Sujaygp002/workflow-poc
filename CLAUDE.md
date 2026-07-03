@@ -37,11 +37,17 @@ runtime and DB), so prefer build/lint for verification.
   (per-step task logic), `workflowEngine.js`, `workflowDefinition.js`, `repositories.js`.
 - `api/<resource>/` — route handlers (orders, patients, reference-data, work-items,
   workflow-runs, workflows/bulk-upload).
-- `src/pages/orchestrator/Orchestrator.jsx` — workflow run visualization. Has THREE
-  renderers: `BulkInstanceCard` (legacy local bulk), `DbBulkInstanceCard` (DB wf7 loop —
-  the main view), and `InstanceCard` (generic, uses `WorkflowFlowChart`).
-- `src/components/WorkflowFlowChart.jsx` — generic flow renderer used by the builder
-  and the generic instance view.
+- `src/pages/orchestrator/Orchestrator.jsx` — workflow run visualization. Renders each
+  run with the shared flowchart components from `WorkflowDefinitionFlow.jsx`
+  (`MegaGroupFlow` for `megaGroups` definitions, `MegaTaskNode` for `megaTask`, else
+  `WorkflowFlow`).
+- `src/components/WorkflowDefinitionFlow.jsx` — the shared flowchart renderer (step
+  boxes, decision diamonds, mega-task boxes, trigger-chain connectors) used by both the
+  Orchestrator and the Workflows page (`src/pages/builder/WorkflowList.jsx`).
+- `src/pages/map/` — the Coverage Map (`/map`): `NetworkMap.jsx` (SVG graph engine) +
+  `graph.js` (client-side join over the patients/orders/reference feeds).
+- `public/sample-4-artifacts/` — the demo upload set preloaded by the HHAH login page
+  (xlsx + unsigned/signed PDF ZIPs; `README.md` maps each row to its test scenario).
 
 ## Conventions
 
@@ -58,13 +64,43 @@ runtime and DB), so prefer build/lint for verification.
   Create Patient.
 - **Flowchart conditions render as if/else decision diamonds**: a rotated-square diamond
   holds the condition, with the down and right exits labelled according to the actual branch
-  truth. See `DecisionDiamond` / `BranchArm` in `Orchestrator.jsx`.
+  truth. See `DecisionDiamond` / `BranchArm` in `WorkflowDefinitionFlow.jsx`.
 - Match surrounding Tailwind/style idiom. Actor coloring: system = sky/blue, human = pink,
   conditions = amber.
 
 ## Change Log
 
 Newest first. Add an entry for each change made by Claude Code.
+
+- **2026-07-03** — **Repo cleanup: removed the Java backend, dead MSA/builder code, old
+  sample sets, and stray root files.** Untracked items were moved to
+  `~/Desktop/poc-cleanup-backup-2026-07-03/` (not deleted) in case anything is wanted back;
+  tracked removals are recoverable from git history.
+  - **Java backend gone**: the uncommitted `backend/` Spring Boot port (added 2026-07-01, never
+    wired to the frontend), plus its `.github/modernize/java-upgrade/` tool scaffolding and the
+    Java-only `.vscode/settings.json`. Its changelog entry was dropped with it.
+  - **Dead MSA/builder frontend code removed**: `src/store.js` (local demo store holding the
+    MSA / Statistical Area / PG / HHS set model) and `src/pages/builder/WorkflowBuilder.jsx`
+    (its only importer — not routed in `App.jsx`; `/builder/*` routes to `WorkflowList`), and
+    `src/components/WorkflowFlowChart.jsx` (imported by nothing since the 2026-06-13
+    Orchestrator rebuild). The DB-side statistical-area feature (area-intake API/tables,
+    Trigger 1) is **kept** — it is live in Triggers/HhhLogin/Orchestrator.
+  - **Sample sets pruned to the one the app uses**: removed `sample-artifacts/`,
+    `sample-2-artifacts/`, `sample-3-artifacts/` + their generator scripts
+    (`create-sample-hhh-artifacts.js`, `create-sample-2-hhh-artifacts.js`), the root
+    `sample-4-artifacts/` duplicate (its README now lives in `public/sample-4-artifacts/`,
+    the copy HhhLogin actually preloads), and the untracked `sample-HHAH1/2-artifacts` dirs +
+    zips + generator (backed up).
+  - **Stray files removed**: `map-coverage.html`, `map-mockup.html`, `map-network.html`,
+    `map-usa-mockup.html` (standalone USA-map/coverage prototypes superseded by `/map`),
+    `kickbacks.vsix`, `Patient_Order_Business_Logic.pptx`, `public/bucket-ui/` (old pre-built
+    "workbucket-app" static export, referenced nowhere), `.DS_Store` files.
+  - **Kept deliberately**: `.github/workflows/deploy.yml` (intentional GitHub Pages deploy from
+    the initial commit; `vite.config.js` still branches on `DEPLOY_TARGET=pages`), `ChatGPT.md`,
+    `docs/`, `worker.html` (second Vite entry for the worker portal).
+  - CLAUDE.md Layout section refreshed (Orchestrator renderers were described pre-2026-06-13;
+    `WorkflowFlowChart` references replaced with `WorkflowDefinitionFlow`). lint + build pass;
+    routes + live API smoke-tested.
 
 - **2026-06-21** — Coverage Map drilldown reshaped per Lisa's feedback: orders connect
   directly to the episode (irrespective of status), color-coded order leaves, and Current/Past
