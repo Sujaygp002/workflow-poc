@@ -1,4 +1,5 @@
 import { getSql, jsonParam } from './db.js';
+import { WORKFLOW_DEFINITIONS as SYSTEM_WORKFLOW_DEFINITIONS } from './workflowDefinition.js';
 import {
   blankToNull,
   normalizeName,
@@ -12,9 +13,10 @@ import {
 export async function getActiveWorkflow(id) {
   const sql = getSql();
   const rows = await sql`
-    SELECT id, version, name, description, definition
+    SELECT id, version, name, description, definition, kind
     FROM workflow_definitions
     WHERE id = ${id} AND active = true
+    ORDER BY version DESC
     LIMIT 1
   `;
   return rows[0] || null;
@@ -23,28 +25,67 @@ export async function getActiveWorkflow(id) {
 export async function listActiveWorkflowDefinitions() {
   const sql = getSql();
   return sql`
-    SELECT id, version, name, description, definition, created_at, updated_at
+    SELECT id, version, name, description, definition, kind, created_by, created_at, updated_at
     FROM workflow_definitions
     WHERE active = true
     ORDER BY updated_at DESC, id
   `;
 }
 
-export async function upsertWorkflowDefinition(definition, version = 1) {
+export async function upsertWorkflowDefinition(definition, version = 1, { kind = 'system', createdBy = null } = {}) {
   const sql = getSql();
   const rows = await sql`
-    INSERT INTO workflow_definitions (id, version, name, description, definition, active, updated_at)
-    VALUES (${definition.id}, ${version}, ${definition.name}, ${definition.description}, ${await jsonParam(definition)}::jsonb, true, now())
+    INSERT INTO workflow_definitions (id, version, name, description, definition, active, kind, created_by, updated_at)
+    VALUES (${definition.id}, ${version}, ${definition.name}, ${definition.description}, ${await jsonParam(definition)}::jsonb, true, ${kind}, ${createdBy}, now())
     ON CONFLICT (id, version)
     DO UPDATE SET
       name = EXCLUDED.name,
       description = EXCLUDED.description,
       definition = EXCLUDED.definition,
       active = true,
+      kind = EXCLUDED.kind,
       updated_at = now()
     RETURNING *
   `;
   return rows[0];
+}
+
+export async function getWorkflowMaxVersion(id) {
+  const sql = getSql();
+  const rows = await sql`SELECT max(version)::int AS v FROM workflow_definitions WHERE id = ${id}`;
+  return rows[0]?.v || 0;
+}
+
+// Deactivate all versions of a definition (builder soft-delete, or before a new
+// version becomes the single active one). Returns affected count.
+export async function deactivateWorkflowDefinition(id, { keepVersion = null } = {}) {
+  const sql = getSql();
+  const rows = keepVersion == null
+    ? await sql`UPDATE workflow_definitions SET active = false, updated_at = now() WHERE id = ${id} AND active = true RETURNING version`
+    : await sql`UPDATE workflow_definitions SET active = false, updated_at = now() WHERE id = ${id} AND active = true AND version <> ${keepVersion} RETURNING version`;
+  return rows.length;
+}
+
+// Active builder-authored workflows whose trigger matches (e.g. 'document_upload').
+export async function listActiveBuilderWorkflowsByTrigger(triggerType) {
+  const sql = getSql();
+  return sql`
+    SELECT id, version, name, description, definition, kind
+    FROM workflow_definitions
+    WHERE active = true
+      AND kind = 'builder'
+      AND definition->'trigger'->>'type' = ${triggerType}
+    ORDER BY id, version DESC
+  `;
+}
+
+// Idempotent: re-upsert the 4 system workflow definitions (kind='system') when
+// missing — the wipe empties workflow_definitions. NO user seeding.
+export async function ensureSystemDefinitions() {
+  for (const definition of SYSTEM_WORKFLOW_DEFINITIONS) {
+    const existing = await getActiveWorkflow(definition.id);
+    if (!existing) await upsertWorkflowDefinition(definition, 1, { kind: 'system' });
+  }
 }
 
 export async function upsertUser(user) {
@@ -104,11 +145,13 @@ export async function createTaskRunsForItem({ runId, itemId, steps }) {
   for (const step of steps) {
     const rows = await sql`
       INSERT INTO workflow_task_runs (
-        run_id, item_id, step_id, task_key, actor, name, description, condition, input
+        run_id, item_id, step_id, task_key, actor, name, description, condition, input,
+        actions, assigned_employee_id
       )
       VALUES (
         ${runId}, ${itemId}, ${step.id}, ${step.taskKey}, ${step.actor}, ${step.name},
-        ${step.description || null}, ${step.condition || null}, ${await jsonParam(step)}::jsonb
+        ${step.description || null}, ${step.condition || null}, ${await jsonParam(step)}::jsonb,
+        ${await jsonParam(step.actions || [])}::jsonb, ${step.assigneeEmployeeId || null}
       )
       ON CONFLICT (item_id, step_id) DO NOTHING
       RETURNING *
@@ -323,6 +366,9 @@ export async function updateTask(taskId, patch) {
     SET
       status = ${patch.status ?? current.status},
       assigned_to = ${patch.assignedTo === undefined ? current.assigned_to : patch.assignedTo},
+      assigned_employee_id = ${patch.assignedEmployeeId === undefined ? current.assigned_employee_id : patch.assignedEmployeeId},
+      opened_at = ${patch.openedAt === undefined ? current.opened_at : patch.openedAt},
+      action_state = ${await jsonParam(patch.actionState ?? current.action_state)}::jsonb,
       output = ${await jsonParam(patch.output ?? current.output)}::jsonb,
       notes = ${patch.notes === undefined ? current.notes : patch.notes},
       error_message = ${patch.errorMessage === undefined ? current.error_message : patch.errorMessage},
@@ -333,6 +379,83 @@ export async function updateTask(taskId, patch) {
     RETURNING *
   `;
   return rows[0];
+}
+
+// ── Worker buckets (Untouched / Processing / Done) ───────────────────────────
+// Untouched:  active AND opened_at IS NULL AND (mine OR unassigned/shared)
+// Processing: active AND opened_at IS NOT NULL AND mine
+// Done:       completed AND mine
+const BUCKET_ITEM_SELECT = `
+    SELECT
+      t.*,
+      r.workflow_id,
+      r.source_label,
+      r.created_at AS run_created_at,
+      d.name AS workflow_name,
+      i.item_index,
+      i.patient_payload,
+      i.order_payload,
+      i.reference_payload,
+      i.extraction_payload,
+      i.decisions
+    FROM workflow_task_runs t
+    JOIN workflow_runs r ON r.id = t.run_id
+    JOIN workflow_definitions d ON d.id = r.workflow_id AND d.version = r.workflow_version
+    JOIN workflow_items i ON i.id = t.item_id
+`;
+
+export async function listEmployeeBucketItems(employeeId) {
+  const sql = getSql();
+  const [untouched, processing, done] = await Promise.all([
+    sql.query(`${BUCKET_ITEM_SELECT}
+      WHERE t.status = 'active' AND t.actor = 'human' AND t.opened_at IS NULL
+        AND (t.assigned_employee_id = $1 OR t.assigned_employee_id IS NULL)
+      ORDER BY r.created_at, i.item_index, t.created_at
+    `, [employeeId]),
+    sql.query(`${BUCKET_ITEM_SELECT}
+      WHERE t.status = 'active' AND t.actor = 'human' AND t.opened_at IS NOT NULL
+        AND t.assigned_employee_id = $1
+      ORDER BY t.opened_at DESC
+    `, [employeeId]),
+    sql.query(`${BUCKET_ITEM_SELECT}
+      WHERE t.status = 'completed' AND t.actor = 'human' AND t.assigned_employee_id = $1
+      ORDER BY t.completed_at DESC NULLS LAST
+      LIMIT 100
+    `, [employeeId]),
+  ]);
+  return { untouched, processing, done };
+}
+
+// "Open" a task: claims it for the employee (if unassigned) and stamps
+// opened_at, moving it Untouched -> Processing. Idempotent for the claimer.
+export async function openTaskRun({ taskRunId, employeeId }) {
+  const sql = getSql();
+  const task = await getTaskRun(taskRunId);
+  if (!task) return { error: 'Task not found', status: 404 };
+  if (task.status !== 'active') return { error: 'Task is not active', status: 409 };
+  if (task.assigned_employee_id && task.assigned_employee_id !== employeeId) {
+    return { error: 'Task is claimed by another employee', status: 403 };
+  }
+  const rows = await sql`
+    UPDATE workflow_task_runs
+    SET assigned_employee_id = ${employeeId},
+        opened_at = COALESCE(opened_at, now()),
+        updated_at = now()
+    WHERE id = ${taskRunId}
+    RETURNING *
+  `;
+  return { task: rows[0] };
+}
+
+export async function findNewestRunForWorkflow(workflowId) {
+  const sql = getSql();
+  const rows = await sql`
+    SELECT * FROM workflow_runs
+    WHERE workflow_id = ${workflowId}
+    ORDER BY created_at DESC
+    LIMIT 1
+  `;
+  return rows[0] || null;
 }
 
 export async function updateItem(itemId, patch) {

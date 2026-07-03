@@ -9,6 +9,7 @@ import {
   markOrderSignedByPhysician,
   markOrderSentToPhysician,
   updateItem,
+  updateTask,
   updateCpoMinutes,
   writeAdmissionBundle,
   writeEpisodeBundle,
@@ -18,6 +19,7 @@ import {
 import { extractMissingDataFromPdf } from './gemini.js';
 import { GEMINI_MODEL } from './config.js';
 import { sendEmail } from './mailer.js';
+import { runHumanActions } from './builderCatalog.js';
 import { cleanString, hasValue, normalizeNpi, safeJson } from './normalizers.js';
 
 const REQUIRED_FIELDS = [
@@ -704,6 +706,26 @@ export const taskRegistry = {
       decisions: setDecisions(item, { record_reviewed: true }),
     });
     return { ok: true, output: { reviewed: true } };
+  },
+
+  // Builder task node: an employee-assigned checklist of catalog actions.
+  // Validates every action's submitted result first; any failure returns a
+  // retryable error map (the engine keeps the task active/Processing and the
+  // API responds 400 with per-action messages). On success each action's
+  // execute() runs (email send, date merge, order stamp — existing fns).
+  'human.performActions': async ({ item, task, step, payload }) => {
+    const actions = Array.isArray(task?.actions) && task.actions.length
+      ? task.actions
+      : (step?.actions || []);
+    const results = payload?.actionResults || {};
+    const { errors, outputs } = await runHumanActions({ actions, results, item });
+    if (Object.keys(errors).length) {
+      return { ok: false, retry: true, actionErrors: errors, error: 'Action validation failed' };
+    }
+    if (task?.id) {
+      await updateTask(task.id, { actionState: outputs });
+    }
+    return { ok: true, output: { actionResults: results, actionOutputs: outputs } };
   },
 
   'signing.reviewReadiness': async ({ item }) => {

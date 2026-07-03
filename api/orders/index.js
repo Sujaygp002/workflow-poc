@@ -1,4 +1,5 @@
 import { bulkSignOrders, listOrders, listPgUnsignedOrders } from '../_lib/repositories.js';
+import { httpError, requireSession } from '../_lib/auth.js';
 import { handleError, methodNotAllowed, readJson, sendJson } from '../_lib/http.js';
 
 export default async function handler(req, res) {
@@ -15,9 +16,15 @@ export default async function handler(req, res) {
       if (body.action !== 'bulkSign') {
         return sendJson(res, 400, { error: 'Unsupported orders action.' });
       }
+      // Bulk sign requires a signed-in PG practitioner; the PG scope comes
+      // from the session (never from the client body).
+      const { externalUser } = await requireSession(req, { type: 'external' });
+      if (externalUser.user_type !== 'pg' || externalUser.role !== 'practitioner') {
+        throw httpError(403, 'A PG practitioner login is required to sign orders');
+      }
       const result = await bulkSignOrders({
         orderIds: Array.isArray(body.orderIds) ? body.orderIds : [],
-        pgId: body.pgId || null,
+        pgId: externalUser.pg_id,
         date: body.date || new Date().toISOString().slice(0, 10),
       });
       return sendJson(res, 200, {

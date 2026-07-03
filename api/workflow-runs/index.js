@@ -1,30 +1,95 @@
 import { handleError, methodNotAllowed, readJson, sendJson } from '../_lib/http.js';
-import { SEEDED_USERS, WF_BILLING_MONITOR_DEFINITION } from '../_lib/workflowDefinition.js';
+import { WF_BILLING_MONITOR_DEFINITION } from '../_lib/workflowDefinition.js';
 import {
   countWorkflowItems,
   createTaskRunsForItem,
   createWorkflowItem,
   createWorkflowRun,
+  ensureSystemDefinitions,
   findActiveWorkflowRunForHhah,
+  findNewestRunForWorkflow,
   findWorkflowItemByIssueSignature,
   findWorkflowRunBySourceLabel,
   getActiveWorkflow,
+  getRunWithDefinition,
+  listActiveBuilderWorkflowsByTrigger,
   listTaskRunsForRun,
   listWorkflowRuns,
   runBillingMonitorPass,
-  upsertUser,
-  upsertWorkflowDefinition,
 } from '../_lib/repositories.js';
 import { runWorkflowAutomation } from '../_lib/workflowEngine.js';
+import { httpError } from '../_lib/auth.js';
 
 async function ensureBillingWorkflow() {
-  let workflow = await getActiveWorkflow(WF_BILLING_MONITOR_DEFINITION.id);
-  if (!workflow) {
-    for (const user of SEEDED_USERS) await upsertUser(user);
-    await upsertWorkflowDefinition(WF_BILLING_MONITOR_DEFINITION, 1);
-    workflow = await getActiveWorkflow(WF_BILLING_MONITOR_DEFINITION.id);
+  await ensureSystemDefinitions();
+  return getActiveWorkflow(WF_BILLING_MONITOR_DEFINITION.id);
+}
+
+// Manual trigger: start a run of any active workflow (builder Run button).
+// Default items = one empty item so system steps/conditions can still evaluate.
+async function startWorkflowHandler(body) {
+  const workflow = await getActiveWorkflow(body.workflowId);
+  if (!workflow) throw httpError(404, 'Workflow not found');
+  const items = Array.isArray(body.items) && body.items.length ? body.items : [{}];
+  const run = await createWorkflowRun({
+    workflowId: workflow.id,
+    workflowVersion: workflow.version,
+    sourceLabel: body.sourceLabel || `manual:${workflow.id}:${Date.now()}`,
+    totalItems: items.length,
+    inputSummary: { trigger: 'manual', workflowName: workflow.name, itemCount: items.length },
+  });
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i] || {};
+    const created = await createWorkflowItem({
+      runId: run.id,
+      itemIndex: i,
+      patientPayload: item.patientPayload || {},
+      orderPayload: item.orderPayload || {},
+      referencePayload: item.referencePayload || {},
+      extractionPayload: item.extractionPayload || {},
+    });
+    await createTaskRunsForItem({ runId: run.id, itemId: created.id, steps: workflow.definition.steps });
   }
-  return workflow;
+  await runWorkflowAutomation({ runId: run.id, definition: workflow.definition });
+  const refreshed = await getRunWithDefinition(run.id);
+  const tasks = await listTaskRunsForRun(run.id);
+  return { run: refreshed, tasks };
+}
+
+// Time trigger: for each active builder workflow with trigger.type =
+// 'time_interval', start a run when the newest run is older than the interval.
+// Idempotent via bucketed source labels (builder-tick:<wfId>:<bucketTs>).
+async function tickHandler() {
+  const workflows = await listActiveBuilderWorkflowsByTrigger('time_interval');
+  const started = [];
+  for (const workflow of workflows) {
+    const intervalSeconds = Math.max(5, Number(workflow.definition?.trigger?.intervalSeconds) || 60);
+    const newest = await findNewestRunForWorkflow(workflow.id);
+    if (newest && Date.now() - new Date(newest.created_at).getTime() < intervalSeconds * 1000) continue;
+    const bucketTs = Math.floor(Date.now() / 1000 / intervalSeconds) * intervalSeconds;
+    const sourceLabel = `builder-tick:${workflow.id}:${bucketTs}`;
+    const existing = await findWorkflowRunBySourceLabel(workflow.id, sourceLabel);
+    if (existing) continue;
+    const run = await createWorkflowRun({
+      workflowId: workflow.id,
+      workflowVersion: workflow.version,
+      sourceLabel,
+      totalItems: 1,
+      inputSummary: { trigger: 'time_interval', intervalSeconds, workflowName: workflow.name },
+    });
+    const item = await createWorkflowItem({
+      runId: run.id,
+      itemIndex: 0,
+      patientPayload: {},
+      orderPayload: {},
+      referencePayload: {},
+      extractionPayload: {},
+    });
+    await createTaskRunsForItem({ runId: run.id, itemId: item.id, steps: workflow.definition.steps });
+    await runWorkflowAutomation({ runId: run.id, definition: workflow.definition });
+    started.push(run.id);
+  }
+  return { started };
 }
 
 function stepById(definition, stepId) {
@@ -287,10 +352,16 @@ export default async function handler(req, res) {
 
     if (req.method === 'POST') {
       const body = await readJson(req);
-      if (body.action !== 'runBillingMonitor') {
-        return sendJson(res, 400, { error: 'Unsupported workflow-runs action.' });
+      switch (body.action) {
+        case 'runBillingMonitor':
+          return sendJson(res, 200, await runBillingMonitorHandler());
+        case 'startWorkflow':
+          return sendJson(res, 201, await startWorkflowHandler(body));
+        case 'tick':
+          return sendJson(res, 200, await tickHandler());
+        default:
+          return sendJson(res, 400, { error: 'Unsupported workflow-runs action.' });
       }
-      return sendJson(res, 200, await runBillingMonitorHandler());
     }
 
     return methodNotAllowed(res, ['GET', 'POST']);

@@ -1,15 +1,57 @@
-import { handleError, methodNotAllowed, sendJson } from '../_lib/http.js';
-import { listActiveWorkItems, listCompletedWorkItems, listUsers } from '../_lib/repositories.js';
+// Worker buckets (bearer-scoped): GET = the signed-in employee's three buckets
+// (Untouched / Processing / Done); POST {action:'open'} claims a task and moves
+// it to Processing, returning the full task detail + action checklist.
+import { handleError, methodNotAllowed, readJson, sendJson } from '../_lib/http.js';
+import { getItem, listEmployeeBucketItems, openTaskRun } from '../_lib/repositories.js';
+import { taskDisplayPayload } from '../_lib/taskRegistry.js';
+import { requireSession } from '../_lib/auth.js';
+
+// Legacy system-workflow human tasks carry no builder actions; surface them
+// with one implicit action so the worker portal renders a uniform checklist.
+export function taskActions(task) {
+  const actions = Array.isArray(task.actions) ? task.actions : [];
+  if (actions.length) return actions;
+  return [{ id: 'legacy', actionKey: 'legacy', taskKey: task.task_key, label: task.name }];
+}
+
+function bucketRow(task) {
+  return { ...task, actions: taskActions(task) };
+}
 
 export default async function handler(req, res) {
-  if (req.method !== 'GET') return methodNotAllowed(res, ['GET']);
   try {
-    const userId = req.query.userId;
-    const users = await listUsers();
-    if (!userId) return sendJson(res, 200, { users });
-    const pending = await listActiveWorkItems(userId);
-    const completed = await listCompletedWorkItems(userId);
-    return sendJson(res, 200, { users, pending, completed });
+    if (req.method === 'GET') {
+      const { employee } = await requireSession(req, { type: 'employee' });
+      const buckets = await listEmployeeBucketItems(employee.id);
+      return sendJson(res, 200, {
+        employee: { id: employee.id, username: employee.username, displayName: employee.display_name },
+        untouched: buckets.untouched.map(bucketRow),
+        processing: buckets.processing.map(bucketRow),
+        done: buckets.done.map(bucketRow),
+      });
+    }
+
+    if (req.method === 'POST') {
+      const { employee } = await requireSession(req, { type: 'employee' });
+      const body = await readJson(req);
+      if (body.action !== 'open') {
+        return sendJson(res, 400, { error: 'Unsupported work-items action.' });
+      }
+      if (!body.taskRunId) return sendJson(res, 400, { error: 'taskRunId is required.' });
+      const opened = await openTaskRun({ taskRunId: body.taskRunId, employeeId: employee.id });
+      if (opened.error) return sendJson(res, opened.status || 400, { error: opened.error });
+      const task = opened.task;
+      const item = await getItem(task.item_id);
+      return sendJson(res, 200, {
+        task,
+        actions: taskActions(task),
+        actionState: task.action_state || {},
+        payload: item ? taskDisplayPayload(item) : {},
+        pdf: item?.extraction_payload?.pdf || null,
+      });
+    }
+
+    return methodNotAllowed(res, ['GET', 'POST']);
   } catch (error) {
     return handleError(res, error);
   }

@@ -1,3 +1,5 @@
+import { authHeaders } from './authApi.js';
+
 export async function startBulkUploadRun({
   workbook,
   pdfs = [],
@@ -27,6 +29,7 @@ export async function startBulkUploadRun({
 
   const res = await fetch('/api/workflows/bulk-upload/start', {
     method: 'POST',
+    headers: authHeaders('hhah'),
     body: form,
   });
   const body = await res.json().catch(() => ({}));
@@ -109,7 +112,7 @@ export async function fetchPgUnsignedOrders(pgId = '') {
 export async function bulkSignPgOrders({ orderIds, pgId = '', date = '' }) {
   const res = await fetch('/api/orders', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders('pg') },
     body: JSON.stringify({ action: 'bulkSign', orderIds, pgId, date }),
   });
   const body = await res.json().catch(() => ({}));
@@ -142,14 +145,118 @@ export async function fetchReferenceData() {
   return body;
 }
 
-export async function mapPgToPractitioner({ pgId, practitionerId }) {
-  const res = await fetch('/api/reference-data/map-pg-practitioner', {
+async function postReferenceData(action, payload, failMessage) {
+  const res = await fetch('/api/reference-data', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pgId, practitionerId }),
+    body: JSON.stringify({ action, ...payload }),
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || 'Unable to map PG to practitioner');
+  if (!res.ok) throw new Error(body.error || failMessage);
+  return body;
+}
+
+export async function createAgency({ name, npi = '', contact = {} }) {
+  return postReferenceData('createAgency', { name, npi, contact }, 'Unable to create agency');
+}
+
+export async function createPg({ name, npi = '' }) {
+  return postReferenceData('createPg', { name, npi }, 'Unable to create PG');
+}
+
+export async function createPractitioner({ name, npi }) {
+  return postReferenceData('createPractitioner', { name, npi }, 'Unable to create practitioner');
+}
+
+export async function mapPgToPractitioner({ pgId, practitionerId }) {
+  return postReferenceData('mapPgPractitioner', { pgId, practitionerId }, 'Unable to map PG to practitioner');
+}
+
+// ── Builder workflows ────────────────────────────────────────────────────────
+export async function saveWorkflow({ id, name, description = '', trigger, graph }) {
+  const res = await fetch('/api/workflows', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'saveWorkflow', id, name, description, trigger, graph }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const error = new Error(body.error || 'Unable to save workflow');
+    error.status = res.status;
+    error.messages = body.messages || [];
+    throw error;
+  }
+  return body;
+}
+
+export async function deleteWorkflow(id) {
+  const res = await fetch('/api/workflows', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'deleteWorkflow', id }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Unable to delete workflow');
+  return body;
+}
+
+export async function fetchBuilderCatalog() {
+  const res = await fetch('/api/workflows', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'catalog' }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Unable to load builder catalog');
+  return body;
+}
+
+export async function startWorkflow({ workflowId, items = undefined, sourceLabel = undefined }) {
+  const res = await fetch('/api/workflow-runs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'startWorkflow', workflowId, items, sourceLabel }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Unable to start workflow');
+  return body;
+}
+
+export async function tickTimeTriggers() {
+  const res = await fetch('/api/workflow-runs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'tick' }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Unable to tick time triggers');
+  return body;
+}
+
+// ── Worker buckets (bearer-scoped) ──────────────────────────────────────────
+export async function fetchMyBuckets() {
+  const res = await fetch('/api/work-items', { headers: authHeaders('worker') });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const error = new Error(body.error || 'Unable to load work buckets');
+    error.status = res.status;
+    throw error;
+  }
+  return body;
+}
+
+export async function openWorkItem(taskRunId) {
+  const res = await fetch('/api/work-items', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders('worker') },
+    body: JSON.stringify({ action: 'open', taskRunId }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const error = new Error(body.error || 'Unable to open work item');
+    error.status = res.status;
+    throw error;
+  }
   return body;
 }
 
@@ -187,11 +294,18 @@ export function dbWorkflowToWorkflow(row) {
 export async function completeDbWorkItem({ runId, taskRunId, notes = '', payload = {} }) {
   const res = await fetch(`/api/work-items/${taskRunId}/complete`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders('worker') },
     body: JSON.stringify({ runId, notes, payload }),
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || 'Unable to complete DB task');
+  if (!res.ok) {
+    // 400 validation contract: the task stays active/Processing and the body
+    // carries per-action errors for inline display.
+    const error = new Error(body.error || 'Unable to complete DB task');
+    error.status = res.status;
+    error.actionErrors = body.actionErrors || {};
+    throw error;
+  }
   return body;
 }
 

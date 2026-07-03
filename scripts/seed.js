@@ -1,5 +1,5 @@
 import { getSql, jsonParam } from '../api/_lib/db.js';
-import { SEEDED_USERS, WORKFLOW_DEFINITIONS } from '../api/_lib/workflowDefinition.js';
+import { WORKFLOW_DEFINITIONS } from '../api/_lib/workflowDefinition.js';
 import {
   createHhahFromPayload,
   createTaskRunsForItem,
@@ -11,7 +11,6 @@ import {
   linkHhahToArea,
   updateItem,
   upsertStatisticalArea,
-  upsertUser,
   upsertWorkflowDefinition,
 } from '../api/_lib/repositories.js';
 import { runWorkflowAutomation } from '../api/_lib/workflowEngine.js';
@@ -637,16 +636,13 @@ async function seedDemoPatientHierarchy() {
 }
 
 async function main() {
-  for (const user of SEEDED_USERS) {
-    await upsertUser(user);
-  }
   for (const definition of WORKFLOW_DEFINITIONS) {
     await upsertWorkflowDefinition(definition, 1);
   }
   await seedReferenceData();
   await seedAreaOnboardingRun();
   await seedDemoPatientHierarchy();
-  console.log('seeded users, workflow definitions, reference records, and demo patient hierarchy');
+  console.log('seeded workflow definitions, reference records, and demo patient hierarchy');
 }
 
 main().catch((error) => {

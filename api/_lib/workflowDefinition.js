@@ -577,9 +577,3 @@ export const WORKFLOW_DEFINITIONS = [
   WF_SIGNING_DEFINITION,
   WF_BILLING_MONITOR_DEFINITION,
 ];
-
-export const SEEDED_USERS = [
-  { id: 'u1', name: 'Alice', jobRole: 'Operations', accessLevel: 'worker' },
-  { id: 'u2', name: 'Bob', jobRole: 'Clinical Ops', accessLevel: 'worker' },
-  { id: 'u3', name: 'Carol', jobRole: 'Billing Ops', accessLevel: 'worker' },
-];
