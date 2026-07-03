@@ -94,7 +94,6 @@ function CreateExternalUserCard({ reference, onCreated }) {
 
   const agencies = reference.hhahs || [];
   const physicianGroups = reference.physicianGroups || [];
-  const practitioners = reference.practitioners || [];
 
   const isPractitioner = userType === 'pg' && role === 'practitioner';
   const npiDigits = npiDigitsOf(npi);
@@ -102,8 +101,8 @@ function CreateExternalUserCard({ reference, onCreated }) {
   // Mapping select is filtered to Entity practitioners whose NPI matches the typed NPI.
   const matchingPractitioners = useMemo(() => {
     if (!npiDigits) return [];
-    return practitioners.filter((p) => p.npi_digits === npiDigits);
-  }, [practitioners, npiDigits]);
+    return (reference.practitioners || []).filter((p) => p.npi_digits === npiDigits);
+  }, [reference.practitioners, npiDigits]);
 
   // Auto-select when the typed NPI narrows the mapping to exactly one practitioner;
   // clear a selection that no longer matches the NPI.

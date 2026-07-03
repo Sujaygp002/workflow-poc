@@ -1,16 +1,14 @@
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
-import { Activity, ClipboardList, Database, GitBranch, Inbox, Network, UserRound, Zap } from 'lucide-react';
+import { Activity, Building2, GitBranch, Inbox, Network, UserRound, Users } from 'lucide-react';
 import WorkflowList from './pages/builder/WorkflowList';
-import WorkBucket from './pages/workbucket/WorkBucket';
-import UserSelect from './pages/workbucket/UserSelect';
 import Orchestrator from './pages/orchestrator/Orchestrator';
 import HhhLogin from './pages/hhh/HhhLogin';
 import PgLogin from './pages/pg/PgLogin';
-import Patients from './pages/patients/Patients';
-import Triggers from './pages/triggers/Triggers';
-import ReferenceData from './pages/reference/ReferenceData';
-import Orders from './pages/orders/Orders';
 import NetworkMap from './pages/map/NetworkMap';
+import Employees from './pages/employees/Employees';
+import Entity from './pages/entity/Entity';
+import ExternalUsers from './pages/external/ExternalUsers';
+import WorkerPortal from './pages/worker/WorkerPortal';
 
 function Sidebar() {
   const navItem = (to, icon, label, end) => (
@@ -30,27 +28,24 @@ function Sidebar() {
           <div className="w-7 h-7 rounded-lg bg-violet-600 flex items-center justify-center">
             <GitBranch size={14} className="text-white" />
           </div>
-          <span className="font-bold text-slate-800 text-sm">FlowPOC</span>
+          <span className="font-bold text-slate-800 text-sm">Command Center</span>
         </div>
       </div>
 
       <nav className="flex-1 p-3 space-y-1">
-        <div className="text-xs font-semibold text-slate-400 px-3 py-1 uppercase tracking-wider">HHH Workflow</div>
-        {navItem('/triggers', <Zap size={16} />, 'Trigger', true)}
         {navItem('/builder/workflows', <GitBranch size={16} />, 'Workflow', true)}
         {navItem('/orchestrator', <Activity size={16} />, 'Orchestrator', true)}
         {navItem('/map', <Network size={16} />, 'Coverage Map', true)}
-        {navItem('/patients', <UserRound size={16} />, 'Patients', true)}
-        {navItem('/orders', <ClipboardList size={16} />, 'Orders', true)}
-        {navItem('/reference-data', <Database size={16} />, 'Reference Data', true)}
-        {navItem('/worker', <Inbox size={16} />, 'Work Buckets', true)}
+        {navItem('/employees', <Users size={16} />, 'Employees', true)}
+        {navItem('/entity', <Building2 size={16} />, 'Entity', true)}
+        {navItem('/external-users', <UserRound size={16} />, 'External Users', true)}
       </nav>
 
       <div className="p-3 border-t border-slate-100 space-y-1">
         <a href="/worker" target="_blank" rel="noreferrer"
           className="flex items-center gap-2 px-3 py-2 text-xs text-violet-600 hover:bg-violet-50 rounded-lg font-medium transition-colors">
           <Inbox size={13} />
-          <span>Open Worker UI</span>
+          <span>Open Worker Portal</span>
         </a>
       </div>
     </aside>
@@ -67,26 +62,27 @@ export default function App() {
 
 function AppShell() {
   const location = useLocation();
-  const standalone = location.pathname.startsWith('/hhh-login') || location.pathname.startsWith('/pg-login');
+  const standalone = location.pathname.startsWith('/hhh-login')
+    || location.pathname.startsWith('/pg-login')
+    || location.pathname.startsWith('/worker');
 
   return (
     <div className="flex min-h-screen bg-slate-50">
       {!standalone && <Sidebar />}
       <main className="flex-1 min-w-0 overflow-y-auto">
         <Routes>
-          <Route path="/" element={<Navigate to="/triggers" replace />} />
-          <Route path="/triggers" element={<Triggers />} />
+          <Route path="/" element={<Navigate to="/builder/workflows" replace />} />
           <Route path="/builder/workflows" element={<WorkflowList />} />
           <Route path="/builder/create" element={<Navigate to="/builder/workflows" replace />} />
           <Route path="/orchestrator" element={<Orchestrator />} />
           <Route path="/map" element={<NetworkMap />} />
-          <Route path="/patients" element={<Patients />} />
-          <Route path="/orders" element={<Orders />} />
-          <Route path="/reference-data" element={<ReferenceData />} />
-          <Route path="/worker" element={<UserSelect />} />
-          <Route path="/worker/bucket/:userId" element={<WorkBucket />} />
+          <Route path="/employees" element={<Employees />} />
+          <Route path="/entity" element={<Entity />} />
+          <Route path="/external-users" element={<ExternalUsers />} />
+          <Route path="/worker" element={<WorkerPortal />} />
           <Route path="/hhh-login" element={<HhhLogin />} />
           <Route path="/pg-login" element={<PgLogin />} />
+          <Route path="*" element={<Navigate to="/builder/workflows" replace />} />
         </Routes>
       </main>
     </div>
