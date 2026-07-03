@@ -379,7 +379,7 @@ export default function NetworkMap() {
 
   return (
     <div className="relative h-screen w-full overflow-hidden bg-slate-50 text-slate-900">
-      {/* top bar — matches the FlowPOC light theme */}
+      {/* top bar — matches the Command Center light theme */}
       <div className="absolute top-0 left-0 right-0 z-20 flex items-center gap-4 border-b border-slate-200 bg-white/95 px-6 py-3 backdrop-blur">
         <div className="flex items-center gap-3">
           <div className="grid h-9 w-9 place-items-center rounded-xl bg-violet-600">

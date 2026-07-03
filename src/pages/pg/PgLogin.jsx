@@ -1,65 +1,43 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Building2, CheckCircle2, ClipboardSignature, ExternalLink, LayoutDashboard, Loader2, Lock, RefreshCw, UserRound } from 'lucide-react';
+import { Building2, CheckCircle2, ClipboardSignature, ExternalLink, LayoutDashboard, Loader2, Lock, RefreshCw, Stethoscope, UserRound } from 'lucide-react';
 import { formatUiDate } from '../../lib/dateFormat';
-import { bulkSignPgOrders, fetchPgUnsignedOrders, fetchReferenceData } from '../../lib/workflowApi';
+import { clearAuthToken, externalLogin, getAuthToken, getSession, logout, setAuthToken } from '../../lib/authApi';
+import { bulkSignPgOrders, fetchPgUnsignedOrders } from '../../lib/workflowApi';
 
 function todayYmd() {
   return new Date().toISOString().slice(0, 10);
 }
 
-const PG_SCOPE_KEY = 'pg_selected_pg';
-
-function readSelectedPg() {
-  try {
-    const parsed = JSON.parse(sessionStorage.getItem(PG_SCOPE_KEY) || 'null');
-    return parsed?.id && parsed?.name ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
 function LoginPanel({ onLogin }) {
-  const [username, setUsername] = useState('test123');
-  const [password, setPassword] = useState('test123');
-  const [physicianGroups, setPhysicianGroups] = useState([]);
-  const [selectedPgId, setSelectedPgId] = useState(() => readSelectedPg()?.id || '');
-  const [loadingPgs, setLoadingPgs] = useState(false);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    let cancelled = false;
-    async function loadPhysicianGroups() {
-      setLoadingPgs(true);
-      try {
-        const data = await fetchReferenceData();
-        if (cancelled) return;
-        const groups = data.physicianGroups || [];
-        setPhysicianGroups(groups);
-        setSelectedPgId((current) => current || groups[0]?.id || '');
-        setError('');
-      } catch (err) {
-        if (!cancelled) setError(err.message);
-      } finally {
-        if (!cancelled) setLoadingPgs(false);
-      }
-    }
-    loadPhysicianGroups();
-    return () => { cancelled = true; };
-  }, []);
-
-  function submit(event) {
+  async function submit(event) {
     event.preventDefault();
-    const selected = physicianGroups.find((pg) => pg.id === selectedPgId);
-    if (!selected) {
-      setError('Select a physician group.');
+    if (!username.trim() || !password) {
+      setError('Enter your username and password.');
       return;
     }
-    if (username === 'test123' && password === 'test123') {
-      setError('');
-      onLogin({ id: selected.id, name: selected.name });
-      return;
+    setSubmitting(true);
+    setError('');
+    try {
+      const result = await externalLogin({ username: username.trim(), password });
+      if (result.user?.userType !== 'pg') {
+        // A valid account, but not a PG portal login — discard the session.
+        setAuthToken('pg', result.token);
+        logout('pg').catch(() => {});
+        setError('This account is not a PG login. Use the HHAH portal instead.');
+        return;
+      }
+      setAuthToken('pg', result.token);
+      onLogin(result.user);
+    } catch (err) {
+      setError(err.status === 401 ? 'Invalid username or password.' : err.message);
+    } finally {
+      setSubmitting(false);
     }
-    setError('Invalid username or password.');
   }
 
   return (
@@ -70,28 +48,8 @@ function LoginPanel({ onLogin }) {
           <Building2 size={24} />
         </div>
         <h1 className="text-2xl font-bold text-slate-900">PG Login</h1>
-        <p className="text-sm text-slate-500 mt-1">Sign physician orders and review PG work.</p>
+        <p className="text-sm text-slate-500 mt-1">Sign in with the account created for your physician group.</p>
         <div className="mt-6 space-y-3">
-          <div>
-            <span className="text-xs font-semibold text-slate-500 uppercase">Physician Group</span>
-            <div className="mt-1 max-h-36 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-2">
-              {loadingPgs ? (
-                <div className="px-2 py-3 text-sm text-slate-400">Loading physician groups...</div>
-              ) : physicianGroups.length === 0 ? (
-                <div className="px-2 py-3 text-sm text-slate-400">No physician groups found.</div>
-              ) : physicianGroups.map((pg) => (
-                <button
-                  key={pg.id}
-                  type="button"
-                  onClick={() => setSelectedPgId(pg.id)}
-                  className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left text-sm transition-colors ${selectedPgId === pg.id ? 'border-emerald-300 bg-white text-emerald-800 shadow-sm' : 'border-transparent bg-transparent text-slate-600 hover:bg-white'}`}
-                >
-                  <span className="font-semibold">{pg.name}</span>
-                  {selectedPgId === pg.id && <CheckCircle2 size={15} />}
-                </button>
-              ))}
-            </div>
-          </div>
           <label className="block">
             <span className="text-xs font-semibold text-slate-500 uppercase">Username</span>
             <div className="mt-1 flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
@@ -107,8 +65,9 @@ function LoginPanel({ onLogin }) {
             </div>
           </label>
           {error && <div className="text-sm text-rose-600">{error}</div>}
-          <button className="w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-700">
-            Login
+          <button disabled={submitting} className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-60">
+            {submitting && <Loader2 size={15} className="animate-spin" />}
+            {submitting ? 'Signing in' : 'Login'}
           </button>
         </div>
       </form>
@@ -116,20 +75,28 @@ function LoginPanel({ onLogin }) {
   );
 }
 
-function Dashboard() {
+// PG admin view: dashboard only, coming soon.
+function ComingSoonDashboard({ pgName }) {
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-10 min-h-[420px] flex items-center justify-center text-center">
+    <section className="space-y-4">
       <div>
-        <LayoutDashboard size={42} className="mx-auto mb-3 text-slate-300" />
-        <h2 className="text-2xl font-bold text-slate-900">Dashboard</h2>
-        <p className="mt-2 text-sm text-slate-500">Coming soon</p>
+        <h2 className="text-2xl font-bold text-slate-900">{pgName || 'Physician Group'}</h2>
+        <p className="mt-1 text-sm text-slate-500">Admin dashboard</p>
+      </div>
+      <div className="rounded-2xl border border-slate-200 bg-white p-10 min-h-[420px] flex items-center justify-center text-center">
+        <div>
+          <LayoutDashboard size={42} className="mx-auto mb-3 text-slate-300" />
+          <h3 className="text-2xl font-bold text-slate-900">Dashboard</h3>
+          <p className="mt-2 text-sm text-slate-500">Coming soon</p>
+        </div>
       </div>
     </section>
   );
 }
 
-function BulkSign({ selectedPg }) {
-  const pgId = selectedPg?.id || '';
+// PG practitioner view: the existing Bulk Sign flow scoped to the session's PG.
+function BulkSign({ user }) {
+  const pgId = user?.pgId || '';
   const [orders, setOrders] = useState([]);
   const [selected, setSelected] = useState(() => new Set());
   const [loading, setLoading] = useState(false);
@@ -190,7 +157,7 @@ function BulkSign({ selectedPg }) {
     }
   }
 
-  const selectedPgName = selectedPg?.name || 'Selected physician group';
+  const pgName = user?.pgName || 'Physician group';
 
   return (
     <section className="space-y-4">
@@ -204,7 +171,7 @@ function BulkSign({ selectedPg }) {
             <div className="block">
               <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Physician group</span>
               <div className="mt-1 min-w-[240px] rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
-                {selectedPgName}
+                {pgName}
               </div>
             </div>
             <button onClick={() => refresh(pgId)} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">
@@ -221,7 +188,10 @@ function BulkSign({ selectedPg }) {
           </div>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1">{selectedPgName}</span>
+          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1">{pgName}</span>
+          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 font-semibold text-emerald-700">
+            Signing as {user?.displayName || 'practitioner'}{user?.npi ? ` · NPI ${user.npi}` : ''}
+          </span>
           <span>{orders.length} unsigned order(s)</span>
         </div>
         {message && <div className="mt-3 flex items-center gap-2 text-sm text-emerald-700"><CheckCircle2 size={15} /> {message}</div>}
@@ -274,18 +244,47 @@ function BulkSign({ selectedPg }) {
 }
 
 export default function PgLogin() {
-  const [selectedPg, setSelectedPg] = useState(() => readSelectedPg());
-  const [loggedIn, setLoggedIn] = useState(() => sessionStorage.getItem('pg_logged_in') === 'true' && !!readSelectedPg());
-  const [tab, setTab] = useState('dashboard');
+  const [user, setUser] = useState(null);
+  const [checkingSession, setCheckingSession] = useState(() => !!getAuthToken('pg'));
 
-  function login(pg) {
-    sessionStorage.setItem(PG_SCOPE_KEY, JSON.stringify(pg));
-    sessionStorage.setItem('pg_logged_in', 'true');
-    setSelectedPg(pg);
-    setLoggedIn(true);
+  // Restore an existing PG session (bearer token in sessionStorage) on mount.
+  useEffect(() => {
+    if (!getAuthToken('pg')) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await getSession('pg');
+        if (cancelled) return;
+        if (data.principalType === 'external' && data.user?.userType === 'pg') {
+          setUser(data.user);
+        } else {
+          clearAuthToken('pg');
+        }
+      } catch {
+        if (!cancelled) clearAuthToken('pg');
+      } finally {
+        if (!cancelled) setCheckingSession(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  function signOut() {
+    logout('pg').catch(() => {});
+    setUser(null);
   }
 
-  if (!loggedIn) return <LoginPanel onLogin={login} />;
+  if (checkingSession) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <Loader2 size={28} className="animate-spin text-slate-400" />
+      </div>
+    );
+  }
+
+  if (!user) return <LoginPanel onLogin={setUser} />;
+
+  const isPractitioner = user.role === 'practitioner';
 
   return (
     <div className="min-h-screen bg-slate-100">
@@ -297,16 +296,19 @@ export default function PgLogin() {
             </div>
             <div>
               <h1 className="font-bold text-slate-900">PG Portal</h1>
-              <p className="text-xs text-slate-500">{selectedPg?.name || 'Practice'} · Physician signing bucket</p>
+              <p className="text-xs text-slate-500">
+                {user.pgName || 'Physician group'} · {isPractitioner ? 'Physician signing bucket' : 'Admin'}
+              </p>
             </div>
+            {isPractitioner && (
+              <span className="ml-2 inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">
+                <Stethoscope size={13} />
+                {user.displayName || user.username}{user.npi ? ` · NPI ${user.npi}` : ''}
+              </span>
+            )}
           </div>
           <button
-            onClick={() => {
-              sessionStorage.removeItem('pg_logged_in');
-              sessionStorage.removeItem(PG_SCOPE_KEY);
-              setSelectedPg(null);
-              setLoggedIn(false);
-            }}
+            onClick={signOut}
             className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
           >
             Sign out
@@ -314,15 +316,7 @@ export default function PgLogin() {
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-6 py-6">
-        <div className="mb-5 inline-flex rounded-xl border border-slate-200 bg-white p-1">
-          <button onClick={() => setTab('dashboard')} className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold ${tab === 'dashboard' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-50'}`}>
-            <LayoutDashboard size={15} /> Dashboard
-          </button>
-          <button onClick={() => setTab('bulk-sign')} className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold ${tab === 'bulk-sign' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-50'}`}>
-            <ClipboardSignature size={15} /> Bulk Sign
-          </button>
-        </div>
-        {tab === 'dashboard' ? <Dashboard /> : <BulkSign selectedPg={selectedPg} />}
+        {isPractitioner ? <BulkSign user={user} /> : <ComingSoonDashboard pgName={user.pgName} />}
       </main>
     </div>
   );

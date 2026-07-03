@@ -1,3 +1,4 @@
+
 # CLAUDE.md
 
 Guidance for Claude Code when working in this repo. Keep the **Change Log** at the
@@ -5,13 +6,28 @@ bottom updated after every change (newest first).
 
 ## Project
 
-DB-backed bulk workflow POC for HHH patient + order intake. A Vite/React frontend
-with Vercel serverless API routes backed by Neon/Postgres, Gemini for PDF data
-extraction, and Vercel Blob for PDF storage.
+**Command Center** (v2) — DB-backed workflow POC for HHH patient + order intake. A
+Vite/React frontend with Vercel serverless API routes backed by Neon/Postgres, Gemini
+for PDF data extraction, and Vercel Blob for PDF storage. The admin SPA ("Command
+Center") hosts a no-code workflow builder, orchestrator, coverage map, and identity
+admin (Employees / Entity / External Users); separate standalone surfaces are the
+worker portal (`/worker`, password + TOTP 2FA) and the external HHAH/PG portals
+(`/hhh-login`, `/pg-login`, username/password sessions).
 
-- **Frontend**: Vite + React + Tailwind (`src/`)
-- **API**: Vercel serverless functions (`api/`)
-- **DB**: Neon/Postgres (`db/migrations`, `db/seed`)
+- **Frontend**: Vite + React + Tailwind (`src/`); two entries: `index.html` (Command
+  Center shell) and `worker.html` (worker portal).
+- **API**: Vercel serverless functions (`api/`) — exactly 12 (Hobby cap); new
+  capability is added as POST `action` dispatch on existing handlers.
+- **DB**: Neon/Postgres (`db/migrations`); migration `003_identity_and_builder.sql`
+  adds employees, external_users, auth_sessions, builder-workflow + bucket columns.
+- **Auth**: dependency-free in `api/_lib/auth.js` — scrypt password hashes, TOTP
+  (RFC 6238) via node `crypto`, bearer sessions hashed into `auth_sessions`.
+  Employees log into `/worker` with password + 6-digit TOTP (secret shown ONCE at
+  creation); external users log into the portals with username/password.
+- **IMPORTANT (POC note)**: the Command Center admin pages (Employees, Entity,
+  External Users, Workflow builder) are intentionally UNAUTHENTICATED POC surfaces —
+  anyone who can reach the app can mint accounts. Only the worker portal and the
+  external portals enforce auth.
 - **AI**: Google Gemini (`@google/genai`) for extracting missing fields from order PDFs
 - **Storage**: Vercel Blob for order PDFs (optional — skips gracefully if no token)
 - Deployed on Vercel, auto-deploys from `main` on GitHub repo `Sujaygp002/workflow-poc`.
@@ -25,6 +41,7 @@ extraction, and Vercel Blob for PDF storage.
 | `npm run lint` | ESLint over the repo |
 | `npm run db:migrate` | Apply Neon migrations (`scripts/migrate.js`) |
 | `npm run db:seed` | Seed DB incl. the `wf7` workflow (`scripts/seed.js`) |
+| `npm run db:wipe` | TRUNCATE all data tables, keep schema (`scripts/wipe.js`) |
 
 Verify changes with `npm run lint` + `npm run build`. The live orchestrator/API
 cannot be exercised by `vite dev` alone (serverless functions need the Vercel
@@ -34,20 +51,48 @@ runtime and DB), so prefer build/lint for verification.
 
 - `api/_lib/` — shared server code: `config.js` (env/credentials), `db.js` (Neon
   client), `gemini.js` (PDF extraction), `blobStore.js` (PDF upload), `taskRegistry.js`
-  (per-step task logic), `workflowEngine.js`, `workflowDefinition.js`, `repositories.js`.
-- `api/<resource>/` — route handlers (orders, patients, reference-data, work-items,
-  workflow-runs, workflows/bulk-upload).
+  (per-step task logic incl. `human.performActions`), `workflowEngine.js`,
+  `workflowDefinition.js` (system workflow defs), `repositories.js`, plus the v2
+  identity/builder seams: `auth.js` (scrypt + TOTP + sessions), `identityRepo.js`
+  (employees/external users/sessions SQL), `builderCatalog.js` (trigger/action/
+  condition palette), `builderCompiler.js` (graph → engine `steps` compile + validate).
+- `api/<resource>/` — route handlers (auth, orders, patients, reference-data,
+  work-items, workflow-runs, workflows/bulk-upload, area-intake). `api/auth/index.js`
+  is the identity domain (logins, TOTP, employee + external-user CRUD, sessions).
+- `src/App.jsx` — the Command Center shell. Nav: Workflow (`/builder/workflows`),
+  Orchestrator, Coverage Map, Employees, Entity, External Users; footer link opens the
+  Worker Portal. `/` redirects to `/builder/workflows`. `/hhh-login`, `/pg-login`,
+  `/worker` render standalone (no sidebar). `src/WorkerApp.jsx` + `worker.html` are a
+  second Vite entry that mounts the same `WorkerPortal`.
+- `src/pages/builder/` — `WorkflowList.jsx` (definition cards, System vs Builder kind
+  badges, Run/Edit/Delete for builder workflows) + `WorkflowBuilder.jsx` (vertical
+  n8n-like editor: trigger picker, system/task/condition node cards, live compiled
+  preview via the shared flowchart renderer).
+- `src/pages/worker/` — `WorkerPortal.jsx` (password → TOTP login, Untouched |
+  Processing | Done buckets, 5s poll) + `WorkerTaskDetail.jsx` (context panel + action
+  checklist; legacy system-workflow tasks reuse the ported WorkBucket input panels).
+- `src/pages/employees/Employees.jsx`, `src/pages/entity/Entity.jsx`,
+  `src/pages/external/ExternalUsers.jsx` — identity/entity admin (unauthenticated POC
+  surfaces, see Project note).
+- `src/pages/hhh/HhhLogin.jsx` / `src/pages/pg/PgLogin.jsx` — external portals
+  (session-scoped via `externalLogin`; HHAH upload portal, PG admin dashboard /
+  practitioner Bulk Sign).
 - `src/pages/orchestrator/Orchestrator.jsx` — workflow run visualization. Renders each
   run with the shared flowchart components from `WorkflowDefinitionFlow.jsx`
   (`MegaGroupFlow` for `megaGroups` definitions, `MegaTaskNode` for `megaTask`, else
-  `WorkflowFlow`).
+  `WorkflowFlow`). Its live poll also drives `runBillingMonitor` and the builder
+  `tick` action (time-interval triggers).
 - `src/components/WorkflowDefinitionFlow.jsx` — the shared flowchart renderer (step
-  boxes, decision diamonds, mega-task boxes, trigger-chain connectors) used by both the
-  Orchestrator and the Workflows page (`src/pages/builder/WorkflowList.jsx`).
+  boxes, decision diamonds, mega-task boxes, trigger-chain connectors) used by the
+  Orchestrator, the Workflows page, and the builder preview.
+- `src/lib/` — `workflowApi.js` (data + builder + bucket clients) and `authApi.js`
+  (logins, session helpers, employee/external-user CRUD; bearer tokens in
+  `sessionStorage`: `cc_worker_token`, `cc_hhah_token`, `cc_pg_token`).
 - `src/pages/map/` — the Coverage Map (`/map`): `NetworkMap.jsx` (SVG graph engine) +
   `graph.js` (client-side join over the patients/orders/reference feeds).
-- `public/sample-4-artifacts/` — the demo upload set preloaded by the HHAH login page
-  (xlsx + unsigned/signed PDF ZIPs; `README.md` maps each row to its test scenario).
+- `public/sample-4-artifacts/` — demo upload fixtures (xlsx + unsigned/signed PDF
+  ZIPs; `README.md` maps each row to its test scenario). No longer auto-preloaded by
+  the HHAH portal — download/use manually.
 
 ## Conventions
 
@@ -71,6 +116,101 @@ runtime and DB), so prefer build/lint for verification.
 ## Change Log
 
 Newest first. Add an entry for each change made by Claude Code.
+
+- **2026-07-04** — **v2 iteration 2: acceptance-feedback fixes (D1–D4 per scratchpad DESIGN.md
+  "Iteration 2 addendum").**
+  - **D1-API**: new `listTaskRunsForRuns(runIds)` in `repositories.js` — ONE `ANY(runIds)` query
+    returning only slim renderer columns (`t.id/run_id/item_id/step_id/task_key/actor/status/
+    condition/created_at` + `i.item_index/decisions`, no payload blobs). `GET /api/workflow-runs`
+    now uses it (grouped by `run_id`) instead of the serial per-run `listTaskRunsForRun` loop;
+    single-run endpoints keep the full query. Payload 1.72 MB → 263 KB on the QA dataset (11 runs /
+    301 tasks), response ~3 min → ~3.6 s warm on the shim; flowcharts, (n) counts, backlog badges
+    and RunObjectSidebar verified intact (they only consume the slim columns).
+  - **D1-UI**: `Orchestrator.jsx` gained a `loaded` flag (set in `refresh()`'s `finally`) — until
+    the first fetch settles the page renders pulsing skeleton StatCards + "Loading workflow runs…"
+    instead of the empty state/zeroed counters; plus a `useRef` in-flight guard so 2.5 s poll ticks
+    skip while a previous refresh is pending (CDP probe: max 1 concurrent GET).
+  - **D2**: empty-state copy now points at the Workflow page Run button / HHAH portal
+    (`/hhh-login`); the defunct "Triggers page" mention is gone.
+  - **D3**: `Entity.jsx` create handlers optimistically merge the created row from the POST
+    response (`body.agency|pg|practitioner`) into `data` (prepend, dedupe by id) before the slow
+    background `refresh()` — a freshly created practitioner is immediately selectable in the
+    PG↔Practitioner mapping picker (CDP probe passes with a brand-new unique name).
+  - **D4**: `builderCatalog.js` `runHumanActions` awaits validators; `mark_order_sent.validate`
+    is async and resolves the REAL order (`extraction_payload.orderId` verified via `findOrderById`,
+    else `findOrder(order_number)`) — no DB row ⇒ 400 "No created order is linked to this task…",
+    task stays active, run stays running; `execute` re-resolves and returns
+    `{ marked:true, orderId }` (never `marked:true` on a no-op). Verified end-to-end (§8.16):
+    nonexistent O-9501 → 400 + active task; real order → completed + `SendToPhysician_Status`
+    stamped.
+  - **Go-live (pending, ops only)**: run `npm run db:wipe` against live Neon immediately before
+    announcing the URL (QA data — Bluebird/Sunrise/Summit/Valley, 21 patients, 11 runs — must not
+    survive), then re-create demo employees/workflows. Deliberately NOT run in this iteration; the
+    QA dataset was required for the acceptance checks above.
+  - lint + build pass; §8.13–8.16 checks re-run green.
+
+- **2026-07-03** — **E2E-1 fix: the authenticated portal agency is now authoritative for uploads;
+  the Coverage Map only renders Entity-page agencies.** Previously an HHAH-portal upload stamped
+  `patients.hhah_name` solely from the workbook's Agencyname column, so `/map` grew phantom balls
+  ("Boise Home Health", "Treasure Valley Hospice") and an "Unknown agency" ball (null hhah_name,
+  e.g. the sample-4 order-only row), and those patients were invisible on the uploader's own
+  portal (`/api/patients?hhahId=` filters `agency_id`, which stayed null).
+  - `api/workflows/bulk-upload/start.js`: new `stampSessionAgency` overwrites every item's
+    `referencePayload.HHAH` (name + `data_tags.source='session_agency'`) with the session user's
+    agency before items are created (multipart + JSON paths); `resolveAreaUploadContext` now
+    loads the full agency row via new `getHhahById` so `areaContext.hhahName` is the real name.
+    Result: `hhah_name` AND `agency_id` resolve to the real Entity-page agency on patients,
+    admissions, and orders.
+  - `api/_lib/taskRegistry.js`: new `guardSessionHhah` strips HHAH from AI-extraction and
+    human data-entry reference patches when the item is session-stamped, so a PDF-extracted or
+    hand-typed agency name can never reassign the upload's agency.
+  - `src/pages/map/graph.js`: agency balls now come ONLY from Entity-page reference agencies;
+    edges whose hhah_name doesn't match one are dropped (no more "Unknown agency"/never-created
+    balls) and edge display names are canonicalized to the Entity-page spelling.
+  - Verified end-to-end: db:wipe → create "Sunrise HH" + hhah user → authenticated sample-4
+    upload → all 12 patient records + 15 orders stamped Sunrise HH, portal-scoped patient list
+    shows all 12, and the live-rendered `/map` SVG (checked via CDP) has exactly one agency
+    ball: "Sunrise HH". lint + build pass.
+
+- **2026-07-03** — **Command Center v2: full rebuild of the app shell around a no-code
+  workflow builder, real auth for worker + external portals, and identity/entity admin
+  pages** (branch `v2-command-center`; design in scratchpad `v2/DESIGN.md`).
+  - **Shell**: brand renamed FlowPOC → **Command Center** (sidebar + document titles).
+    Nav is now Workflow / Orchestrator / Coverage Map / Employees / Entity / External
+    Users + a footer "Open Worker Portal" link. `/` → `/builder/workflows`. Removed
+    routes AND pages: `/triggers`, `/patients`, `/orders`, `/reference-data`,
+    `/worker/bucket/:userId` (deleted `Triggers.jsx`, `Patients.jsx`, `Orders.jsx`,
+    `ReferenceData.jsx`, `workbucket/UserSelect.jsx`, `workbucket/WorkBucket.jsx` —
+    its input panels were ported into `WorkerTaskDetail.jsx` first). `worker.html`
+    entry (`WorkerApp.jsx`) now mounts the new `WorkerPortal`.
+  - **DB**: migration `003_identity_and_builder.sql` (employees, external_users,
+    auth_sessions, `workflow_definitions.kind`, task-run `assigned_employee_id`/
+    `opened_at`/`actions`/`action_state`) + `npm run db:wipe` (`scripts/wipe.js`).
+  - **Auth** (`api/_lib/auth.js`, `api/auth/index.js`, `src/lib/authApi.js`): scrypt
+    passwords, TOTP 2FA (node `crypto`, ±1 step), sha256-hashed bearer sessions.
+    Worker login is two-stage (password → TOTP); external portals are single-factor.
+    ALL seeded/demo credentials removed (`test123`, `SEEDED_USERS` are gone).
+  - **POC caveat (intentional)**: the Command Center admin pages (Employees, Entity,
+    External Users, Builder) are UNAUTHENTICATED POC surfaces — anyone reaching the
+    app can mint accounts. Auth protects only `/worker` and the external portals.
+  - **Builder** (`builderCatalog.js`, `builderCompiler.js`, `WorkflowBuilder.jsx`):
+    graph of system/task/condition nodes compiled server-side into the existing engine
+    `steps` shape (`kind='builder'` definitions; system wf7/signing/billing/area defs
+    survive as `kind='system'`). Triggers: `document_upload` (HHAH upload routes to
+    active builder workflows, else falls back to wf7), `manual` (`startWorkflow`), and
+    `time_interval` via the `tick` action. **Caveat: time_interval triggers only fire
+    while the Orchestrator poll is running (it calls `tick`) — this is NOT a real
+    scheduler.**
+  - **Worker buckets**: Untouched / Processing / Done derived from `workflow_task_runs`
+    (`opened_at` + `assigned_employee_id`); open claims shared (NULL-assignee) system
+    tasks; complete validates per-action results (400 keeps the task Processing).
+  - **Portals**: HhhLogin/PgLogin rewritten on `externalLogin` (scope from the session
+    user; PG admin sees a "Coming soon" dashboard, PG practitioner gets Bulk Sign);
+    bulk-upload start + bulkSign now require the right external bearer token.
+  - **Entity/Employees/External Users pages**: agency/PG/practitioner CRUD +
+    PG↔practitioner mapping; employee creation shows the one-time TOTP secret modal.
+  - lint + build pass; all 10 routes smoke-tested via the shim server + headless
+    Chrome with zero console errors.
 
 - **2026-07-03** — **Repo cleanup: removed the Java backend, dead MSA/builder code, old
   sample sets, and stray root files.** Untracked items were moved to

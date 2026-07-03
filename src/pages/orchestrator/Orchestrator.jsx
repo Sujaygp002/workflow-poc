@@ -202,9 +202,15 @@ export default function Orchestrator() {
   const [lastSync, setLastSync] = useState(null);
   const [checkingAreaId, setCheckingAreaId] = useState(null);
   const [billingError, setBillingError] = useState(null);
+  const [loaded, setLoaded] = useState(false);
   const billingRunning = useRef(false);
+  const refreshing = useRef(false);
 
   async function refresh() {
+    // In-flight guard: skip poll ticks while a previous refresh is still pending
+    // so slow responses can't stack overlapping /api/workflow-runs requests.
+    if (refreshing.current) return;
+    refreshing.current = true;
     try {
       const [dbRuns, areaRows] = await Promise.all([
         fetchWorkflowRuns(),
@@ -218,6 +224,9 @@ export default function Orchestrator() {
     } catch (err) {
       setRuns([]);
       setDbError(err.message);
+    } finally {
+      refreshing.current = false;
+      setLoaded(true);
     }
   }
 
@@ -326,12 +335,24 @@ export default function Orchestrator() {
         <div className="-mt-4 mb-4 text-[11px] text-slate-400">{live ? 'Live · ' : ''}last updated {lastSync.toLocaleTimeString()}</div>
       )}
 
-      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard label="Total Runs" value={runs.length} sub="all time" color="slate" />
-        <StatCard label="Active" value={running.length} sub="workflows running" color="amber" />
-        <StatCard label="Completed" value={completed.length} sub="workflows done" color="green" />
-        <StatCard label="Manual Backlog" value={manualBacklog} sub="human tasks to do" color="pink" />
-      </div>
+      {!loaded ? (
+        <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {['Total Runs', 'Active', 'Completed', 'Manual Backlog'].map((label) => (
+            <div key={label} className="animate-pulse rounded-xl border border-slate-100 bg-slate-50 p-4">
+              <div className="h-7 w-12 rounded bg-slate-200" />
+              <div className="mt-2 h-3 w-24 rounded bg-slate-200" />
+              <div className="mt-2 h-2.5 w-16 rounded bg-slate-100" />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatCard label="Total Runs" value={runs.length} sub="all time" color="slate" />
+          <StatCard label="Active" value={running.length} sub="workflows running" color="amber" />
+          <StatCard label="Completed" value={completed.length} sub="workflows done" color="green" />
+          <StatCard label="Manual Backlog" value={manualBacklog} sub="human tasks to do" color="pink" />
+        </div>
+      )}
 
       {dbError && (
         <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -358,10 +379,15 @@ export default function Orchestrator() {
         ))}
       </div>
 
-      {allFiltered.length === 0 ? (
+      {!loaded ? (
+        <div className="py-16 text-center text-slate-400">
+          <Activity size={40} className="mx-auto mb-3 animate-pulse opacity-30" />
+          <p className="animate-pulse">Loading workflow runs…</p>
+        </div>
+      ) : allFiltered.length === 0 ? (
         <div className="py-16 text-center text-slate-400">
           <Activity size={40} className="mx-auto mb-3 opacity-30" />
-          <p>No workflow runs yet. Fire a trigger from the Triggers page.</p>
+          <p>No workflow runs yet. Run a builder workflow from the Workflow page&apos;s Run button, or upload documents from the HHAH portal (/hhh-login).</p>
         </div>
       ) : (
         <div>

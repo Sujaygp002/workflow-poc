@@ -9,6 +9,7 @@ import {
   markOrderSignedByPhysician,
   markOrderSentToPhysician,
   updateItem,
+  updateTask,
   updateCpoMinutes,
   writeAdmissionBundle,
   writeEpisodeBundle,
@@ -18,6 +19,7 @@ import {
 import { extractMissingDataFromPdf } from './gemini.js';
 import { GEMINI_MODEL } from './config.js';
 import { sendEmail } from './mailer.js';
+import { runHumanActions } from './builderCatalog.js';
 import { cleanString, hasValue, normalizeNpi, safeJson } from './normalizers.js';
 
 const REQUIRED_FIELDS = [
@@ -46,6 +48,17 @@ function mergeDeep(target, source) {
     }
   }
   return out;
+}
+
+// Strip HHAH from a references patch when the item carries the authenticated
+// upload agency (stamped at bulk-upload start, data_tags.source = 'session_agency')
+// — no downstream AI/human patch may reassign the agency.
+function guardSessionHhah(item, referencesPatch) {
+  const patch = referencesPatch || {};
+  if (item.reference_payload?.HHAH?.data_tags?.source !== 'session_agency') return patch;
+  const rest = { ...patch };
+  delete rest.HHAH;
+  return rest;
 }
 
 function missingFields(item) {
@@ -384,11 +397,13 @@ export const taskRegistry = {
 
       const patientPatch = result.data?.patient || {};
       const orderPatch = result.data?.order || {};
-      const referencePatch = {
+      // The authenticated upload agency is authoritative — never let a
+      // PDF-extracted agency name overwrite it (see guardSessionHhah).
+      const referencePatch = guardSessionHhah(item, {
         practitioner: result.data?.practitioner || {},
         PG: result.data?.PG || {},
         HHAH: result.data?.HHAH || {},
-      };
+      });
       const patientPayload = mergeDeep(item.patient_payload, {
         patient_info: {
           name: patientPatch.name,
@@ -651,7 +666,7 @@ export const taskRegistry = {
     await updateItem(item.id, {
       patientPayload: confidenceConfirmed(mergeDeep(item.patient_payload, payload?.patient || {})),
       orderPayload: confidenceConfirmed(mergeDeep(item.order_payload, payload?.order || {})),
-      referencePayload: mergeDeep(item.reference_payload, payload?.references || {}),
+      referencePayload: mergeDeep(item.reference_payload, guardSessionHhah(item, payload?.references)),
       decisions,
     });
     return { ok: true, output: { validated: true } };
@@ -662,7 +677,7 @@ export const taskRegistry = {
     await updateItem(item.id, {
       patientPayload: confidenceConfirmed(mergeDeep(item.patient_payload, payload?.patient || {})),
       orderPayload: confidenceConfirmed(mergeDeep(item.order_payload, payload?.order || {})),
-      referencePayload: mergeDeep(item.reference_payload, payload?.references || {}),
+      referencePayload: mergeDeep(item.reference_payload, guardSessionHhah(item, payload?.references)),
       decisions,
     });
     return { ok: true, output: { filled: true } };
@@ -704,6 +719,26 @@ export const taskRegistry = {
       decisions: setDecisions(item, { record_reviewed: true }),
     });
     return { ok: true, output: { reviewed: true } };
+  },
+
+  // Builder task node: an employee-assigned checklist of catalog actions.
+  // Validates every action's submitted result first; any failure returns a
+  // retryable error map (the engine keeps the task active/Processing and the
+  // API responds 400 with per-action messages). On success each action's
+  // execute() runs (email send, date merge, order stamp — existing fns).
+  'human.performActions': async ({ item, task, step, payload }) => {
+    const actions = Array.isArray(task?.actions) && task.actions.length
+      ? task.actions
+      : (step?.actions || []);
+    const results = payload?.actionResults || {};
+    const { errors, outputs } = await runHumanActions({ actions, results, item });
+    if (Object.keys(errors).length) {
+      return { ok: false, retry: true, actionErrors: errors, error: 'Action validation failed' };
+    }
+    if (task?.id) {
+      await updateTask(task.id, { actionState: outputs });
+    }
+    return { ok: true, output: { actionResults: results, actionOutputs: outputs } };
   },
 
   'signing.reviewReadiness': async ({ item }) => {

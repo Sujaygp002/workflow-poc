@@ -1,6 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import UserSelect from './pages/workbucket/UserSelect';
-import WorkBucket from './pages/workbucket/WorkBucket';
+import WorkerPortal from './pages/worker/WorkerPortal';
 
 // The worker is a separate HTML entry. Its router basename must match the URL
 // it's actually served at on each host:
@@ -20,8 +19,7 @@ export default function WorkerApp() {
   return (
     <BrowserRouter basename={workerBasename}>
       <Routes>
-        <Route path="/" element={<UserSelect />} />
-        <Route path="/bucket/:userId" element={<WorkBucket />} />
+        <Route path="/" element={<WorkerPortal />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

@@ -52,6 +52,15 @@ export function buildGraph({ patients = [], orders = [], reference = {} } = {}) 
   const practitioners = reference.practitioners || [];
   const todayMs = dateMs(new Date());
 
+  // Entity-page agencies are the ONLY source of agency balls. Patient/order rows
+  // whose hhah_name doesn't match a real agency (blank, or a workbook-invented
+  // name) must never spawn a phantom "Unknown agency" / never-created ball.
+  const refHhahNameByKey = new Map();
+  hhahsRef.forEach((h) => {
+    const k = key(h.name);
+    if (k) refHhahNameByKey.set(k, clean(h.name));
+  });
+
   // ---- edges: one bucket per (HHAH, PG) pair, aggregated across patient records ----
   const edgeMap = new Map(); // `${hhahName}|||${pgName}` -> edge
   const edgeKey = (h, p) => `${key(h)}|||${key(p)}`;
@@ -172,9 +181,11 @@ export function buildGraph({ patients = [], orders = [], reference = {} } = {}) 
       delete e._episodeAdmission;
       return e;
     })
-    .filter((e) => e.patients > 0 || e.orders > 0);
+    .filter((e) => (e.patients > 0 || e.orders > 0) && refHhahNameByKey.has(e.hhahId))
+    // canonicalize the display name to the Entity-page agency name
+    .map((e) => ({ ...e, hhahName: refHhahNameByKey.get(e.hhahId) }));
 
-  // ---- HHAH nodes: union of reference HHAHs + any seen on an edge ----
+  // ---- HHAH nodes: ONLY Entity-page (reference) agencies ----
   const hhahByKey = new Map();
   const addHhah = (name, received) => {
     const k = key(name);
@@ -183,7 +194,6 @@ export function buildGraph({ patients = [], orders = [], reference = {} } = {}) 
     else if (received) hhahByKey.get(k).received = true;
   };
   hhahsRef.forEach((h) => addHhah(h.name, false));
-  edges.forEach((e) => addHhah(e.hhahName, false));
   // pgCount per HHAH
   edges.forEach((e) => { const h = hhahByKey.get(key(e.hhahName)); if (h) h.pgCount += 1; });
 

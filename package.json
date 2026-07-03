@@ -9,6 +9,7 @@
     "db:migrate": "node scripts/migrate.js",
     "db:reset": "node scripts/migrate.js --reset",
     "db:seed": "node scripts/seed.js",
+    "db:wipe": "node scripts/wipe.js",
     "lint": "eslint .",
     "preview": "vite preview"
   },

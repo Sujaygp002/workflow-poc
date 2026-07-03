@@ -11,8 +11,13 @@ export function methodNotAllowed(res, allowed) {
 
 export function handleError(res, error) {
   const message = error instanceof Error ? error.message : String(error);
-  const status = message.includes('not configured') ? 503 : 500;
-  sendJson(res, status, { error: message });
+  // Errors thrown with an explicit `status` (auth/validation) map straight to
+  // that HTTP status; `details` (e.g. actionErrors, messages) merge into the body.
+  const status = Number.isInteger(error?.status)
+    ? error.status
+    : message.includes('not configured') ? 503 : 500;
+  const details = error?.details && typeof error.details === 'object' ? error.details : {};
+  sendJson(res, status, { error: message, ...details });
 }
 
 export async function readJson(req) {

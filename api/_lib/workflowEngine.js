@@ -8,7 +8,6 @@ import {
   getItemTasks,
   getRunItems,
   getTaskRun,
-  listUsers,
   updateItem,
   updateRunStatus,
   updateTask,
@@ -37,12 +36,6 @@ function terminal(task) {
 
 function hasActiveHuman(tasks) {
   return tasks.some((task) => task.status === 'active' && task.actor === 'human');
-}
-
-async function assignHuman() {
-  const users = await listUsers();
-  if (!users.length) return null;
-  return users[Math.floor(Math.random() * users.length)].id;
 }
 
 export async function runItemAutomation({ definition, itemId, context = {} }) {
@@ -74,9 +67,11 @@ export async function runItemAutomation({ definition, itemId, context = {} }) {
       }
 
       if (step.actor === 'human') {
+        // Keep whatever assignee the task row already carries (builder-set
+        // assigned_employee_id, or NULL = shared across every employee's
+        // Untouched bucket for system workflows). No random assignment.
         await updateTask(task.id, {
           status: 'active',
-          assignedTo: task.assigned_to || await assignHuman(),
           startedAt: new Date().toISOString(),
           output: taskDisplayPayload(freshItem),
         });
@@ -241,6 +236,17 @@ export async function completeHumanTask({ taskRunId, notes, payload, definition 
   const fn = taskRegistry[task.task_key];
   if (!step || !fn) throw new Error(`Task implementation missing for ${task.task_key}`);
   const result = await fn({ item, step, task, payload: payload || {} });
+
+  // Validation-retry rule: a { retry: true } result keeps the task active (and
+  // opened => still Processing) and surfaces per-action errors as a 400 —
+  // nothing is marked failed. Used by human.performActions.
+  if (result?.retry === true) {
+    const error = new Error(result.error || 'Validation failed');
+    error.status = 400;
+    error.details = { actionErrors: result.actionErrors || {} };
+    throw error;
+  }
+
   await updateItem(item.id, { status: 'running' });
   await updateTask(task.id, {
     status: result.ok === false ? 'failed' : 'completed',
