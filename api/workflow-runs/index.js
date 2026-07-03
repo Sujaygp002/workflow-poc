@@ -14,6 +14,7 @@ import {
   getRunWithDefinition,
   listActiveBuilderWorkflowsByTrigger,
   listTaskRunsForRun,
+  listTaskRunsForRuns,
   listWorkflowRuns,
   runBillingMonitorPass,
 } from '../_lib/repositories.js';
@@ -342,11 +343,14 @@ export default async function handler(req, res) {
   try {
     if (req.method === 'GET') {
       const runs = await listWorkflowRuns();
-      const withTasks = [];
-      for (const run of runs) {
-        const tasks = await listTaskRunsForRun(run.id);
-        withTasks.push({ ...run, tasks });
+      const allTasks = await listTaskRunsForRuns(runs.map((run) => run.id));
+      const tasksByRun = new Map();
+      for (const task of allTasks) {
+        const list = tasksByRun.get(task.run_id) || [];
+        list.push(task);
+        tasksByRun.set(task.run_id, list);
       }
+      const withTasks = runs.map((run) => ({ ...run, tasks: tasksByRun.get(run.id) || [] }));
       return sendJson(res, 200, { runs: withTasks });
     }
 

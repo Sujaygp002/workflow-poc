@@ -12,6 +12,7 @@ import {
   findHhahByName,
   findStatisticalAreaByName,
   getActiveWorkflow,
+  getHhahById,
   getRunWithDefinition,
   insertUploadedDocument,
   listActiveBuilderWorkflowsByTrigger,
@@ -61,15 +62,38 @@ async function resolveAreaUploadContext(hhahUser, fields = {}, body = {}) {
   const fallbackHhahName = firstField(fields.hhahName, body.hhahName || '');
   const area = areaId ? { id: areaId } : areaName ? await findStatisticalAreaByName(areaName, areaType) : null;
   const hhah = hhahUser?.agency_id
-    ? { id: hhahUser.agency_id }
+    ? await getHhahById(hhahUser.agency_id)
     : fallbackHhahId
-      ? { id: fallbackHhahId }
+      ? await getHhahById(fallbackHhahId)
       : fallbackHhahName ? await findHhahByName(fallbackHhahName) : null;
   return {
     areaId: area?.id || null,
     hhahId: hhah?.id || null,
     areaName: area?.name || areaName || null,
     hhahName: hhah?.name || fallbackHhahName || null,
+  };
+}
+
+// The authenticated portal agency is authoritative for every row of the upload:
+// stamp it over whatever the workbook's Agencyname column said (or left blank),
+// so patients/orders land under the real Entity-page agency (hhah_name AND
+// agency_id resolve) instead of spawning phantom / "Unknown agency" records.
+function stampSessionAgency(referencePayload, areaContext) {
+  if (!areaContext?.hhahId || !areaContext?.hhahName) return referencePayload || {};
+  const ref = referencePayload || {};
+  return {
+    ...ref,
+    HHAH: {
+      ...(ref.HHAH || {}),
+      name: areaContext.hhahName,
+      data_tags: {
+        ...(ref.HHAH?.data_tags || {}),
+        source: 'session_agency',
+        match_key: `hhah_id:${areaContext.hhahId}`,
+        validated_by: 'session',
+        confidence: 'confirmed',
+      },
+    },
   };
 }
 
@@ -168,7 +192,7 @@ async function startRunForWorkflow({ workflow, parsed, areaContext, sourceLabel,
       itemIndex,
       patientPayload: item.patientPayload,
       orderPayload: item.orderPayload,
-      referencePayload: item.referencePayload,
+      referencePayload: stampSessionAgency(item.referencePayload, areaContext),
       extractionPayload: {
         sourceRows: item.sourceRows,
         pdf: pdfMetadataForItem(item, pdfsByOrderNumber),
@@ -255,7 +279,7 @@ async function startFromJson(req, hhahUser) {
         itemIndex: i,
         patientPayload: item.patientPayload,
         orderPayload: item.orderPayload,
-        referencePayload: item.referencePayload,
+        referencePayload: stampSessionAgency(item.referencePayload, areaContext),
         extractionPayload: item.extractionPayload || {},
       });
       await createTaskRunsForItem({

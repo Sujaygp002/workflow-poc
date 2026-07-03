@@ -117,6 +117,61 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-07-04** — **v2 iteration 2: acceptance-feedback fixes (D1–D4 per scratchpad DESIGN.md
+  "Iteration 2 addendum").**
+  - **D1-API**: new `listTaskRunsForRuns(runIds)` in `repositories.js` — ONE `ANY(runIds)` query
+    returning only slim renderer columns (`t.id/run_id/item_id/step_id/task_key/actor/status/
+    condition/created_at` + `i.item_index/decisions`, no payload blobs). `GET /api/workflow-runs`
+    now uses it (grouped by `run_id`) instead of the serial per-run `listTaskRunsForRun` loop;
+    single-run endpoints keep the full query. Payload 1.72 MB → 263 KB on the QA dataset (11 runs /
+    301 tasks), response ~3 min → ~3.6 s warm on the shim; flowcharts, (n) counts, backlog badges
+    and RunObjectSidebar verified intact (they only consume the slim columns).
+  - **D1-UI**: `Orchestrator.jsx` gained a `loaded` flag (set in `refresh()`'s `finally`) — until
+    the first fetch settles the page renders pulsing skeleton StatCards + "Loading workflow runs…"
+    instead of the empty state/zeroed counters; plus a `useRef` in-flight guard so 2.5 s poll ticks
+    skip while a previous refresh is pending (CDP probe: max 1 concurrent GET).
+  - **D2**: empty-state copy now points at the Workflow page Run button / HHAH portal
+    (`/hhh-login`); the defunct "Triggers page" mention is gone.
+  - **D3**: `Entity.jsx` create handlers optimistically merge the created row from the POST
+    response (`body.agency|pg|practitioner`) into `data` (prepend, dedupe by id) before the slow
+    background `refresh()` — a freshly created practitioner is immediately selectable in the
+    PG↔Practitioner mapping picker (CDP probe passes with a brand-new unique name).
+  - **D4**: `builderCatalog.js` `runHumanActions` awaits validators; `mark_order_sent.validate`
+    is async and resolves the REAL order (`extraction_payload.orderId` verified via `findOrderById`,
+    else `findOrder(order_number)`) — no DB row ⇒ 400 "No created order is linked to this task…",
+    task stays active, run stays running; `execute` re-resolves and returns
+    `{ marked:true, orderId }` (never `marked:true` on a no-op). Verified end-to-end (§8.16):
+    nonexistent O-9501 → 400 + active task; real order → completed + `SendToPhysician_Status`
+    stamped.
+  - **Go-live (pending, ops only)**: run `npm run db:wipe` against live Neon immediately before
+    announcing the URL (QA data — Bluebird/Sunrise/Summit/Valley, 21 patients, 11 runs — must not
+    survive), then re-create demo employees/workflows. Deliberately NOT run in this iteration; the
+    QA dataset was required for the acceptance checks above.
+  - lint + build pass; §8.13–8.16 checks re-run green.
+
+- **2026-07-03** — **E2E-1 fix: the authenticated portal agency is now authoritative for uploads;
+  the Coverage Map only renders Entity-page agencies.** Previously an HHAH-portal upload stamped
+  `patients.hhah_name` solely from the workbook's Agencyname column, so `/map` grew phantom balls
+  ("Boise Home Health", "Treasure Valley Hospice") and an "Unknown agency" ball (null hhah_name,
+  e.g. the sample-4 order-only row), and those patients were invisible on the uploader's own
+  portal (`/api/patients?hhahId=` filters `agency_id`, which stayed null).
+  - `api/workflows/bulk-upload/start.js`: new `stampSessionAgency` overwrites every item's
+    `referencePayload.HHAH` (name + `data_tags.source='session_agency'`) with the session user's
+    agency before items are created (multipart + JSON paths); `resolveAreaUploadContext` now
+    loads the full agency row via new `getHhahById` so `areaContext.hhahName` is the real name.
+    Result: `hhah_name` AND `agency_id` resolve to the real Entity-page agency on patients,
+    admissions, and orders.
+  - `api/_lib/taskRegistry.js`: new `guardSessionHhah` strips HHAH from AI-extraction and
+    human data-entry reference patches when the item is session-stamped, so a PDF-extracted or
+    hand-typed agency name can never reassign the upload's agency.
+  - `src/pages/map/graph.js`: agency balls now come ONLY from Entity-page reference agencies;
+    edges whose hhah_name doesn't match one are dropped (no more "Unknown agency"/never-created
+    balls) and edge display names are canonicalized to the Entity-page spelling.
+  - Verified end-to-end: db:wipe → create "Sunrise HH" + hhah user → authenticated sample-4
+    upload → all 12 patient records + 15 orders stamped Sunrise HH, portal-scoped patient list
+    shows all 12, and the live-rendered `/map` SVG (checked via CDP) has exactly one agency
+    ball: "Sunrise HH". lint + build pass.
+
 - **2026-07-03** — **Command Center v2: full rebuild of the app shell around a no-code
   workflow builder, real auth for worker + external portals, and identity/entity admin
   pages** (branch `v2-command-center`; design in scratchpad `v2/DESIGN.md`).

@@ -2,6 +2,8 @@
 // Every entry maps to EXISTING code — taskRegistry keys, repository fns, mailer.
 import { sendEmail } from './mailer.js';
 import {
+  findOrder,
+  findOrderById,
   markOrderSentToPhysician,
   updateCpoMinutes,
   updateItem,
@@ -52,6 +54,22 @@ function validDate(value) {
 
 function itemOrderId(item) {
   return item?.extraction_payload?.orderId || null;
+}
+
+const NO_LINKED_ORDER_MESSAGE = "No created order is linked to this task — add a 'Create order' step before this task, or upload an order that exists.";
+
+// Resolve the REAL order row for an item: the id stamped by a prior
+// 'Create order' step first, else lookup by the workbook's order number.
+// Returns null when neither maps to a DB row.
+async function resolveOrderForItem(item) {
+  const orderId = itemOrderId(item);
+  if (orderId) {
+    const order = await findOrderById(orderId);
+    if (order) return order;
+  }
+  const orderNumber = item?.order_payload?.order_info?.order_number;
+  if (hasValue(orderNumber)) return findOrder(orderNumber);
+  return null;
 }
 
 // Human (checklist) actions. Each has a server-side validate(action, result, item)
@@ -170,16 +188,16 @@ export const HUMAN_ACTIONS = {
     key: 'mark_order_sent',
     label: 'Mark order as sent',
     inputs: [],
-    validate(action, result, item) {
-      if (!itemOrderId(item) && !hasValue(item?.order_payload?.order_info?.order_number)) {
-        return 'No order is linked to this task';
-      }
+    async validate(action, result, item) {
+      const order = await resolveOrderForItem(item);
+      if (!order) return NO_LINKED_ORDER_MESSAGE;
       return null;
     },
     async execute(action, result, item) {
-      const orderId = itemOrderId(item);
-      if (orderId) await markOrderSentToPhysician(orderId);
-      return { marked: true, orderId };
+      const order = await resolveOrderForItem(item);
+      if (!order) throw new Error(NO_LINKED_ORDER_MESSAGE);
+      await markOrderSentToPhysician(order.id);
+      return { marked: true, orderId: order.id };
     },
   },
   confirm_checklist: {
@@ -226,7 +244,7 @@ export async function runHumanActions({ actions = [], results = {}, item }) {
       errors[action.id] = `Unknown action "${action.actionKey}"`;
       continue;
     }
-    const message = spec.validate ? spec.validate(action, results[action.id], item) : null;
+    const message = spec.validate ? await spec.validate(action, results[action.id], item) : null;
     if (message) errors[action.id] = message;
   }
   if (Object.keys(errors).length) return { errors, outputs: {} };

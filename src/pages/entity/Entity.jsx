@@ -130,6 +130,17 @@ export default function Entity() {
     refresh();
   }, []);
 
+  // Optimistically merge a freshly created row (from the POST response) into
+  // local state so it is usable immediately (e.g. in the mapping picker) even
+  // when the follow-up GET is slow. Prepends, deduped by id.
+  function mergeCreated(listKey, row) {
+    if (!row?.id) return;
+    setData((current) => ({
+      ...current,
+      [listKey]: [row, ...(current[listKey] || []).filter((entry) => entry.id !== row.id)],
+    }));
+  }
+
   const practitionerById = useMemo(
     () => Object.fromEntries(data.practitioners.map((p) => [p.id, p])),
     [data.practitioners],
@@ -167,11 +178,12 @@ export default function Entity() {
     }
     setAgencySaving(true);
     try {
-      await createAgency({
+      const body = await createAgency({
         name: agencyName.trim(),
         npi: agencyNpi.trim(),
         contact: agencyEmail.trim() ? { email: agencyEmail.trim() } : {},
       });
+      mergeCreated('hhahs', body?.agency);
       setAgencyMsg(`Agency "${agencyName.trim()}" created.`);
       setAgencyErr('');
       setAgencyName('');
@@ -195,7 +207,8 @@ export default function Entity() {
     }
     setPgSaving(true);
     try {
-      await createPg({ name: pgName.trim(), npi: pgNpi.trim() });
+      const body = await createPg({ name: pgName.trim(), npi: pgNpi.trim() });
+      mergeCreated('physicianGroups', body?.pg);
       setPgMsg(`PG "${pgName.trim()}" created.`);
       setPgErr('');
       setPgName('');
@@ -224,7 +237,8 @@ export default function Entity() {
     }
     setPracSaving(true);
     try {
-      await createPractitioner({ name: pracName.trim(), npi: pracNpi.trim() });
+      const body = await createPractitioner({ name: pracName.trim(), npi: pracNpi.trim() });
+      mergeCreated('practitioners', body?.practitioner);
       setPracMsg(`Practitioner "${pracName.trim()}" created.`);
       setPracErr('');
       setPracName('');

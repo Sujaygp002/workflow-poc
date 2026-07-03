@@ -50,6 +50,17 @@ function mergeDeep(target, source) {
   return out;
 }
 
+// Strip HHAH from a references patch when the item carries the authenticated
+// upload agency (stamped at bulk-upload start, data_tags.source = 'session_agency')
+// — no downstream AI/human patch may reassign the agency.
+function guardSessionHhah(item, referencesPatch) {
+  const patch = referencesPatch || {};
+  if (item.reference_payload?.HHAH?.data_tags?.source !== 'session_agency') return patch;
+  const rest = { ...patch };
+  delete rest.HHAH;
+  return rest;
+}
+
 function missingFields(item) {
   return REQUIRED_FIELDS
     .filter(([, getter]) => !hasValue(getter(item)))
@@ -386,11 +397,13 @@ export const taskRegistry = {
 
       const patientPatch = result.data?.patient || {};
       const orderPatch = result.data?.order || {};
-      const referencePatch = {
+      // The authenticated upload agency is authoritative — never let a
+      // PDF-extracted agency name overwrite it (see guardSessionHhah).
+      const referencePatch = guardSessionHhah(item, {
         practitioner: result.data?.practitioner || {},
         PG: result.data?.PG || {},
         HHAH: result.data?.HHAH || {},
-      };
+      });
       const patientPayload = mergeDeep(item.patient_payload, {
         patient_info: {
           name: patientPatch.name,
@@ -653,7 +666,7 @@ export const taskRegistry = {
     await updateItem(item.id, {
       patientPayload: confidenceConfirmed(mergeDeep(item.patient_payload, payload?.patient || {})),
       orderPayload: confidenceConfirmed(mergeDeep(item.order_payload, payload?.order || {})),
-      referencePayload: mergeDeep(item.reference_payload, payload?.references || {}),
+      referencePayload: mergeDeep(item.reference_payload, guardSessionHhah(item, payload?.references)),
       decisions,
     });
     return { ok: true, output: { validated: true } };
@@ -664,7 +677,7 @@ export const taskRegistry = {
     await updateItem(item.id, {
       patientPayload: confidenceConfirmed(mergeDeep(item.patient_payload, payload?.patient || {})),
       orderPayload: confidenceConfirmed(mergeDeep(item.order_payload, payload?.order || {})),
-      referencePayload: mergeDeep(item.reference_payload, payload?.references || {}),
+      referencePayload: mergeDeep(item.reference_payload, guardSessionHhah(item, payload?.references)),
       decisions,
     });
     return { ok: true, output: { filled: true } };

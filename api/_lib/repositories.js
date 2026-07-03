@@ -311,6 +311,19 @@ export async function listTaskRunsForRun(runId) {
   `;
 }
 
+export async function listTaskRunsForRuns(runIds) {
+  if (!Array.isArray(runIds) || runIds.length === 0) return [];
+  const sql = getSql();
+  return sql`
+    SELECT t.id, t.run_id, t.item_id, t.step_id, t.task_key, t.actor, t.status, t.condition, t.created_at,
+      i.item_index, i.decisions
+    FROM workflow_task_runs t
+    JOIN workflow_items i ON i.id = t.item_id
+    WHERE t.run_id = ANY(${runIds})
+    ORDER BY i.item_index, t.created_at, t.step_id
+  `;
+}
+
 export async function listActiveWorkItems(userId) {
   const sql = getSql();
   return sql`
@@ -516,6 +529,13 @@ export async function findPgByName(name) {
 export async function findHhahByName(name) {
   const sql = getSql();
   const rows = await sql`SELECT * FROM home_health_agencies WHERE normalized_name = ${normalizeName(name)} LIMIT 1`;
+  return rows[0] || null;
+}
+
+export async function getHhahById(id) {
+  if (!id) return null;
+  const sql = getSql();
+  const rows = await sql`SELECT * FROM home_health_agencies WHERE id = ${id} LIMIT 1`;
   return rows[0] || null;
 }
 
