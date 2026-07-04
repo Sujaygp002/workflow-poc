@@ -8,10 +8,8 @@ import {
   generateTotpSecret,
   hashPassword,
   httpError,
-  otpauthUrl,
   requireSession,
   verifyPassword,
-  verifyTotp,
 } from '../_lib/auth.js';
 import {
   createEmployeeRow,
@@ -74,26 +72,13 @@ async function externalSessionUser(user) {
   };
 }
 
+// Worker login is single-factor (username + password). 2FA/TOTP was removed:
+// a successful password check mints a complete session immediately.
 async function workerLogin({ username, password }) {
   const employee = await findEmployeeByUsername(username);
   if (!employee || !employee.active || !verifyPassword(password, employee.password_hash)) {
     throw httpError(401, 'Invalid username or password');
   }
-  const { token } = await createSessionFor({
-    principalType: 'employee',
-    principalId: employee.id,
-    stage: 'password',
-  });
-  return { stage: 'totp', tempToken: token };
-}
-
-async function workerTotp(req, { code }) {
-  const { session, employee } = await requireSession(req, { type: 'employee', stage: 'password' });
-  if (!verifyTotp(employee.totp_secret, code)) {
-    throw httpError(401, 'Invalid authentication code');
-  }
-  await destroySession(bearerToken(req)).catch(() => {});
-  void session;
   const { token } = await createSessionFor({ principalType: 'employee', principalId: employee.id });
   return {
     token,
@@ -115,20 +100,16 @@ async function createEmployee({ username, displayName, jobRole, password }) {
   if (!displayName || !String(displayName).trim()) throw httpError(400, 'Display name is required');
   const existing = await findEmployeeByUsername(username);
   if (existing) throw httpError(409, 'That username is already taken');
-  const totpSecret = generateTotpSecret();
+  // 2FA/TOTP login was removed, so no enrollment secret is shown. The DB column
+  // is NOT NULL, so still store a generated secret (unused at login).
   const employee = await createEmployeeRow({
     username,
     displayName: String(displayName).trim(),
     jobRole: jobRole || null,
     passwordHash: hashPassword(password),
-    totpSecret,
+    totpSecret: generateTotpSecret(),
   });
-  // The TOTP secret is returned ONLY here (enrollment) — never again.
-  return {
-    employee: publicEmployee(employee),
-    totpSecret,
-    otpauthUrl: otpauthUrl(employee.username, totpSecret),
-  };
+  return { employee: publicEmployee(employee) };
 }
 
 async function updateEmployee({ id, displayName, jobRole, active, password }) {
@@ -227,8 +208,6 @@ export default async function handler(req, res) {
     switch (body.action) {
       case 'workerLogin':
         return sendJson(res, 200, await workerLogin(body));
-      case 'workerTotp':
-        return sendJson(res, 200, await workerTotp(req, body));
       case 'externalLogin':
         return sendJson(res, 200, await externalLogin(body));
       case 'logout':

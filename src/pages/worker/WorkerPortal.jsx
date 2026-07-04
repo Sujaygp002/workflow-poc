@@ -1,5 +1,5 @@
-// Worker portal (/worker): standalone chrome, two-step 2FA login
-// (username/password -> 6-digit TOTP), then three bucket tabs across the top —
+// Worker portal (/worker): standalone chrome, single-factor login
+// (username/password), then three bucket tabs across the top —
 // Untouched | Processing | Done — with live counts (5s poll). Clicking a card
 // opens the task (the API call that claims it -> Processing) and shows the
 // WorkerTaskDetail checklist; Done cards open read-only.
@@ -12,10 +12,9 @@ import {
   Loader2,
   Lock,
   LogOut,
-  ShieldCheck,
   UserRound,
 } from 'lucide-react';
-import { clearAuthToken, getAuthToken, logout, workerLogin, workerTotp } from '../../lib/authApi';
+import { clearAuthToken, getAuthToken, logout, workerLogin } from '../../lib/authApi';
 import { fetchMyBuckets, openWorkItem } from '../../lib/workflowApi';
 import WorkerTaskDetail from './WorkerTaskDetail';
 
@@ -132,12 +131,10 @@ function TaskCard({ row, bucket, onOpen, opening }) {
 }
 
 export default function WorkerPortal() {
-  // phase: 'boot' (restoring session) | 'login' | 'totp' | 'portal'
+  // phase: 'boot' (restoring session) | 'login' | 'portal'
   const [phase, setPhase] = useState('boot');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [tempToken, setTempToken] = useState('');
-  const [code, setCode] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState('');
   const [loginNotice, setLoginNotice] = useState('');
@@ -157,8 +154,6 @@ export default function WorkerPortal() {
     setBuckets(EMPTY_BUCKETS);
     setDetail(null);
     setActiveTab('untouched');
-    setTempToken('');
-    setCode('');
     setPassword('');
     setAuthError('');
     setNotice('');
@@ -229,30 +224,15 @@ export default function WorkerPortal() {
     setAuthError('');
     setLoginNotice('');
     try {
-      const result = await workerLogin({ username: username.trim(), password });
-      setTempToken(result.tempToken);
-      setCode('');
-      setPhase('totp');
-    } catch (error) {
-      setAuthError(error.status === 401 ? 'Invalid username or password.' : error.message);
-    } finally {
-      setAuthBusy(false);
-    }
-  }
-
-  async function submitTotp(event) {
-    event.preventDefault();
-    setAuthBusy(true);
-    setAuthError('');
-    try {
-      await workerTotp({ code: code.trim(), tempToken });
+      // Single-factor: a successful password login returns a complete session.
+      await workerLogin({ username: username.trim(), password });
       const ok = await loadBuckets();
       if (ok) {
         setActiveTab('untouched');
         setPhase('portal');
       }
     } catch (error) {
-      setAuthError(error.status === 401 ? 'Invalid or expired code. Try again.' : error.message);
+      setAuthError(error.status === 401 ? 'Invalid username or password.' : error.message);
     } finally {
       setAuthBusy(false);
     }
@@ -353,47 +333,7 @@ export default function WorkerPortal() {
             className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {authBusy && <Loader2 size={15} className="animate-spin" />}
-            Continue
-          </button>
-        </form>
-      </LoginShell>
-    );
-  }
-
-  if (phase === 'totp') {
-    return (
-      <LoginShell
-        icon={<ShieldCheck size={28} className="text-white" />}
-        title="Two-factor code"
-        subtitle="Enter the 6-digit code from your authenticator app"
-      >
-        <form onSubmit={submitTotp} className="space-y-3 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-          <label className="block">
-            <span className="text-xs font-semibold text-slate-500 uppercase">Authentication code</span>
-            <input
-              value={code}
-              onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              placeholder="000000"
-              className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-center font-mono text-2xl tracking-[0.5em] outline-none focus:ring-2 focus:ring-violet-300"
-              autoFocus
-            />
-          </label>
-          {authError && <div className="text-sm text-rose-600">{authError}</div>}
-          <button
-            disabled={authBusy || code.length !== 6}
-            className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {authBusy && <Loader2 size={15} className="animate-spin" />}
-            Verify & sign in
-          </button>
-          <button
-            type="button"
-            onClick={() => resetToLogin('')}
-            className="w-full text-center text-xs font-medium text-violet-600 hover:underline"
-          >
-            Use a different account
+            Sign in
           </button>
         </form>
       </LoginShell>

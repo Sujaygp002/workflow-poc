@@ -51,16 +51,9 @@ async function postAuth(body, headers = {}) {
   return data;
 }
 
-// ── Worker (employee) 2FA login ──────────────────────────────────────────────
+// ── Worker (employee) login (single-factor: username + password) ────────────
 export async function workerLogin({ username, password }) {
-  return postAuth({ action: 'workerLogin', username, password });
-}
-
-export async function workerTotp({ code, tempToken }) {
-  const result = await postAuth(
-    { action: 'workerTotp', code },
-    { Authorization: `Bearer ${tempToken}` },
-  );
+  const result = await postAuth({ action: 'workerLogin', username, password });
   if (result.token) setAuthToken('worker', result.token);
   return result;
 }

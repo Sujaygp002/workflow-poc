@@ -1,14 +1,10 @@
 import { Fragment, useEffect, useState } from 'react';
 import {
   Ban,
-  Check,
-  Copy,
   KeyRound,
   Loader2,
   Power,
-  QrCode,
   RefreshCw,
-  ShieldCheck,
   UserPlus,
   UsersRound,
   X,
@@ -17,48 +13,6 @@ import { createEmployee, listEmployees, updateEmployee } from '../../lib/authApi
 import { formatUiDate } from '../../lib/dateFormat';
 
 const MIN_PASSWORD = 8;
-
-async function copyText(value) {
-  try {
-    await navigator.clipboard.writeText(value);
-    return true;
-  } catch {
-    // Clipboard API unavailable (http / permissions) — fall back to a hidden textarea.
-    try {
-      const area = document.createElement('textarea');
-      area.value = value;
-      area.setAttribute('readonly', '');
-      area.style.position = 'fixed';
-      area.style.opacity = '0';
-      document.body.appendChild(area);
-      area.select();
-      const ok = document.execCommand('copy');
-      document.body.removeChild(area);
-      return ok;
-    } catch {
-      return false;
-    }
-  }
-}
-
-function CopyButton({ value, label = 'Copy' }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      type="button"
-      onClick={async () => {
-        if (await copyText(value)) {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        }
-      }}
-      className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50"
-    >
-      {copied ? <Check size={13} className="text-emerald-600" /> : <Copy size={13} />}
-      {copied ? 'Copied' : label}
-    </button>
-  );
-}
 
 function Field({ label, children }) {
   return (
@@ -71,63 +25,6 @@ function Field({ label, children }) {
 
 const inputClass =
   'mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 placeholder-slate-300 focus:outline-none focus:ring-2 focus:ring-violet-200';
-
-// ── One-time 2FA enrollment modal ────────────────────────────────────────────
-function TwoFactorModal({ enrollment, onClose }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
-      <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white shadow-xl">
-        <div className="flex items-center gap-2 border-b border-slate-100 px-5 py-4">
-          <ShieldCheck size={18} className="text-violet-600" />
-          <h2 className="font-bold text-slate-900">2FA enrollment — one time only</h2>
-        </div>
-        <div className="space-y-4 px-5 py-4">
-          <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-            Scan or enter this 2FA secret in an authenticator app now —{' '}
-            <span className="font-bold">it will not be shown again.</span>
-          </div>
-          <div className="text-sm text-slate-600">
-            Employee <span className="font-bold text-slate-800">{enrollment.employee?.display_name}</span>{' '}
-            (<span className="font-mono">{enrollment.employee?.username}</span>) needs this secret to log
-            in at <span className="font-mono">/worker</span>.
-          </div>
-          <div>
-            <div className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-500">Base32 secret</div>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 overflow-x-auto rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-sm tracking-widest text-slate-800">
-                {enrollment.totpSecret}
-              </code>
-              <CopyButton value={enrollment.totpSecret} />
-            </div>
-            <p className="mt-1 text-xs text-slate-400">
-              Manual entry in Google Authenticator / 1Password: time-based, SHA1, 6 digits, 30 s.
-            </p>
-          </div>
-          <div>
-            <div className="mb-1 flex items-center gap-1 text-xs font-bold uppercase tracking-wide text-slate-500">
-              <QrCode size={13} /> otpauth:// URL
-            </div>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 overflow-x-auto whitespace-nowrap rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-700">
-                {enrollment.otpauthUrl}
-              </code>
-              <CopyButton value={enrollment.otpauthUrl} />
-            </div>
-          </div>
-        </div>
-        <div className="flex justify-end border-t border-slate-100 px-5 py-3">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-bold text-white hover:bg-violet-700"
-          >
-            Done — I saved the secret
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ── Add employee card ────────────────────────────────────────────────────────
 function AddEmployeeCard({ onCreated }) {
@@ -201,8 +98,7 @@ function AddEmployeeCard({ onCreated }) {
         </div>
       </div>
       {error && <div className="mt-3 text-sm text-rose-600">{error}</div>}
-      <div className="mt-4 flex items-center justify-between gap-3">
-        <p className="text-xs text-slate-400">A 2FA secret is generated on create and shown exactly once.</p>
+      <div className="mt-4 flex items-center justify-end gap-3">
         <button
           disabled={saving}
           className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-violet-700 disabled:opacity-60"
@@ -245,7 +141,7 @@ function ResetPasswordRow({ employee, onDone, onCancel }) {
 
   return (
     <tr className="bg-slate-50/70">
-      <td colSpan={7} className="px-4 py-3">
+      <td colSpan={6} className="px-4 py-3">
         <form onSubmit={submit} className="flex flex-wrap items-end gap-3">
           <div className="text-sm font-bold text-slate-700">
             Reset password for <span className="text-violet-700">{employee.display_name}</span>
@@ -284,7 +180,6 @@ export default function Employees() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  const [enrollment, setEnrollment] = useState(null); // one-time {employee, totpSecret, otpauthUrl}
   const [resetId, setResetId] = useState('');
   const [busyId, setBusyId] = useState('');
 
@@ -343,7 +238,6 @@ export default function Employees() {
       <div className="mb-5">
         <AddEmployeeCard
           onCreated={(result) => {
-            setEnrollment(result);
             setMessage(`Employee ${result.employee?.display_name} created.`);
             setError('');
             refresh();
@@ -367,7 +261,6 @@ export default function Employees() {
                 <th className="px-4 py-2.5 font-bold">Name</th>
                 <th className="px-4 py-2.5 font-bold">Username</th>
                 <th className="px-4 py-2.5 font-bold">Job role</th>
-                <th className="px-4 py-2.5 font-bold">2FA</th>
                 <th className="px-4 py-2.5 font-bold">Active</th>
                 <th className="px-4 py-2.5 font-bold">Created</th>
                 <th className="px-4 py-2.5 font-bold">Actions</th>
@@ -376,13 +269,13 @@ export default function Employees() {
             <tbody className="divide-y divide-slate-100">
               {loading && employees.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-6 text-sm text-slate-400">
+                  <td colSpan={6} className="px-4 py-6 text-sm text-slate-400">
                     <span className="inline-flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Loading employees…</span>
                   </td>
                 </tr>
               ) : employees.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-6 text-sm text-slate-400">
+                  <td colSpan={6} className="px-4 py-6 text-sm text-slate-400">
                     No employees yet — create the first account above.
                   </td>
                 </tr>
@@ -393,15 +286,6 @@ export default function Employees() {
                       <td className="px-4 py-3 font-bold text-slate-800">{employee.display_name}</td>
                       <td className="px-4 py-3 font-mono text-xs text-slate-600">{employee.username}</td>
                       <td className="px-4 py-3 text-slate-600">{employee.job_role || <span className="text-slate-300">—</span>}</td>
-                      <td className="px-4 py-3">
-                        {employee.totp_enabled ? (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-700">
-                            <ShieldCheck size={12} /> TOTP
-                          </span>
-                        ) : (
-                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-500">Off</span>
-                        )}
-                      </td>
                       <td className="px-4 py-3">
                         <button
                           type="button"
@@ -463,8 +347,6 @@ export default function Employees() {
           </table>
         </div>
       </div>
-
-      {enrollment && <TwoFactorModal enrollment={enrollment} onClose={() => setEnrollment(null)} />}
     </div>
   );
 }
