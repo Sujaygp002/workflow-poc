@@ -8,13 +8,10 @@ import {
   runAreaIntakeCheck,
 } from '../../lib/workflowApi';
 import {
-  Connector,
-  MegaGroupFlow,
-  MegaTaskNode,
   RunObjectSidebar,
   triggerLabel,
   TriggerChainConnector,
-  WorkflowFlow,
+  WorkflowLane,
 } from '../../components/WorkflowDefinitionFlow';
 import { formatUiDateTime } from '../../lib/dateFormat';
 
@@ -138,19 +135,12 @@ function RunCard({ run, onDelete, areas, loadingAreaId, onRunCheck }) {
       {open && (
         <div className="flex flex-col gap-4 p-4 lg:flex-row lg:items-start">
           <div className="min-w-0 flex-1 overflow-x-auto">
-            <div className="mx-auto w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">
-              START · {triggerLabel(definition.trigger)}
-            </div>
-            <Connector />
-            {definition.megaGroups ? (
-              <MegaGroupFlow definition={definition} tasks={tasks} />
-            ) : definition.megaTask ? (
-              <MegaTaskNode definition={definition} tasks={tasks} megaTask={definition.megaTask} />
-            ) : (
-              <WorkflowFlow definition={definition} tasks={tasks} />
-            )}
-            <Connector />
-            <div className="mx-auto mt-1 w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">END</div>
+            <WorkflowLane
+              definition={definition}
+              tasks={tasks}
+              accent={definition.builder ? 'violet' : 'slate'}
+              subtitle={`${triggerLabel(definition.trigger)} · ${items} item(s) · ${totalRan} task run(s)`}
+            />
             {isAreaOnboarding && areas && areas.length > 0 && (
               <AreaIntakeSubPanel areas={areas} loadingAreaId={loadingAreaId} onRunCheck={onRunCheck} />
             )}

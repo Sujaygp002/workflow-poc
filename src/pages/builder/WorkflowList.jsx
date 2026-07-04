@@ -23,12 +23,9 @@ import {
   startWorkflow,
 } from '../../lib/workflowApi';
 import {
-  Connector,
-  MegaGroupFlow,
-  MegaTaskNode,
   triggerLabel,
   TriggerChainConnector,
-  WorkflowFlow,
+  WorkflowLane,
 } from '../../components/WorkflowDefinitionFlow';
 import WorkflowBuilder from './WorkflowBuilder';
 
@@ -47,23 +44,12 @@ const TRIGGER_COLOR = {
   amber:   { badge: 'bg-amber-100 text-amber-700 border-amber-200',    ring: 'border-amber-200' },
 };
 
-function FlowBody({ wf }) {
+function FlowBody({ wf, accent = 'slate' }) {
+  // One titled, cohesive workflow lane (START · trigger → steps → END). tasks=[]
+  // is a static definition view (no live run counts).
   return (
     <div className="border-t border-slate-100 bg-slate-50/40 overflow-x-auto p-4">
-      <div className="mx-auto w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">
-        START · {triggerLabel(wf.trigger)}
-      </div>
-      <Connector />
-      {/* tasks=[] → static definition view with no live run counts */}
-      {wf.megaGroups ? (
-        <MegaGroupFlow definition={wf} tasks={[]} />
-      ) : wf.megaTask ? (
-        <MegaTaskNode definition={wf} tasks={[]} megaTask={wf.megaTask} />
-      ) : (
-        <WorkflowFlow definition={wf} tasks={[]} />
-      )}
-      <Connector />
-      <div className="mx-auto mt-1 w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">END</div>
+      <WorkflowLane definition={wf} tasks={[]} accent={accent} />
     </div>
   );
 }
@@ -121,7 +107,9 @@ function SystemWorkflowCard({ wf }) {
 
 // ── Builder workflow card: kind badge + Edit / Run / Delete ──────────────────
 function BuilderWorkflowCard({ wf, onEdit, onDeleted }) {
-  const [showFlow, setShowFlow] = useState(false);
+  // Default OPEN: a builder workflow should read as one cohesive flow at a glance,
+  // not a collapsed "N steps" card.
+  const [showFlow, setShowFlow] = useState(true);
   const [running, setRunning] = useState(false);
   const [runMsg, setRunMsg] = useState('');
   const [runErr, setRunErr] = useState('');
@@ -202,7 +190,7 @@ function BuilderWorkflowCard({ wf, onEdit, onDeleted }) {
         {runMsg && <div className="mt-2 text-xs font-semibold text-emerald-700">{runMsg}</div>}
         {runErr && <div className="mt-2 text-xs font-semibold text-rose-600">{runErr}</div>}
       </div>
-      {showFlow && <FlowBody wf={wf} />}
+      {showFlow && <FlowBody wf={wf} accent="violet" />}
     </div>
   );
 }

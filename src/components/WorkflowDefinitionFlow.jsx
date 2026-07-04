@@ -117,11 +117,23 @@ export function StepInfo({ step }) {
 }
 
 // ── Task node box ─────────────────────────────────────
-export function StepNode({ step, stats }) {
+// A human step's inline "who does this" label. `assignee` is an optional
+// {display_name|username} lookup so the manual task reads as a node IN the flow
+// (an employee acts here) rather than a detached bucket tile elsewhere.
+function assigneeLabel(step, assignee) {
+  if (step.actor !== 'human') return null;
+  const who = assignee?.display_name || assignee?.username;
+  if (who) return `Assigned to ${who}`;
+  const n = Array.isArray(step.actions) ? step.actions.length : 0;
+  return n > 1 ? `Employee task · ${n} actions` : 'Employee task';
+}
+
+export function StepNode({ step, stats, assignee }) {
   const a = actorOf(step);
   const Icon = a.icon;
   const state = nodeState(stats);
   const manual = step.actor === 'human' ? stats.active : 0;
+  const who = assigneeLabel(step, assignee);
   return (
     <div className={`relative w-[24rem] max-w-full rounded-xl border-2 ${a.ring} ${a.bg} px-3 py-2 shadow-sm`}>
       <div className="flex items-start gap-2">
@@ -134,6 +146,11 @@ export function StepNode({ step, stats }) {
           <StepInfo step={step} />
         </span>
       </div>
+      {who && (
+        <div className="mt-1 flex items-center gap-1 text-[11px] font-semibold text-pink-700">
+          <User size={11} /> {who}
+        </div>
+      )}
       <div className="mt-1 flex items-center justify-between gap-2">
         <span className="font-mono text-[10px] text-slate-400">{step.id}</span>
         <div className="flex items-center gap-1.5">
@@ -160,9 +177,10 @@ export function Connector() {
 // (same preReq + both conditional) render side-by-side under one diamond.
 // `tasks` is an array of task-run rows for live stats; pass [] for static view.
 // `steps` overrides definition.steps (used to render a mega-group's subset).
-export function WorkflowFlow({ definition, tasks = [], steps: stepsOverride }) {
+export function WorkflowFlow({ definition, tasks = [], steps: stepsOverride, employeesById = {} }) {
   const steps = stepsOverride || definition.steps || [];
   const rendered = [];
+  const who = (step) => employeesById[step.assigneeEmployeeId] || null;
 
   for (let i = 0; i < steps.length; i += 1) {
     const step = steps[i];
@@ -181,11 +199,11 @@ export function WorkflowFlow({ definition, tasks = [], steps: stepsOverride }) {
           <div className="flex w-full items-start justify-center gap-4">
             <div className="flex flex-col items-center">
               <span className="mb-1 text-[10px] font-black text-emerald-600">{conditionLabel(step.condition)}</span>
-              <StepNode step={step} stats={stats} />
+              <StepNode step={step} stats={stats} assignee={who(step)} />
             </div>
             <div className="flex flex-col items-center">
               <span className="mb-1 text-[10px] font-black text-slate-500">{conditionLabel(next.condition)}</span>
-              <StepNode step={next} stats={nextStats} />
+              <StepNode step={next} stats={nextStats} assignee={who(next)} />
             </div>
           </div>
         </div>,
@@ -198,12 +216,54 @@ export function WorkflowFlow({ definition, tasks = [], steps: stepsOverride }) {
       <div key={step.id} className="flex flex-col items-center">
         {rendered.length > 0 && <Connector />}
         {step.condition && <DecisionDiamond condition={step.condition} downLabel="YES" />}
-        <StepNode step={step} stats={stats} />
+        <StepNode step={step} stats={stats} assignee={who(step)} />
       </div>,
     );
   }
 
   return <div className="flex flex-col items-center py-2">{rendered}</div>;
+}
+
+// ── Cohesive workflow lane ────────────────────────────
+// Wraps a whole workflow (START · trigger → steps → END) in ONE titled card so it
+// reads as a single cohesive workflow, not a loose pile of task boxes. Picks the
+// right inner renderer (megaGroups / megaTask / plain flow) automatically, so
+// builder workflows (plain steps[]) get the same "one workflow" framing the
+// grouped system workflows have. `employeesById` maps assigneeEmployeeId → employee.
+export function WorkflowLane({ definition, tasks = [], employeesById = {}, subtitle, accent = 'violet' }) {
+  const steps = definition.steps || [];
+  const humanCount = steps.filter((s) => s.actor === 'human').length;
+  const tone = {
+    violet: 'border-violet-200',
+    sky: 'border-sky-200',
+    slate: 'border-slate-200',
+  }[accent] || 'border-slate-200';
+
+  let inner;
+  if (definition.megaGroups) inner = <MegaGroupFlow definition={definition} tasks={tasks} />;
+  else if (definition.megaTask) inner = <MegaTaskNode definition={definition} tasks={tasks} megaTask={definition.megaTask} />;
+  else inner = <WorkflowFlow definition={definition} tasks={tasks} employeesById={employeesById} />;
+
+  return (
+    <div className={`rounded-2xl border-2 ${tone} bg-white/60 p-4`}>
+      <div className="mb-2 text-center">
+        <div className="text-sm font-black uppercase tracking-wide text-slate-700">{definition.name || definition.id}</div>
+        <div className="mt-0.5 text-[11px] text-slate-400">
+          {subtitle
+            || `${triggerLabel(definition.trigger)} · ${steps.length} step${steps.length === 1 ? '' : 's'}${humanCount ? ` · ${humanCount} human task${humanCount === 1 ? '' : 's'}` : ''}`}
+        </div>
+      </div>
+      <div className="flex flex-col items-center">
+        <div className="w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">
+          START · {triggerLabel(definition.trigger)}
+        </div>
+        <Connector />
+        {inner}
+        <Connector />
+        <div className="mt-1 w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">END</div>
+      </div>
+    </div>
+  );
 }
 
 // ── Mega-task node ────────────────────────────────────
