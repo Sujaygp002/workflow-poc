@@ -270,23 +270,6 @@ async function seedDemoReferences() {
   `;
 }
 
-async function seedDemoWorkflowRun() {
-  const existing = await findWorkflowRunBySourceLabel('wf7', 'demo-patient-unit-hierarchy');
-  if (existing) return existing;
-  const workflow = await getActiveWorkflow('wf7');
-  if (!workflow) return null;
-  return createWorkflowRun({
-    workflowId: workflow.id,
-    workflowVersion: workflow.version,
-    sourceLabel: 'demo-patient-unit-hierarchy',
-    totalItems: 1,
-    inputSummary: {
-      seed: true,
-      demo: 'Patient Unit hierarchy with archived/current admissions, episodes, and orders',
-    },
-  });
-}
-
 async function upsertDemoPatientRecord({ unit, patientPayload, referencePayload, agency, pg, practitioner, latestStatus, createdAt, updatedAt }) {
   const sql = getSql();
   const key = recordContextKey(patientPayload, referencePayload);
@@ -571,7 +554,10 @@ async function seedDemoPatientHierarchy() {
     updatedAt: '2026-06-16T08:00:00.000Z',
   });
 
-  const run = await seedDemoWorkflowRun();
+  // The wf7 workflow (and its demo-patient-unit-hierarchy anchor run) was
+  // removed. The demo patient hierarchy no longer anchors uploaded_documents to
+  // a run, so upsertDemoDocument (guarded on run?.id) simply no-ops here.
+  const run = null;
 
   const oldAdm1 = await upsertDemoAdmission({ patient: oldRecord, agency: sunriseHhah, pg: oldPg, practitioner, soc: '2024-08-01', eoc: '2024-10-01', label: 'OLD-ARCHIVE-1' });
   const oldEp1 = await upsertDemoEpisode({ admission: oldAdm1, soe: '2024-08-01', eoe: '2024-09-29', label: 'old-archive-episode-1' });

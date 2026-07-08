@@ -1,32 +1,23 @@
 import { handleError, methodNotAllowed, readJson, sendJson } from '../_lib/http.js';
-import { WF_BILLING_MONITOR_DEFINITION } from '../_lib/workflowDefinition.js';
 import {
   countWorkflowItems,
   createTaskRunsForItem,
   createWorkflowItem,
   createWorkflowRun,
-  ensureSystemDefinitions,
-  findActiveWorkflowRunForHhah,
   findNewestRunForWorkflow,
-  findWorkflowItemByIssueSignature,
   findWorkflowRunBySourceLabel,
   getActiveWorkflow,
+  getRunItems,
   getRunWithDefinition,
   listActiveAgencies,
   listActiveBuilderWorkflowsByTrigger,
   listTaskRunsForRun,
   listTaskRunsForRuns,
   listWorkflowRuns,
-  runBillingMonitorPass,
 } from '../_lib/repositories.js';
 import { runWorkflowAutomation } from '../_lib/workflowEngine.js';
 import { dailySourceLabel, nowPartsInTz } from '../_lib/dailyBucket.js';
 import { httpError } from '../_lib/auth.js';
-
-async function ensureBillingWorkflow() {
-  await ensureSystemDefinitions();
-  return getActiveWorkflow(WF_BILLING_MONITOR_DEFINITION.id);
-}
 
 // Manual trigger: start a run of any active workflow (builder Run button).
 // Default items = one empty item so system steps/conditions can still evaluate.
@@ -96,11 +87,76 @@ async function tickHandler() {
   return { started, daily: daily.started, dailySkipped: daily.skipped };
 }
 
+// Build the set of agency ids already represented on a daily run — union of the
+// native base items (reference_payload.HHAH.id) AND the row items an upload
+// appended (also reference_payload.HHAH.id). A silent agency that later uploads
+// gets its base item auto-resolved + a row item, so it is present here and the
+// tick must NOT append a second Contact-Agency base item for it.
+function presentAgencyIds(items) {
+  const ids = new Set();
+  for (const item of items) {
+    const id = item.reference_payload?.HHAH?.id;
+    if (id) ids.add(String(id));
+  }
+  return ids;
+}
+
+// Append ONE base item (Contact-Agency, full graph) for each active agency not
+// already present on the run. Idempotent per (agency, dayBucket) via the
+// base:<agencyId>:<dayBucket> appendKey stamped on extraction_payload.
+async function appendMissingAgencyBaseItems({ workflow, run, dayBucket, tz }) {
+  const withDefinition = await getRunWithDefinition(run.id);
+  const steps = withDefinition?.definition?.steps || workflow.definition?.steps || [];
+  if (!steps.length) return { appended: 0 };
+
+  const agencies = await listActiveAgencies();
+  const existingItems = await getRunItems(run.id);
+  const present = presentAgencyIds(existingItems);
+  const existingAppendKeys = new Set(
+    existingItems.map((it) => it.extraction_payload?.appendKey).filter(Boolean),
+  );
+
+  let appended = 0;
+  let itemIndex = await countWorkflowItems(run.id);
+  for (const agency of agencies) {
+    const agencyId = String(agency.id);
+    const appendKey = `base:${agencyId}:${dayBucket}`;
+    // Skip agencies already on the run (native base OR row items) and any whose
+    // base appendKey already exists (a second same-day tick appends nothing).
+    if (present.has(agencyId) || existingAppendKeys.has(appendKey)) continue;
+    const contact = agency.contact_info || {};
+    const created = await createWorkflowItem({
+      runId: run.id,
+      itemIndex,
+      patientPayload: {},
+      orderPayload: {},
+      referencePayload: { HHAH: { id: agency.id, name: agency.name, contact } },
+      extractionPayload: { dayBucket, tz, appendKey },
+    });
+    await createTaskRunsForItem({ runId: run.id, itemId: created.id, steps });
+    existingAppendKeys.add(appendKey);
+    present.add(agencyId);
+    itemIndex += 1;
+    appended += 1;
+  }
+
+  if (appended > 0) {
+    await runWorkflowAutomation({ runId: run.id, definition: withDefinition?.definition || workflow.definition });
+  }
+  return { appended };
+}
+
 // daily_time trigger: fire ONCE per day (per active builder workflow) when the
-// current time in the trigger tz has reached hour:minute AND no run exists for
-// today's bucket. Each firing creates one run with one item per active agency;
-// referencePayload.HHAH = {id,name,contact}, extraction_payload.dayBucket set.
-// Idempotent via sourceLabel daily:<wfId>:<dayBucket>.
+// current time in the trigger tz has reached hour:minute.
+//   - MISSING run + before fire time → skip (do NOT create early; uploads may
+//     create the run on demand, but the tick only creates it at/after noon).
+//   - MISSING run + at/after fire time → create today's run with one BASE item
+//     per active agency.
+//   - EXISTING running run (e.g. created early by an upload) → APPEND one BASE
+//     item for each active agency not already present (silent agencies get a
+//     Contact-Agency task at noon; new agencies join late). Idempotent.
+// Run source label daily:<wfId>:<dayBucket> is shared with the upload on-demand
+// create path, so at most one run exists per workflow per calendar day.
 async function dailyTimeTickHandler() {
   const workflows = await listActiveBuilderWorkflowsByTrigger('daily_time');
   const started = [];
@@ -111,17 +167,36 @@ async function dailyTimeTickHandler() {
     const targetHour = Number.isFinite(Number(trigger.hour)) ? Number(trigger.hour) : 12;
     const targetMinute = Number.isFinite(Number(trigger.minute)) ? Number(trigger.minute) : 0;
     const { dayBucket, hour, minute } = nowPartsInTz(tz);
-
-    // Not yet time today.
-    if (hour * 60 + minute < targetHour * 60 + targetMinute) {
-      skipped.push({ workflowId: workflow.id, reason: 'before_fire_time', dayBucket });
-      continue;
-    }
+    const beforeFireTime = hour * 60 + minute < targetHour * 60 + targetMinute;
 
     const sourceLabel = dailySourceLabel(workflow.id, dayBucket);
     const existing = await findWorkflowRunBySourceLabel(workflow.id, sourceLabel);
+
+    // Run already exists for today (upload-created early, or a prior tick). At
+    // or after fire time, append base items for any silent/new agency missing
+    // from the run. Before fire time, leave it untouched.
     if (existing) {
-      skipped.push({ workflowId: workflow.id, reason: 'already_ran_today', dayBucket });
+      if (existing.status !== 'running') {
+        skipped.push({ workflowId: workflow.id, reason: `run_status_${existing.status}`, dayBucket });
+        continue;
+      }
+      if (beforeFireTime) {
+        skipped.push({ workflowId: workflow.id, reason: 'before_fire_time_run_exists', dayBucket });
+        continue;
+      }
+      const { appended } = await appendMissingAgencyBaseItems({ workflow, run: existing, dayBucket, tz });
+      if (appended > 0) {
+        started.push({ runId: existing.id, workflowId: workflow.id, dayBucket, appendedBaseItems: appended });
+      } else {
+        skipped.push({ workflowId: workflow.id, reason: 'already_ran_today', dayBucket });
+      }
+      continue;
+    }
+
+    // No run yet. Only CREATE at/after the fire time (never a fresh full run
+    // early — an early upload is what creates the run before noon).
+    if (beforeFireTime) {
+      skipped.push({ workflowId: workflow.id, reason: 'before_fire_time', dayBucket });
       continue;
     }
 
@@ -143,7 +218,7 @@ async function dailyTimeTickHandler() {
         patientPayload: {},
         orderPayload: {},
         referencePayload: { HHAH: { id: agency.id, name: agency.name, contact } },
-        extractionPayload: { dayBucket, tz },
+        extractionPayload: { dayBucket, tz, appendKey: `base:${agency.id}:${dayBucket}` },
       });
       await createTaskRunsForItem({ runId: run.id, itemId: item.id, steps: workflow.definition.steps });
     }
@@ -152,252 +227,6 @@ async function dailyTimeTickHandler() {
     started.push({ runId: run.id, workflowId: workflow.id, dayBucket, agencyCount: agencies.length });
   }
   return { started, skipped };
-}
-
-function stepById(definition, stepId) {
-  return (definition.steps || []).find((step) => step.id === stepId);
-}
-
-function runnableStep(workflow, stepId) {
-  const step = stepById(workflow.definition, stepId);
-  if (!step) throw new Error(`Billing monitor step ${stepId} not found`);
-  return { ...step, preReq: [], condition: null };
-}
-
-function hhahGroupKey(hhah = {}) {
-  return hhah.id || hhah.name || 'unknown-hhah';
-}
-
-function groupIssue(groups, issue) {
-  const key = hhahGroupKey(issue.hhah);
-  if (!groups.has(key)) {
-    groups.set(key, {
-      hhah: issue.hhah || {},
-      issues: [],
-    });
-  }
-  groups.get(key).issues.push(issue);
-}
-
-async function findExistingBillingIssue(workflow, issueSignature, legacySourceLabel) {
-  const existingItem = await findWorkflowItemByIssueSignature(workflow.id, issueSignature);
-  if (existingItem) return { run_id: existingItem.run_id };
-  const existingRun = legacySourceLabel
-    ? await findWorkflowRunBySourceLabel(workflow.id, legacySourceLabel)
-    : null;
-  return existingRun ? { run_id: existingRun.id } : null;
-}
-
-async function createHhahIssueRun({ workflow, group }) {
-  const sourceKey = String(hhahGroupKey(group.hhah)).replace(/[^a-zA-Z0-9_-]/g, '-');
-  const run = await createWorkflowRun({
-    workflowId: workflow.id,
-    workflowVersion: workflow.version,
-    sourceLabel: `billing-monitor:hhah:${sourceKey}:${new Date().toISOString()}`,
-    totalItems: group.issues.length,
-    inputSummary: {
-      trigger: 'billing-monitor',
-      groupedBy: 'hhah',
-      hhahId: group.hhah?.id || null,
-      hhahName: group.hhah?.name || 'Unknown HHAH',
-      issueCount: group.issues.length,
-      issueTypes: [...new Set(group.issues.map((issue) => issue.issueType))],
-    },
-    hhahId: group.hhah?.id || null,
-  });
-
-  const stepsById = new Map();
-  const itemIds = [];
-  for (let itemIndex = 0; itemIndex < group.issues.length; itemIndex += 1) {
-    const issue = group.issues[itemIndex];
-    const step = runnableStep(workflow, issue.stepId);
-    stepsById.set(step.id, step);
-    const item = await createWorkflowItem({
-      runId: run.id,
-      itemIndex,
-      patientPayload: issue.patientPayload || {},
-      orderPayload: issue.orderPayload || {},
-      referencePayload: issue.referencePayload || {},
-      extractionPayload: issue.extractionPayload || {},
-    });
-    itemIds.push(item.id);
-    await createTaskRunsForItem({ runId: run.id, itemId: item.id, steps: [step] });
-  }
-
-  await runWorkflowAutomation({
-    runId: run.id,
-    definition: { ...workflow.definition, steps: [...stepsById.values()] },
-    concurrency: Math.max(1, group.issues.length),
-  });
-  return { created: true, runId: run.id, itemIds, hhahId: group.hhah?.id || null, hhahName: group.hhah?.name || null };
-}
-
-// New (already-deduped) issues for an HHAH that still has an active run get APPENDED
-// to that run as fresh items, rather than skipped — otherwise issues discovered after
-// the run was created (e.g. CPO months that only became checkable once the episode
-// turned billable) would silently wait until the whole run completes.
-async function appendIssuesToRun({ workflow, runId, issues }) {
-  const existingCount = await countWorkflowItems(runId);
-  const stepsById = new Map();
-  const itemIds = [];
-  for (let offset = 0; offset < issues.length; offset += 1) {
-    const issue = issues[offset];
-    const step = runnableStep(workflow, issue.stepId);
-    stepsById.set(step.id, step);
-    const item = await createWorkflowItem({
-      runId,
-      itemIndex: existingCount + offset,
-      patientPayload: issue.patientPayload || {},
-      orderPayload: issue.orderPayload || {},
-      referencePayload: issue.referencePayload || {},
-      extractionPayload: issue.extractionPayload || {},
-    });
-    itemIds.push(item.id);
-    await createTaskRunsForItem({ runId, itemId: item.id, steps: [step] });
-  }
-  await runWorkflowAutomation({
-    runId,
-    definition: { ...workflow.definition, steps: [...stepsById.values()] },
-    concurrency: Math.max(1, issues.length),
-  });
-  return itemIds;
-}
-
-async function runBillingMonitorHandler() {
-  const workflow = await ensureBillingWorkflow();
-  const result = await runBillingMonitorPass();
-  const tasks = [];
-  const groups = new Map();
-
-  for (const issue of result.issues.missingDocuments) {
-    const issueSignature = `missing-docs:${issue.episode.id}`;
-    const existing = await findExistingBillingIssue(workflow, issueSignature, `billing-monitor:missing-docs:${issue.episode.id}`);
-    if (existing) {
-      tasks.push({ created: false, existingRunId: existing.run_id, issueSignature });
-      continue;
-    }
-    groupIssue(groups, {
-      issueType: 'missing-docs',
-      issueSignature,
-      hhah: issue.hhah || {},
-      stepId: 'billing-s2',
-      referencePayload: {
-        HHAH: issue.hhah || {},
-      },
-      extractionPayload: {
-        issueType: 'missing-docs',
-        issueSignature,
-        episodeId: issue.episode.id,
-        admissionId: issue.episode.admission_id,
-        eligible: false,
-        missingDocuments: issue.missingDocuments,
-        reason: issue.reason,
-      },
-      patientPayload: {},
-      orderPayload: {},
-    });
-  }
-
-  for (const issue of result.issues.physicianReminders) {
-    const issueSignature = `signature:${issue.episode.id}`;
-    const existing = await findExistingBillingIssue(workflow, issueSignature, `billing-monitor:signature:${issue.episode.id}`);
-    if (existing) {
-      tasks.push({ created: false, existingRunId: existing.run_id, issueSignature });
-      continue;
-    }
-    const firstOrder = issue.orders[0] || {};
-    groupIssue(groups, {
-      issueType: 'signature',
-      issueSignature,
-      hhah: issue.hhah || {},
-      stepId: 'billing-s5',
-      referencePayload: {
-        HHAH: issue.hhah || {},
-      },
-      orderPayload: {
-        order_info: {
-          order_number: firstOrder.order_number || '',
-          order_type: firstOrder.order_type || firstOrder.document_type || '',
-          order_date: firstOrder.order_date || '',
-        },
-        order_status: firstOrder.order_status || {},
-      },
-      extractionPayload: {
-        issueType: 'signature',
-        issueSignature,
-        episodeId: issue.episode.id,
-        admissionId: issue.episode.admission_id,
-        eligible: true,
-        billable: false,
-        unsignedOrderNumbers: issue.unsignedOrderNumbers,
-      },
-    });
-  }
-
-  for (const issue of result.issues.cpoMinutes) {
-    const issueSignature = `cpo:${issue.cpoMonth.id}`;
-    const existing = await findExistingBillingIssue(workflow, issueSignature, `billing-monitor:cpo:${issue.cpoMonth.id}`);
-    if (existing) {
-      tasks.push({ created: false, existingRunId: existing.run_id, issueSignature });
-      continue;
-    }
-    groupIssue(groups, {
-      issueType: 'cpo',
-      issueSignature,
-      hhah: issue.hhah || {},
-      stepId: 'billing-s7',
-      referencePayload: {
-        HHAH: issue.hhah || {},
-      },
-      extractionPayload: {
-        issueType: 'cpo',
-        issueSignature,
-        episodeId: issue.episode.id,
-        cpoMonthId: issue.cpoMonth.id,
-        cpoMonth: issue.cpoMonth.cpo_month,
-        cpoMin: issue.cpoMonth.cpo_min,
-        eligible: true,
-        billable: true,
-        cpoMonthBillable: false,
-      },
-    });
-  }
-
-  for (const group of groups.values()) {
-    const activeRun = await findActiveWorkflowRunForHhah(
-      workflow.id,
-      group.hhah?.id || null,
-      group.hhah?.name || null,
-    );
-    if (activeRun) {
-      // Append the new issues to the in-flight run for this HHAH instead of dropping them.
-      const itemIds = await appendIssuesToRun({ workflow, runId: activeRun.id, issues: group.issues });
-      tasks.push({
-        created: false,
-        appended: true,
-        reason: 'appended_to_active_hhah_billing_run',
-        existingRunId: activeRun.id,
-        hhahId: group.hhah?.id || null,
-        hhahName: group.hhah?.name || 'Unknown HHAH',
-        issueCount: group.issues.length,
-        itemIds,
-      });
-      continue;
-    }
-    tasks.push(await createHhahIssueRun({ workflow, group }));
-  }
-
-  return {
-    updatedEpisodes: result.updatedEpisodes.length,
-    updatedPatients: result.updatedPatients.length,
-      updatedCpoMonths: result.updatedCpoMonths.length,
-      issues: {
-        missingDocuments: result.issues.missingDocuments.length,
-        physicianReminders: result.issues.physicianReminders.length,
-        cpoMinutes: result.issues.cpoMinutes.length,
-    },
-    tasks,
-  };
 }
 
 function actionFromUrl(req) {
@@ -434,8 +263,6 @@ export default async function handler(req, res) {
     if (req.method === 'POST') {
       const body = await readJson(req);
       switch (body.action) {
-        case 'runBillingMonitor':
-          return sendJson(res, 200, await runBillingMonitorHandler());
         case 'startWorkflow':
           return sendJson(res, 201, await startWorkflowHandler(body));
         case 'tick':

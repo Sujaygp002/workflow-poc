@@ -4,14 +4,12 @@ import {
   deleteWorkflowRun,
   fetchAreaIntakeStatus,
   fetchWorkflowRuns,
-  runBillingMonitor,
   runAreaIntakeCheck,
   tickTimeTriggers,
 } from '../../lib/workflowApi';
 import {
   RunObjectSidebar,
   triggerLabel,
-  TriggerChainConnector,
   WorkflowLane,
 } from '../../components/WorkflowDefinitionFlow';
 import { formatUiDateTime } from '../../lib/dateFormat';
@@ -192,9 +190,9 @@ export default function Orchestrator() {
   const [live, setLive] = useState(true);
   const [lastSync, setLastSync] = useState(null);
   const [checkingAreaId, setCheckingAreaId] = useState(null);
-  const [billingError, setBillingError] = useState(null);
+  const [tickError, setTickError] = useState(null);
   const [loaded, setLoaded] = useState(false);
-  const billingRunning = useRef(false);
+  const ticking = useRef(false);
   const refreshing = useRef(false);
 
   async function refresh() {
@@ -255,23 +253,21 @@ export default function Orchestrator() {
     return () => clearInterval(id);
   }, [live]);
 
-  // Trigger 4: billing monitor every 10s while Orchestrator is live.
+  // Fire builder time triggers (time_interval + daily_time) every 10s while the
+  // Orchestrator is live so they run during demos even without the vercel cron.
   useEffect(() => {
     if (!live) return undefined;
     async function tick() {
-      if (document.hidden || billingRunning.current) return;
-      billingRunning.current = true;
+      if (document.hidden || ticking.current) return;
+      ticking.current = true;
       try {
-        await runBillingMonitor();
-        // Also fire builder time triggers (time_interval + daily_time) so they
-        // run during demos even without the vercel cron.
-        await tickTimeTriggers().catch(() => {});
-        setBillingError(null);
+        await tickTimeTriggers();
+        setTickError(null);
         await refresh();
       } catch (err) {
-        setBillingError(err.message);
+        setTickError(err.message);
       } finally {
-        billingRunning.current = false;
+        ticking.current = false;
       }
     }
     tick();
@@ -283,13 +279,12 @@ export default function Orchestrator() {
   const completed = runs.filter((r) => r.status === 'completed');
   const manualBacklog = runs.reduce((sum, r) => sum + (r.tasks || []).filter((t) => t.status === 'active' && t.actor === 'human').length, 0);
 
-  // Split runs into the three trigger-chain groups, each sorted newest-first.
+  // Split runs into groups, each sorted newest-first. The daily intake pipeline
+  // + all other builder/manual runs render in the "Daily Intake & other runs"
+  // section; only the area monitor keeps its own section.
   const sortDesc = (a, b) => new Date(b.created_at) - new Date(a.created_at);
   const areaRuns = runs.filter((r) => r.workflow_id === 'wf-area-onboarding').sort(sortDesc);
-  const wf7Runs = runs.filter((r) => r.workflow_id === 'wf7').sort(sortDesc);
-  const signingRuns = runs.filter((r) => r.workflow_id === 'wf-signing').sort(sortDesc);
-  const billingRuns = runs.filter((r) => r.workflow_id === 'wf-billing-monitor').sort(sortDesc);
-  const otherRuns = runs.filter((r) => !['wf-area-onboarding', 'wf7', 'wf-signing', 'wf-billing-monitor'].includes(r.workflow_id)).sort(sortDesc);
+  const otherRuns = runs.filter((r) => r.workflow_id !== 'wf-area-onboarding').sort(sortDesc);
 
   const filterRun = (r) => (
     filter === 'running' ? r.status === 'running'
@@ -300,7 +295,7 @@ export default function Orchestrator() {
   const runCardProps = { onDelete: handleDelete, areas, loadingAreaId: checkingAreaId, onRunCheck: handleRunAreaCheck };
 
   // Flatten filtered runs for simple "All" count chips.
-  const allFiltered = [...areaRuns, ...wf7Runs, ...signingRuns, ...billingRuns, ...otherRuns].filter(filterRun);
+  const allFiltered = [...areaRuns, ...otherRuns].filter(filterRun);
 
   return (
     <div className="p-6">
@@ -356,8 +351,8 @@ export default function Orchestrator() {
       {areaError && (
         <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">Area intake error: {areaError}</div>
       )}
-      {billingError && (
-        <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">Trigger 4 error: {billingError}</div>
+      {tickError && (
+        <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">Daily tick error: {tickError}</div>
       )}
       <Legend />
 
@@ -390,58 +385,20 @@ export default function Orchestrator() {
             <RunCard key={run.id} run={run} {...runCardProps} />
           ))}
 
-          {/* ── Trigger 2: HHAH Uploads Documents (wf7) — independent, not chained from Trigger 1 ── */}
-          {wf7Runs.filter(filterRun).length > 0 && (
+          {/* ── Daily Intake & other builder / manual runs ── */}
+          {otherRuns.filter(filterRun).length > 0 && (
             <div className="mt-8">
               <div className="mb-3 flex items-center gap-2">
                 <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-black uppercase tracking-wide text-sky-700">
-                  Trigger 2 · HHAH Uploads Documents
+                  Daily Intake &amp; other runs
                 </span>
-                <span className="text-[11px] text-slate-400">fires independently when an HHAH uploads</span>
+                <span className="text-[11px] text-slate-400">the daily agency-intake pipeline and any builder / manual runs</span>
               </div>
               <div className="space-y-4">
-                {wf7Runs.filter(filterRun).map((run) => (
+                {otherRuns.filter(filterRun).map((run) => (
                   <RunCard key={run.id} run={run} {...runCardProps} />
                 ))}
               </div>
-            </div>
-          )}
-
-          {/* ── Trigger 3: Send To Physician ── */}
-          {signingRuns.filter(filterRun).length > 0 && (
-            <>
-              <TriggerChainConnector triggerNum={3} label="Send To Physician" />
-              <div className="space-y-4">
-                {signingRuns.filter(filterRun).map((run) => (
-                  <RunCard key={run.id} run={run} {...runCardProps} />
-                ))}
-              </div>
-            </>
-          )}
-
-          {/* ── Trigger 4: Make Patients Billable ── */}
-          {billingRuns.filter(filterRun).length > 0 && (
-            <div className="mt-8">
-              <div className="mb-3 flex items-center gap-2">
-                <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[11px] font-black uppercase tracking-wide text-amber-700">
-                  Trigger 4 · Make Patients Billable
-                </span>
-                <span className="text-[11px] text-slate-400">runs HHAH by HHAH every 10 seconds</span>
-              </div>
-              <div className="space-y-4">
-                {billingRuns.filter(filterRun).map((run) => (
-                  <RunCard key={run.id} run={run} {...runCardProps} />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ── Other runs (not in the main chain) ── */}
-          {otherRuns.filter(filterRun).length > 0 && (
-            <div className="mt-4 space-y-4">
-              {otherRuns.filter(filterRun).map((run) => (
-                <RunCard key={run.id} run={run} {...runCardProps} />
-              ))}
             </div>
           )}
         </div>

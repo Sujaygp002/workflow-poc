@@ -32,9 +32,6 @@ import WorkflowBuilder from './WorkflowBuilder';
 // Trigger number and colour for each system workflow id in the chain.
 const TRIGGER_META = {
   'wf-area-onboarding': { num: 1, color: 'violet' },
-  'wf7':                { num: 2, color: 'sky' },
-  'wf-signing':         { num: 3, color: 'emerald' },
-  'wf-billing-monitor': { num: 4, color: 'amber' },
 };
 
 const TRIGGER_COLOR = {
@@ -195,17 +192,14 @@ function BuilderWorkflowCard({ wf, onEdit, onDeleted }) {
   );
 }
 
-// Chain order for the system section. Trigger 1 (area monitor) is NOT chained
-// to Trigger 2 — it runs independently. Trigger 4 is an independent monitor.
-const CHAIN_ORDER = ['wf-area-onboarding', 'wf7', 'wf-signing'];
-const INDEPENDENT_ORDER = ['wf-billing-monitor'];
-const CHAIN_CONNECTOR = {
-  'wf-signing': { triggerNum: 3, label: 'Send To Physician' },
-};
+// Chain order for the system section. Only the area monitor remains a system
+// workflow (wf7/wf-signing/wf-billing-monitor were removed); the daily intake
+// pipeline is now a builder workflow shown in the "Your workflows" section.
+const CHAIN_ORDER = ['wf-area-onboarding'];
+const INDEPENDENT_ORDER = [];
+const CHAIN_CONNECTOR = {};
 // Workflows that begin a new standalone chain (shown with a section divider, not a connector).
-const STANDALONE_HEADER = {
-  'wf7': { triggerNum: 2, label: 'HHAH Uploads Documents', note: 'fires independently when an HHAH uploads' },
-};
+const STANDALONE_HEADER = {};
 
 export default function WorkflowList() {
   const [workflows, setWorkflows] = useState([]);

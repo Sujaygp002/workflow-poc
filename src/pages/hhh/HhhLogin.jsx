@@ -253,6 +253,44 @@ export default function HhhLogin() {
     if (user) refreshPatients();
   }, [user, refreshPatients]);
 
+  // Preload this agency's fixtures into the upload form so the user can just click
+  // Start Upload. The session agency's contact_info.preload (set at provisioning)
+  // carries blob URLs for the workbook + two order ZIPs. Recovered from the old
+  // sample-4 auto-preload pattern (fetch URL -> Blob -> File -> set input state).
+  // Agencies without a preload manifest see zero change.
+  const preload = user?.preload || null;
+  useEffect(() => {
+    if (!preload) return undefined;
+    // Only preload when the user hasn't already picked files.
+    if (workbook || unsignedZip || signedZip) return undefined;
+    let cancelled = false;
+    async function preloadFixtures() {
+      const fetchAsFile = async (entry, type) => {
+        if (!entry?.url) return null;
+        const res = await fetch(entry.url);
+        if (!res.ok) throw new Error(`preload ${entry.url} failed`);
+        const blob = await res.blob();
+        return new File([blob], entry.name || entry.url.split('/').pop(), { type });
+      };
+      try {
+        const [xlsx, unsigned, signed] = await Promise.all([
+          fetchAsFile(preload.workbook, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+          fetchAsFile(preload.unsignedZip, 'application/zip'),
+          fetchAsFile(preload.signedZip, 'application/zip'),
+        ]);
+        if (cancelled) return;
+        if (xlsx) setWorkbook((cur) => cur || xlsx);
+        if (unsigned) setUnsignedZip((cur) => cur || unsigned);
+        if (signed) setSignedZip((cur) => cur || signed);
+      } catch {
+        // Preload is best-effort; the user can still choose files manually.
+      }
+    }
+    preloadFixtures();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preload]);
+
   async function openPatient(patient) {
     setSelectedPatient(patient);
     setSelectedOrder(null);
@@ -356,6 +394,11 @@ export default function HhhLogin() {
           <div>
             <h2 className="text-lg font-bold text-slate-900">Bulk Upload</h2>
             <p className="text-sm text-slate-500 mt-1">Upload one Excel workbook plus two order PDF ZIPs — unsigned (to be signed) and signed. Each PDF filename is its order number; an order number appears in only one ZIP.</p>
+            {preload && (
+              <p className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700 border border-emerald-200">
+                <CheckCircle2 size={13} /> Preloaded for this agency — just click Start Upload
+              </p>
+            )}
           </div>
           <form onSubmit={uploadBatch} className="mt-4 grid lg:grid-cols-[1fr_1fr_1fr_auto] gap-3 items-end">
             <label className="block">

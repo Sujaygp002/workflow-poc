@@ -120,17 +120,6 @@ export async function bulkSignPgOrders({ orderIds, pgId = '', date = '' }) {
   return body;
 }
 
-export async function runBillingMonitor() {
-  const res = await fetch('/api/workflow-runs', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: 'runBillingMonitor' }),
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || 'Unable to run billing monitor');
-  return body;
-}
-
 export async function fetchPatientTree(patientId) {
   const res = await fetch(`/api/patients/${encodeURIComponent(patientId)}`);
   const body = await res.json().catch(() => ({}));

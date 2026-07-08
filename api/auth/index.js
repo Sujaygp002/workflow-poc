@@ -49,9 +49,13 @@ async function externalSessionUser(user) {
   const sql = getSql();
   let agencyName = null;
   let pgName = null;
+  let preload = null;
   if (user.agency_id) {
-    const rows = await sql`SELECT name FROM home_health_agencies WHERE id = ${user.agency_id} LIMIT 1`;
+    const rows = await sql`SELECT name, contact_info FROM home_health_agencies WHERE id = ${user.agency_id} LIMIT 1`;
     agencyName = rows[0]?.name || null;
+    // Preload manifest (workbook + order-zip blob URLs) lives on the agency's
+    // contact_info. Surfaced so the HHAH portal can auto-fill the upload form.
+    preload = rows[0]?.contact_info?.preload || null;
   }
   if (user.pg_id) {
     const rows = await sql`SELECT name FROM physician_groups WHERE id = ${user.pg_id} LIMIT 1`;
@@ -65,6 +69,7 @@ async function externalSessionUser(user) {
     role: user.role,
     agencyId: user.agency_id,
     agencyName,
+    preload,
     pgId: user.pg_id,
     pgName,
     practitionerId: user.practitioner_id,

@@ -61,11 +61,11 @@ episode-length audit rule stays happy.
    - Signed orders zip: `orders_signed.zip`
    Submit the upload.
 
-2. **Watch the Orchestrator.** Open the Command Center → **Orchestrator**. Because
-   the Phase-1 daily workflow (`cc-1783522521545`, active version) is active, your upload is
-   reconciled into today's live daily run (mid-run append seam) — the Sunrise Meadows
-   (TEST) item appears with the agency-upload branch taken (uploaded = YES), then the
-   extraction / patient-exists / admission-dates / episode-dates / order-exists
+2. **Watch the Orchestrator.** Open the Command Center → **Orchestrator**. The upload
+   is reconciled into today's live daily run (mid-run append seam) — **no separate wf7
+   run is created**. The Sunrise Meadows (TEST) row items appear in the daily run
+   (`cc-1783522521545`, active version) with the agency-upload branch taken (uploaded = YES),
+   then the extraction / patient-exists / admission-dates / episode-dates / order-exists
    diamonds resolve per row. Confirm:
    - Scenario **a** flows straight to Review Record.
    - Scenario **b** raises the **Enter admission dates** then **Enter episode dates**

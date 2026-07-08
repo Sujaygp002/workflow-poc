@@ -1,9 +1,4 @@
 import {
-  createTaskRunsForItem,
-  createWorkflowItem,
-  createWorkflowRun,
-  findWorkflowRunBySourceLabel,
-  getActiveWorkflow,
   getItem,
   getItemTasks,
   getRunItems,
@@ -172,85 +167,6 @@ export async function runWorkflowAutomation({ runId, definition, context = {}, c
   await updateRunStatus(runId);
 }
 
-// After the Review step passes for every item in a wf7 run, start a single
-// wf-signing run with one item per written (non-skipped) order in the run.
-async function startBulkSigningRun(wf7RunId) {
-  const signingWorkflow = await getActiveWorkflow('wf-signing');
-  if (!signingWorkflow) return null;
-
-  // Idempotent — one signing run per wf7 run.
-  const sourceLabel = `signing-bulk:${wf7RunId}`;
-  const existing = await findWorkflowRunBySourceLabel('wf-signing', sourceLabel);
-  if (existing) return null;
-
-  const items = await getRunItems(wf7RunId);
-  const eligible = [];
-  const seenOrderIds = new Set();
-  for (const item of items) {
-    if (item.extraction_payload?.orderSkipped) continue;
-    const orderId = item.extraction_payload?.orderId;
-    if (!orderId || seenOrderIds.has(orderId)) continue;
-    seenOrderIds.add(orderId);
-    eligible.push(item);
-  }
-  if (!eligible.length) return null;
-
-  const signingRun = await createWorkflowRun({
-    workflowId: signingWorkflow.id,
-    workflowVersion: signingWorkflow.version,
-    sourceLabel,
-    totalItems: eligible.length,
-    inputSummary: { sourceRunId: wf7RunId, trigger: 'review_completed', orderCount: eligible.length },
-  });
-
-  for (let i = 0; i < eligible.length; i++) {
-    const item = eligible[i];
-    const orderNumber = item.order_payload?.order_info?.order_number || item.order_key;
-    const pdfMeta = item.extraction_payload?.pdf || {};
-    const isSigned = !!pdfMeta.signed;
-    // If the order's PDF came from the signed ZIP, the order is already signed —
-    // pre-stamp its status so signing.checkSignedWithin48h resolves to signed.
-    const orderPayload = isSigned
-      ? {
-          ...item.order_payload,
-          order_status: {
-            ...(item.order_payload?.order_status || {}),
-            SignedByPhyscianDate:
-              item.order_payload?.order_status?.SignedByPhyscianDate || new Date().toISOString().slice(0, 10),
-            SignedByPhysician_Status: true,
-          },
-        }
-      : item.order_payload;
-    const signingItem = await createWorkflowItem({
-      runId: signingRun.id,
-      itemIndex: i,
-      patientPayload: item.patient_payload,
-      orderPayload,
-      referencePayload: item.reference_payload,
-      extractionPayload: {
-        sourceRunId: wf7RunId,
-        sourceItemId: item.id,
-        orderId: item.extraction_payload?.orderId,
-        orderNumber,
-        pdf: {
-          fileName: pdfMeta.fileName || '',
-          blobUrl: pdfMeta.blobUrl || '',
-          blobPath: pdfMeta.blobPath || '',
-          signed: isSigned,
-        },
-      },
-    });
-    await createTaskRunsForItem({
-      runId: signingRun.id,
-      itemId: signingItem.id,
-      steps: signingWorkflow.definition.steps,
-    });
-  }
-
-  await runWorkflowAutomation({ runId: signingRun.id, definition: signingWorkflow.definition, concurrency: eligible.length });
-  return signingRun.id;
-}
-
 export async function completeHumanTask({ taskRunId, notes, payload, definition }) {
   const task = await getTaskRun(taskRunId);
   if (!task) throw new Error('Task not found');
@@ -283,18 +199,6 @@ export async function completeHumanTask({ taskRunId, notes, payload, definition 
     await updateItem(item.id, { status: 'failed', errorMessage: result.error || `${step.name} failed` });
   }
   await runWorkflowAutomation({ runId: task.run_id, definition });
-
-  // After every Review step in a wf7 run, check if ALL items are now reviewed.
-  // If so, fire the single bulk signing run for the whole wf7 run.
-  if (task.task_key === 'human.reviewRecord' && result.ok !== false) {
-    const allItems = await getRunItems(task.run_id);
-    const allReviewed = allItems.every(
-      (it) => it.status === 'completed' || it.extraction_payload?.orderSkipped,
-    );
-    if (allReviewed) {
-      await startBulkSigningRun(task.run_id);
-    }
-  }
 
   return { task, result };
 }

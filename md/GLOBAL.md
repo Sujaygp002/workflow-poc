@@ -34,14 +34,13 @@ switches `base` to `/workflow-poc/`). `npm run dev` serves the frontend only —
 the Vercel runtime + DB, so verify backend changes with `npm run lint` + `npm run build` and
 the deployed app.
 
-**The four seeded system workflows (triggers T1–T4):**
+**The one seeded system workflow:**
 - **T1 `wf-area-onboarding`** — HHAH upload monitor (time_interval label, 10s).
-- **T2 `wf7`** — the intake pipeline: 26 steps, 5 phases (Intake → Patient → Admission → Episode → Order + Review). Fired by HHAH upload.
-- **T3 `wf-signing`** — signing follow-up; ONE run per wf7 run, created only after every row is reviewed.
-- **T4 `wf-billing-monitor`** — eligibility/CPO issue monitor; one run per HHAH, driven by the Orchestrator poll (see §7 caveats).
 
-**Builder workflow (user-created, not seeded):**
-- **Daily Agency Intake → RCM Pipeline** — `daily_time` trigger; one item per active agency per day; chain: `check_agency_upload` → [not uploaded: human outreach (call/sms/email)] → [uploaded: `ai_extract_with_patterns` → `run_ai_service` → `generate_rcm` → `run_ai_audit` → [audit failed: `run_ai_rework`]]; saved to DB as `kind='builder'` via the no-code builder UI. Graph preserved at `docs/daily-rcm-workflow.graph.json`.
+> **Removed (2026-07-09):** T2 `wf7` (intake pipeline), T3 `wf-signing` (signing follow-up), and T4 `wf-billing-monitor` (eligibility/CPO monitor) have been deleted from both `workflowDefinition.js` and the live Neon DB. The phase-1 builder workflow below replaces them for agency intake.
+
+**Active builder workflow (phase 1):**
+- **Agency Bulk Upload — Daily Intake (Phase 1)** `cc-1783522521545` — `daily_time` trigger (12:00 America/Chicago); ONE run per day shared across all agencies; items appended per agency on upload (`reconcileDailyRunForUpload`) and for non-uploading agencies at noon tick (`dailyTimeTickHandler`); chain: `check_agency_upload` → [not uploaded: human outreach (call/sms/email)] → [uploaded: `ai_extract_with_patterns` → fill → `patient.resolve` update/create → dates → `admission.resolve` → `episode.resolve` → order create/skip → `review_record`]. Saved as `kind='builder'` (active version 5, id `cc-1783522521545`). Graph: `docs/phase1-agency-upload.graph.json`.
 
 ---
 
@@ -68,7 +67,7 @@ api/_lib/  — shared server code (no ORM, no framework):
   auth.js (scrypt, sessions; TOTP helpers legacy/unused) · identityRepo.js (identity SQL)
   repositories.js (ALL domain SQL + business logic) · normalizers.js (identity/dedup keys)
   excelParser.js (workbook → joined rows) · multipart.js · mailer.js · gemini.js · blobStore.js
-  workflowDefinition.js (4 system defs) · workflowEngine.js (the engine)
+  workflowDefinition.js (1 system def: wf-area-onboarding) · workflowEngine.js (the engine)
   taskRegistry.js (taskKey → fn; condition evaluation) · builderCatalog.js · builderCompiler.js
   referenceLogic/  — agencyCheck.js · extraction.js · aiService.js · rcm.js · audit.js · rework.js
                     · businessRules.js (pure utility library: isFilled, isPatientDataComplete,
@@ -115,12 +114,7 @@ definition, not the JS constant — after editing `workflowDefinition.js`, run `
   the run status rolls up. Both branches of an exclusive fork must appear in the join step's
   preReq list, or items taking the skipped branch **deadlock**.
 - `startWorkflow` with zero items still creates one empty item so system steps can evaluate.
-- **T3 chaining:** `startBulkSigningRun` fires only inside `completeHumanTask` for
-  `task_key='human.reviewRecord'`, only when every item in the wf7 run is completed or has
-  `orderSkipped`; idempotent via source label `signing-bulk:<wf7RunId>`. One signing item per
-  distinct non-duplicate order; if the order's PDF came from the **signed ZIP**, the signing
-  item's `order_status` is pre-stamped signed so the overdue-reminder branch is skipped.
-  **A failed item blocks T3 permanently for that run.**
+- **T3 chaining (removed):** `startBulkSigningRun` and the `wf-signing` run-creation chain no longer exist. `workflowEngine.js` has no `human.reviewRecord` hook. The phase-1 builder workflow handles review via its `review_record` human task, which does not spawn a signing run.
 - **AI never fails an item:** `ai.extractMissingDataFromPdf` always returns `ok:true` — AI
   failure is the `ai_extraction_fail` **branch**, not a failure. `mergeDeep` drops
   undefined/null/'' patch values, so no AI or human patch can blank an existing field.
@@ -226,9 +220,7 @@ Episode status ladder **started → eligible → billable**:
   **appended** (`appendIssuesToRun`), not new runs. Issue dedup is permanent per signature
   (`missing-docs:<episodeId>`, `signature:<episodeId>`, `cpo:<cpoMonthId>`) — a completed issue
   never re-raises unless the run is deleted.
-- **Cadence is frontend-driven**: the Orchestrator POSTs `runBillingMonitor` every 10s while
-  Live and the tab is visible. The definition's `intervalSeconds:10` is a **label only** —
-  nothing server-side ticks T4.
+- **Billing monitor removed (2026-07-09):** `wf-billing-monitor` and `runBillingMonitor` no longer exist. The Orchestrator no longer calls `runBillingMonitor`. Eligibility/CPO business rules remain in `referenceLogic/` modules and `repositories.js` (`runBillingMonitorPass` is dead code), but no automatic billing-issue run is created.
 
 ### Dates (load-bearing)
 Neon returns dates as `Date` objects. All date math must go through `parseDate` / `dateOnly` /
@@ -276,11 +268,7 @@ eligibility and CPO month generation. Never string-slice a date.
   before real use**. Vercel env vars override. Do not move secrets without asking.
 - **12-function cap:** `api/` is at exactly 12 serverless files (Vercel Hobby). New capability =
   a POST `action` on an existing handler, never a new file.
-- **`tick` now has two callers:** (a) the Orchestrator 10s poll calls `tickTimeTriggers()` (POST
-  `{action:'tick'}`) alongside `runBillingMonitor`, so `time_interval` and `daily_time` builder
-  workflows fire while the tab is open; (b) a Vercel cron (`GET /api/workflow-runs?action=tick`,
-  schedule `0 17 * * *`) covers the server-only path daily. The previous caveat ("nothing calls
-  tick") is resolved. T4 (`runBillingMonitor`) still only fires while the Orchestrator tab is open.
+- **`tick` has two callers:** (a) the Orchestrator 10s poll calls `tickTimeTriggers()` (POST `{action:'tick'}`) so `time_interval` and `daily_time` builder workflows fire while the tab is open; (b) a Vercel cron (`GET /api/workflow-runs?action=tick`, schedule `0 17 * * *`) covers the server-only path daily. `runBillingMonitor` is no longer called from the poll — it has been removed entirely.
 - **wf7 stepId quirks:** step ids are intentionally non-contiguous (`wf7-s22`/`s23` retired;
   `s30`–`s32` added later). **Never renumber ids** — they're referenced everywhere.
 - **`order_status` misspelling:** the jsonb key `SignedByPhyscianDate` is misspelled in data —
@@ -326,7 +314,7 @@ eligibility and CPO month generation. Never string-slice a date.
 | Graph → engine steps compilation, branch/join rules | [backend/lib/builder-compiler.md](backend/lib/builder-compiler.md) |
 | taskKey handlers, evaluateCondition, REQUIRED_FIELDS, mergeDeep | [backend/lib/task-registry.md](backend/lib/task-registry.md) |
 | Engine loop, task activation, completeHumanTask, bulk-signing chain | [backend/lib/workflow-engine.md](backend/lib/workflow-engine.md) |
-| The four system workflow definitions (wf7 steps, megaGroups) | [backend/lib/workflow-definitions.md](backend/lib/workflow-definitions.md) |
+| The one remaining system workflow definition (wf-area-onboarding); wf7/wf-signing/wf-billing-monitor removed | [backend/lib/workflow-definitions.md](backend/lib/workflow-definitions.md) |
 | Any domain SQL / repository function | [backend/lib/repositories.md](backend/lib/repositories.md) |
 | Config, Neon client, http helpers, mailer, Gemini, blob, multipart, normalizers (**canonical key formulas**), excelParser | [backend/lib/utils.md](backend/lib/utils.md) |
 | Daily Agency Intake → RCM Pipeline modules (agency upload check, AI extraction, CC-note/CPO AI service, RCM CPT billing records, audit R1–R4, rework auto-fix; `businessRules.js` pure utility library ported from BusinessRequirementsService.cs) | [backend/lib/reference-logic.md](backend/lib/reference-logic.md) |

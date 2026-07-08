@@ -117,6 +117,57 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-07-09** — **Removed 3 system workflows; rewired uploads to daily-run row-append;
+  tick appends silent agencies; Nightingale fixtures + Riverbend/Cedar Grove teardown.**
+  - **R1 — removed `wf7` (update patients objects), `wf-signing` (Send To Physician),
+    `wf-billing-monitor` (Make Patients Billable)** everywhere. `workflowDefinition.js`
+    now exports only `WORKFLOW_DEFINITIONS = [WF_AREA_ONBOARDING_DEFINITION]` (the 3 consts
+    deleted). `api/workflow-runs/index.js`: dropped `ensureBillingWorkflow`,
+    `runBillingMonitorHandler` + all its helpers; `POST {action:'runBillingMonitor'}` now
+    returns 400 "Unsupported workflow-runs action." `workflowEngine.js`: deleted
+    `startBulkSigningRun` + its `human.reviewRecord` hook (and now-unused imports).
+    `bulk-upload/start.js`: removed the `targetWorkflows` wf7 fallback. `scripts/seed.js`:
+    removed `seedDemoWorkflowRun` (its wf7 anchor). `WorkflowList.jsx` + `Orchestrator.jsx`:
+    stripped the 3 ids (Orchestrator poll now calls only `tickTimeTriggers`; removed
+    `runBillingMonitor` client). `repositories.js` `runBillingMonitorPass` kept as harmless
+    dead code (no caller). **DB surgery** (live Neon): deleted the 1 `wf-billing-monitor`
+    run (cascades) then all 3 def rows — verified 0 defs / 0 runs remain; only
+    `cc-1783522521545 v5` (phase-1 builder) + `wf-area-onboarding v1` stay active.
+  - **R2 — uploads now append to TODAY's daily run** (wf7's replacement). `bulk-upload/start.js`
+    rewritten: for each active `daily_time` builder workflow it ensures today's daily run
+    exists (creates on demand with the canonical `daily:<wfId>:<dayBucket>` sourceLabel and
+    NO base items for other agencies), then appends ONE item per joined workbook row
+    (patient/order payloads + `stampSessionAgency`-merged `HHAH={id,name,contact}` +
+    `extraction_payload.appendKey = row:<hhahId>:<orderOrRowKey>:<dayBucket>`), auto-resolves
+    the agency's open contact task, writes `uploaded_documents` anchored to the daily run
+    with the uploading agency's `hhahId`, and runs the automation so rows flow n1(uploaded
+    branch)..n7. `stampSessionAgency` extended to set `HHAH.id`+`HHAH.contact`;
+    `insertUploadedDocument` gained an optional `hhahId` param (multi-agency daily run can't
+    carry one `run.hhah_id`). JSON path (manual/Sunrise kit) reshaped into the same joined-row
+    append seam. Verified live: 20 rows appended, all `agency_uploaded=true`, patient/order
+    created, review tasks active in worker bucket; re-upload adds 0 items (appendKey dedupe).
+  - **R3 — noon tick appends silent agencies.** `dailyTimeTickHandler` now: creates today's
+    run only at/after fire time when missing; when the run already exists + running (e.g.
+    upload-created early), appends ONE base item (`appendKey base:<agencyId>:<dayBucket>`) per
+    active agency NOT already present (matched by `reference_payload.HHAH.id`, unioning native
+    base + row items). Verified live: an upload-created run of 20 Nightingale row items → tick
+    appended exactly 3 base items (Demo RCM/Sunrise/Willow, each with an active Contact-Agency
+    task); second tick appended nothing; one run/day invariant held.
+  - **R4 — Nightingale created, Riverbend + Cedar Grove deleted.** External generator scripts
+    in `/Users/sujaygp/Desktop/data/` adapted (kept OUTSIDE the repo): `build-fixtures.mjs`
+    now emits ONE set for slug `nightingale-visiting-nurses-taunton` from all 11 patients / 20
+    orders (10 signed / 10 unsigned matching the PDF dirs 1:1, patient MRN on order rows, blank
+    Agency Name); `provision.mjs` creates agency `Nightingale Visiting Nurses-Taunton (TEST)`
+    (NPI 1881923936, email resources@ucodemint.com) + user `nightingale-test` /
+    `TestAgency!2026`, uploads the 3 fixtures to `preload/nightingale-visiting-nurses-taunton/`,
+    stores `contact_info.preload`, and creates the `Prima Care` PG + Dr. Labib Ossama W.
+    (NPI 1225033673) practitioner mapped to it; new `delete-agencies.mjs` removes Riverbend
+    (e2b1ca81) + Cedar Grove (cfa80619) — runs/users/blobs/domain rows/agency. `blobStore.js`
+    gained `deleteBlobUrls` + `deleteBlobPrefix` (re-exporting `@vercel/blob` `del`/`list`).
+    Verified live: Nightingale login mints; both placeholder agencies + their users + their
+    3 preload blobs each deleted (blob prefix now 0); Willow / Sunrise / Demo RCM untouched.
+  - lint (`eslint .`) clean; `npm run build` passes. All 12 api handlers unchanged in count.
+
 - **2026-07-08** — **md/ docs: builder task-hierarchy (groups → megaGroups), for-each START phrasing, phase-1 parity.**
   - **`md/backend/lib/builder-compiler.md`**: added "TASK groups → megaGroups" section documenting the post-pass
     that derives `megaGroups` from `graph.groups` (validation rules, filter of condition/dangling ids, omit-when-empty),

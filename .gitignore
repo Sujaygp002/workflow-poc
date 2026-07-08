@@ -32,3 +32,6 @@ reference/
 
 # demo recording scratch (frames are rebuilt by scripts/record-phase1-demo.mjs)
 docs/_demo-frames/
+
+# preload fixtures built from real patient documents (PRIVACY: never commit — repo is public)
+docs/preload-fixtures/

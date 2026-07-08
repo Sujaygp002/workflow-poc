@@ -79,8 +79,10 @@ export async function listActiveBuilderWorkflowsByTrigger(triggerType) {
   `;
 }
 
-// Idempotent: re-upsert the 4 system workflow definitions (kind='system') when
-// missing — the wipe empties workflow_definitions. NO user seeding.
+// Idempotent: re-upsert the system workflow definitions (kind='system') when
+// missing — the wipe empties workflow_definitions. Only wf-area-onboarding
+// remains a system definition (wf7/wf-signing/wf-billing-monitor were removed).
+// NO user seeding.
 export async function ensureSystemDefinitions() {
   for (const definition of SYSTEM_WORKFLOW_DEFINITIONS) {
     const existing = await getActiveWorkflow(definition.id);
@@ -161,12 +163,17 @@ export async function createTaskRunsForItem({ runId, itemId, steps }) {
   return created;
 }
 
-export async function insertUploadedDocument({ runId, fileName, contentType, sizeBytes, blobUrl, blobPath }) {
+// hhahId (optional): the uploading agency. A multi-agency daily run cannot carry
+// a single run.hhah_id, so an explicit hhahId lets a row-append upload attribute
+// each uploaded_documents row to the correct agency (agency.checkUploadedToday
+// queries by hhah_id + day). Falls back to run.hhah_id (legacy single-agency
+// runs) when hhahId is not supplied.
+export async function insertUploadedDocument({ runId, fileName, contentType, sizeBytes, blobUrl, blobPath, hhahId = null }) {
   const sql = getSql();
   const run = (await sql`SELECT hhah_id FROM workflow_runs WHERE id = ${runId} LIMIT 1`)[0];
   const rows = await sql`
     INSERT INTO uploaded_documents (run_id, file_name, content_type, size_bytes, blob_url, blob_path, hhah_id)
-    VALUES (${runId}, ${fileName}, ${contentType || null}, ${sizeBytes || null}, ${blobUrl || null}, ${blobPath || null}, ${run?.hhah_id || null})
+    VALUES (${runId}, ${fileName}, ${contentType || null}, ${sizeBytes || null}, ${blobUrl || null}, ${blobPath || null}, ${hhahId || run?.hhah_id || null})
     RETURNING *
   `;
   return rows[0];

@@ -13,7 +13,6 @@ import {
   findHhahByName,
   findStatisticalAreaByName,
   findWorkflowRunBySourceLabel,
-  getActiveWorkflow,
   getHhahById,
   getRunItems,
   getRunWithDefinition,
@@ -32,15 +31,13 @@ export const config = {
   },
 };
 
-// Builder trigger routing: if ≥1 active builder workflow declares a
-// document_upload trigger, the upload starts a run of EACH of them (one item
-// per parsed row). Otherwise it falls back to the system wf7 intake run.
-async function targetWorkflows() {
+// Upload routing: the daily_time builder workflow(s) are the intake pipeline.
+// An HHAH upload appends one item per parsed workbook row to TODAY's daily run
+// (created on demand if the noon tick hasn't fired yet). There is no wf7
+// fallback — wf7/wf-signing/wf-billing-monitor were removed.
+async function dailyWorkflows() {
   await ensureSystemDefinitions();
-  const builderWorkflows = await listActiveBuilderWorkflowsByTrigger('document_upload');
-  if (builderWorkflows.length) return builderWorkflows;
-  const wf7 = await getActiveWorkflow('wf7');
-  return wf7 ? [wf7] : [];
+  return listActiveBuilderWorkflowsByTrigger('daily_time');
 }
 
 // The HHAH portal must be signed in: bearer session of an external hhah user.
@@ -86,6 +83,12 @@ async function resolveAreaUploadContext(hhahUser, fields = {}, body = {}) {
 // stamp it over whatever the workbook's Agencyname column said (or left blank),
 // so patients/orders land under the real Entity-page agency (hhah_name AND
 // agency_id resolve) instead of spawning phantom / "Unknown agency" records.
+//
+// It ALSO sets HHAH.id + HHAH.contact on the reference payload — a row item
+// flows through the daily workflow's n1 (agency.checkUploadedToday matches on
+// HHAH.id) and, if the false-branch email were ever reached, email_agency reads
+// HHAH.contact.email. This extends (not replaces) the Coverage-Map session
+// stamping: name + data_tags are preserved exactly as before.
 function stampSessionAgency(referencePayload, areaContext) {
   if (!areaContext?.hhahId || !areaContext?.hhahName) return referencePayload || {};
   const ref = referencePayload || {};
@@ -93,7 +96,9 @@ function stampSessionAgency(referencePayload, areaContext) {
     ...ref,
     HHAH: {
       ...(ref.HHAH || {}),
+      id: areaContext.hhahId,
       name: areaContext.hhahName,
+      contact: areaContext.contact || {},
       data_tags: {
         ...(ref.HHAH?.data_tags || {}),
         source: 'session_agency',
@@ -126,8 +131,8 @@ async function pdfsFromZip(zipFile, signed = false) {
   return extracted;
 }
 
-function pdfMetadataForItem(item, pdfsByOrderNumber) {
-  const orderNumber = item.orderPayload?.order_info?.order_number;
+function pdfMetadataForItem(orderPayload, pdfsByOrderNumber) {
+  const orderNumber = orderPayload?.order_info?.order_number;
   const pdf = orderNumber ? pdfsByOrderNumber[orderNumberFromPdfName(`${orderNumber}.pdf`)] : null;
   if (!pdf) return {};
   // Order numbers are unique, so each order's PDF is in EITHER the signed or the
@@ -142,13 +147,16 @@ function pdfMetadataForItem(item, pdfsByOrderNumber) {
   };
 }
 
-// Upload + register this run's PDFs (loose pdf fields + unsigned/signed ZIPs).
-async function registerRunDocuments({ run, pdfs, zipPdfs }) {
+// Upload + register this run's PDFs (loose pdf fields + unsigned/signed ZIPs),
+// anchoring each uploaded_documents row to the DAILY run + the uploading agency
+// (hhahId), so agency.checkUploadedToday sees the upload for that agency + day.
+async function registerRunDocuments({ runId, hhahId, pdfs, zipPdfs }) {
   const uploadedPdfs = [];
   for (const pdf of pdfs) {
-    const uploaded = await uploadPdfToBlob(pdf, run.id);
+    const uploaded = await uploadPdfToBlob(pdf, runId);
     const document = await insertUploadedDocument({
-      runId: run.id,
+      runId,
+      hhahId,
       fileName: pdf.originalFilename || 'document.pdf',
       contentType: pdf.mimetype || 'application/pdf',
       sizeBytes: pdf.size || uploaded.buffer?.byteLength,
@@ -159,9 +167,10 @@ async function registerRunDocuments({ run, pdfs, zipPdfs }) {
   }
 
   for (const pdf of zipPdfs) {
-    const uploaded = await uploadPdfBufferToBlob(pdf, run.id);
+    const uploaded = await uploadPdfBufferToBlob(pdf, runId);
     const document = await insertUploadedDocument({
-      runId: run.id,
+      runId,
+      hhahId,
       fileName: pdf.originalFilename || 'document.pdf',
       contentType: pdf.mimetype || 'application/pdf',
       sizeBytes: pdf.size || uploaded.buffer?.byteLength,
@@ -179,63 +188,117 @@ async function registerRunDocuments({ run, pdfs, zipPdfs }) {
   return uploadedPdfs;
 }
 
-async function startRunForWorkflow({ workflow, parsed, areaContext, sourceLabel, pdfs, zipPdfs }) {
-  const run = await createWorkflowRun({
-    workflowId: workflow.id,
-    workflowVersion: workflow.version,
-    sourceLabel,
-    totalItems: parsed.joined.length,
-    inputSummary: { ...parsed.summary, area: areaContext, workflowName: workflow.name },
-    areaId: areaContext.areaId,
-    hhahId: areaContext.hhahId,
-  });
+// Ensure TODAY's daily run exists for a daily_time workflow, creating it on
+// demand (canonical sourceLabel) with NO base items when the noon tick hasn't
+// fired yet. Items for OTHER agencies are NOT pre-created — the tick fills
+// silent agencies later (R3). Returns { run, definition, dayBucket, tz }.
+async function ensureDailyRun(workflow) {
+  const trigger = workflow.definition?.trigger || {};
+  const tz = trigger.tz || 'America/Chicago';
+  const { dayBucket } = nowPartsInTz(tz);
+  const sourceLabel = dailySourceLabel(workflow.id, dayBucket);
 
-  const uploadedPdfs = await registerRunDocuments({ run, pdfs, zipPdfs });
-  const pdfsByOrderNumber = Object.fromEntries(uploadedPdfs.map((pdf) => [orderNumberFromPdfName(pdf.fileName), pdf]));
+  let run = await findWorkflowRunBySourceLabel(workflow.id, sourceLabel);
+  if (!run) {
+    run = await createWorkflowRun({
+      workflowId: workflow.id,
+      workflowVersion: workflow.version,
+      sourceLabel,
+      totalItems: 0,
+      inputSummary: { trigger: 'daily_time', dayBucket, tz, workflowName: workflow.name, createdBy: 'upload' },
+    });
+  }
+  const withDefinition = await getRunWithDefinition(run.id);
+  return {
+    run,
+    definition: withDefinition?.definition || workflow.definition,
+    dayBucket,
+    tz,
+  };
+}
 
-  let itemIndex = 0;
-  for (const item of parsed.joined) {
+// Append one item per joined workbook row to the DAILY run for one workflow.
+// Each row item carries patient/order payloads from the row, the session-stamped
+// HHAH (id + name + contact), and a unique appendKey so a re-upload the same day
+// dedupes. Then it auto-resolves the agency's open contact task and runs the
+// automation so row items flow n1(FALSE branch)..n7.
+async function appendRowsToDailyRun({ workflow, parsed, areaContext, uploadedPdfs, pdfsByOrderNumber }) {
+  const { run, definition, dayBucket, tz } = await ensureDailyRun(workflow);
+  const steps = definition?.steps || [];
+
+  const existingItems = await getRunItems(run.id);
+  const existingAppendKeys = new Set(existingItems.map((it) => it.extraction_payload?.appendKey).filter(Boolean));
+  let itemIndex = await countWorkflowItems(run.id);
+
+  const appended = [];
+  let rowIndex = 0;
+  for (const row of parsed.joined) {
+    const orderNumber = row.orderPayload?.order_info?.order_number || '';
+    // appendKey unique per (agency, order/row, day). order_number when present,
+    // else patientKey|rowIndex so patient-only / order-only rows never collide
+    // and a same-day re-upload of the same workbook dedupes exactly.
+    const rowKey = orderNumber
+      ? `ord:${orderNumber}`
+      : `row:${row.patientPayload?.patient_info?.name || ''}|${rowIndex}`;
+    const appendKey = `row:${areaContext.hhahId}:${rowKey}:${dayBucket}`;
+    rowIndex += 1;
+    if (existingAppendKeys.has(appendKey)) continue;
+
     const created = await createWorkflowItem({
       runId: run.id,
       itemIndex,
-      patientPayload: item.patientPayload,
-      orderPayload: item.orderPayload,
-      referencePayload: stampSessionAgency(item.referencePayload, areaContext),
+      patientPayload: row.patientPayload,
+      orderPayload: row.orderPayload,
+      referencePayload: stampSessionAgency(row.referencePayload, areaContext),
       extractionPayload: {
-        sourceRows: item.sourceRows,
-        pdf: pdfMetadataForItem(item, pdfsByOrderNumber),
+        sourceRows: row.sourceRows,
+        pdf: pdfMetadataForItem(row.orderPayload, pdfsByOrderNumber),
+        appendedFromUpload: true,
+        dayBucket,
+        tz,
+        appendKey,
       },
     });
-    await createTaskRunsForItem({
-      runId: run.id,
-      itemId: created.id,
-      steps: workflow.definition.steps,
-    });
+    await createTaskRunsForItem({ runId: run.id, itemId: created.id, steps });
+    existingAppendKeys.add(appendKey);
+    appended.push(created.id);
     itemIndex += 1;
   }
 
+  // Auto-complete the uploading agency's open contact task on this run
+  // (idempotent — the WHERE status='active' clause matches zero rows on a second
+  // same-day upload).
+  const resolved = await resolveOpenAgencyAskTaskForRun(run.id, areaContext.hhahId);
+
+  // Advance the run so row items flow n1 (now sees the upload) .. n7 natively;
+  // system steps auto-run and fill/review human tasks land in the worker bucket.
   await runWorkflowAutomation({
     runId: run.id,
-    definition: workflow.definition,
-    context: {
-      pdfs: uploadedPdfs,
-      pdfsByOrderNumber,
-    },
+    definition,
+    context: { pdfs: uploadedPdfs, pdfsByOrderNumber },
   });
+
   const refreshed = await getRunWithDefinition(run.id);
   const tasks = await listTaskRunsForRun(run.id);
-  return { run: refreshed, tasks };
+  return {
+    run: refreshed,
+    tasks,
+    workflowId: workflow.id,
+    dayBucket,
+    appendedItemIds: appended,
+    resolvedTaskIds: resolved?.resolved || [],
+  };
 }
 
 async function startFromMultipart(req, hhahUser) {
   const { fields, workbook, pdfs, unsignedZips, signedZips } = await parseMultipart(req);
   if (!workbook) throw new Error('Upload requires a .xlsx workbook field named "workbook".');
 
-  const workflows = await targetWorkflows();
-  if (!workflows.length) throw new Error('No active workflow accepts document uploads.');
+  const workflows = await dailyWorkflows();
+  if (!workflows.length) throw new Error('No active daily-intake workflow accepts document uploads.');
   const areaContext = await resolveAreaUploadContext(hhahUser, fields);
+  if (!areaContext.hhahId) throw httpError(400, 'Upload requires a resolvable HHAH agency for the session.');
   const parsed = await parseWorkflowWorkbook(workbook.filepath);
-  const sourceLabel = String(firstField(fields.sourceLabel, workbook.originalFilename || 'Excel upload'));
 
   const zipPdfs = [];
   const zipSets = [
@@ -246,20 +309,7 @@ async function startFromMultipart(req, hhahUser) {
     zipPdfs.push(...await pdfsFromZip(zip, signed));
   }
 
-  const results = [];
-  for (const workflow of workflows) {
-    results.push(await startRunForWorkflow({ workflow, parsed, areaContext, sourceLabel, pdfs, zipPdfs }));
-  }
-  const [first] = results;
-  return {
-    result: {
-      run: first.run,
-      tasks: first.tasks,
-      runs: results.map((result) => result.run),
-      inputSummary: { ...parsed.summary },
-    },
-    areaContext,
-  };
+  return runDailyAppend({ workflows, parsed, areaContext, pdfs, zipPdfs });
 }
 
 async function startFromJson(req, hhahUser) {
@@ -267,150 +317,63 @@ async function startFromJson(req, hhahUser) {
   if (!Array.isArray(body.items)) {
     throw new Error('JSON start requires an items array of { patientPayload, orderPayload, referencePayload }.');
   }
-  const workflows = await targetWorkflows();
-  if (!workflows.length) throw new Error('No active workflow accepts document uploads.');
+  const workflows = await dailyWorkflows();
+  if (!workflows.length) throw new Error('No active daily-intake workflow accepts document uploads.');
   const areaContext = await resolveAreaUploadContext(hhahUser, {}, body);
+  if (!areaContext.hhahId) throw httpError(400, 'Upload requires a resolvable HHAH agency for the session.');
 
+  // Reshape the JSON items into the same joined-row shape the workbook path
+  // uses (manual test kit / Sunrise path → R5), so both flow identically.
+  const parsed = {
+    joined: body.items.map((item) => ({
+      patientPayload: item.patientPayload || {},
+      orderPayload: item.orderPayload || {},
+      referencePayload: item.referencePayload || {},
+      sourceRows: item.extractionPayload?.sourceRows || {},
+    })),
+    summary: { joinedRows: body.items.length, mode: 'json' },
+  };
+
+  return runDailyAppend({ workflows, parsed, areaContext, pdfs: [], zipPdfs: [] });
+}
+
+// Common flow for multipart + JSON: register documents once per (agency, day)
+// then append the parsed rows to each active daily workflow's run.
+async function runDailyAppend({ workflows, parsed, areaContext, pdfs, zipPdfs }) {
   const results = [];
   for (const workflow of workflows) {
-    const run = await createWorkflowRun({
-      workflowId: workflow.id,
-      workflowVersion: workflow.version,
-      sourceLabel: body.sourceLabel || 'JSON upload',
-      totalItems: body.items.length,
-      inputSummary: { joinedRows: body.items.length, mode: 'json', area: areaContext, workflowName: workflow.name },
-      areaId: areaContext.areaId,
+    // Register documents against THIS workflow's daily run so
+    // agency.checkUploadedToday (which reads uploaded_documents by hhah_id+day)
+    // sees the upload before the row items' n1 step runs.
+    const { run } = await ensureDailyRun(workflow);
+    const uploadedPdfs = await registerRunDocuments({
+      runId: run.id,
       hhahId: areaContext.hhahId,
+      pdfs,
+      zipPdfs,
     });
-
-    for (let i = 0; i < body.items.length; i += 1) {
-      const item = body.items[i];
-      const created = await createWorkflowItem({
-        runId: run.id,
-        itemIndex: i,
-        patientPayload: item.patientPayload,
-        orderPayload: item.orderPayload,
-        referencePayload: stampSessionAgency(item.referencePayload, areaContext),
-        extractionPayload: item.extractionPayload || {},
-      });
-      await createTaskRunsForItem({
-        runId: run.id,
-        itemId: created.id,
-        steps: workflow.definition.steps,
-      });
-    }
-
-    await runWorkflowAutomation({ runId: run.id, definition: workflow.definition });
-    const refreshed = await getRunWithDefinition(run.id);
-    const tasks = await listTaskRunsForRun(run.id);
-    results.push({ run: refreshed, tasks });
+    const pdfsByOrderNumber = Object.fromEntries(
+      uploadedPdfs.map((pdf) => [orderNumberFromPdfName(pdf.fileName), pdf]),
+    );
+    results.push(await appendRowsToDailyRun({ workflow, parsed, areaContext, uploadedPdfs, pdfsByOrderNumber }));
   }
   const [first] = results;
   return {
     result: {
-      run: first.run,
-      tasks: first.tasks,
-      runs: results.map((result) => result.run),
-      inputSummary: { joinedRows: body.items.length, mode: 'json' },
+      run: first?.run || null,
+      tasks: first?.tasks || [],
+      runs: results.map((r) => r.run).filter(Boolean),
+      dailyAppend: results.map((r) => ({
+        workflowId: r.workflowId,
+        runId: r.run?.id,
+        dayBucket: r.dayBucket,
+        appendedItems: r.appendedItemIds.length,
+        resolvedTaskIds: r.resolvedTaskIds,
+      })),
+      inputSummary: { ...parsed.summary },
     },
     areaContext,
   };
-}
-
-// R1 append seam: when an HHAH uploads WHILE today's daily "Agency Intake -> RCM
-// Pipeline" run is still in flight, the daily run was created before the upload
-// existed — so that agency's item is either blocked on the open "ask agency to
-// upload" task (t1) or the agency has no item at all (created after the run
-// started). This reconciles the SAME daily run in place (never a new run):
-//   (a) auto-complete the open t1 ask task for the uploading agency, then
-//   (b) append ONE fresh full-graph item so n1 re-checks, now sees the upload,
-//       and flows n2..n7 instead of asking again.
-// Best-effort by contract: the caller wraps this in try/catch so nothing here can
-// fail the upload's own 201.
-async function reconcileDailyRunForUpload({ workflow, areaContext }) {
-  if (!areaContext.hhahId) return { skipped: true, reason: 'no_session_agency' };
-  const trigger = workflow.definition?.trigger || {};
-  const tz = trigger.tz || 'America/Chicago';
-  const { dayBucket } = nowPartsInTz(tz);
-  const sourceLabel = dailySourceLabel(workflow.id, dayBucket);
-
-  // R1c guard: only reconcile an in-flight daily run. No run for today, or a run
-  // that already finished, means the base bulk-upload behavior is untouched.
-  const run = await findWorkflowRunBySourceLabel(workflow.id, sourceLabel);
-  if (!run || run.status !== 'running') {
-    return { skipped: true, reason: run ? `run_status_${run.status}` : 'no_daily_run', dayBucket };
-  }
-
-  const withDefinition = await getRunWithDefinition(run.id);
-  if (!withDefinition?.definition?.steps?.length) {
-    return { skipped: true, reason: 'no_definition', runId: run.id, dayBucket };
-  }
-  const steps = withDefinition.definition.steps;
-  const agencyId = areaContext.hhahId;
-
-  // (a) Auto-complete the open t1 ask task for this agency (idempotent: the WHERE
-  // status='active' clause matches zero rows on a second same-day upload).
-  const resolved = await resolveOpenAgencyAskTaskForRun(run.id, agencyId);
-
-  // (b) Append ONE fresh full-graph item — idempotent per (agency, dayBucket) via
-  // the appendKey stamped on extraction_payload. A second same-day upload finds
-  // the existing key and skips.
-  const appendKey = `append:${agencyId}:${dayBucket}`;
-  const existingItems = await getRunItems(run.id);
-  const already = existingItems.find((it) => it.extraction_payload?.appendKey === appendKey);
-  let appendedItemId = null;
-  if (!already) {
-    const itemIndex = await countWorkflowItems(run.id);
-    const created = await createWorkflowItem({
-      runId: run.id,
-      itemIndex,
-      patientPayload: {},
-      orderPayload: {},
-      referencePayload: {
-        HHAH: { id: agencyId, name: areaContext.hhahName, contact: areaContext.contact || {} },
-      },
-      extractionPayload: { dayBucket, tz, appendedFromUpload: true, appendKey },
-    });
-    appendedItemId = created.id;
-    // Full compiled run definition steps (NOT a single runnableStep) so the item
-    // flows n1..n7 exactly like a native daily item.
-    await createTaskRunsForItem({ runId: run.id, itemId: created.id, steps });
-  }
-
-  // Advance the same run: settle the appended item through n1 (now sees the
-  // upload) and roll up run status. Safe to run even when nothing was appended.
-  await runWorkflowAutomation({ runId: run.id, definition: withDefinition.definition });
-
-  return {
-    runId: run.id,
-    dayBucket,
-    resolvedTaskIds: resolved?.resolved || [],
-    appended: !already,
-    appendedItemId,
-    appendKey,
-  };
-}
-
-// After the upload's own run(s) finished (uploaded_documents rows now exist so
-// n1/checkUploadedToday can see them), reconcile TODAY's daily run for each active
-// daily_time builder workflow. Best-effort: any failure is swallowed and reported
-// on the response body — it never fails the upload 201.
-async function reconcileDailyRuns(areaContext) {
-  const outcomes = [];
-  let workflows;
-  try {
-    workflows = await listActiveBuilderWorkflowsByTrigger('daily_time');
-  } catch (error) {
-    return [{ error: error.message || String(error) }];
-  }
-  for (const workflow of workflows) {
-    try {
-      outcomes.push({ workflowId: workflow.id, ...await reconcileDailyRunForUpload({ workflow, areaContext }) });
-    } catch (error) {
-      outcomes.push({ workflowId: workflow.id, error: error.message || String(error) });
-    }
-  }
-  return outcomes;
 }
 
 export default async function handler(req, res) {
@@ -418,14 +381,10 @@ export default async function handler(req, res) {
   try {
     const hhahUser = await requireHhahUser(req);
     const contentType = req.headers['content-type'] || '';
-    const { result, areaContext } = contentType.includes('multipart/form-data')
+    const { result } = contentType.includes('multipart/form-data')
       ? await startFromMultipart(req, hhahUser)
       : await startFromJson(req, hhahUser);
-    // Best-effort daily-run reconciliation — the upload succeeded regardless.
-    const dailyReconcile = await reconcileDailyRuns(areaContext).catch((error) => (
-      [{ error: error.message || String(error) }]
-    ));
-    return sendJson(res, 201, { ...result, dailyReconcile });
+    return sendJson(res, 201, result);
   } catch (error) {
     return handleError(res, error);
   }
