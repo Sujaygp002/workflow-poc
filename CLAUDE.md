@@ -117,6 +117,43 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-07-09** — **AI extraction Tier 1 now reads the REAL order PDFs (unpdf), PATTERNS tuned
+  to the Nightingale document layouts.**
+  - **New `api/_lib/pdfText.js`**: `extractPdfText(buffer)` — pure-JS PDF text extraction via
+    `unpdf` (serverless pdf.js build, zero deps, no native bindings — `pdf-parse` v2 was tried
+    first and rejected because it hard-depends on `@napi-rs/canvas`). Content-order line
+    reconstruction (hasEOL + baseline breaks) so grid forms yield label\nvalue lines; visual
+    Y-sort was tried and rejected (merges CMS-485 grid columns). Normalizes curly quotes/NBSP,
+    keeps line structure. `unpdf@1.6.2` added to dependencies.
+  - **`referenceLogic/extraction.js`**: `extractWithPatterns` Tier 1a now fetches the item's
+    `extraction_payload.pdf.blobUrl` (or uses a passed `pdfBuffer`), extracts text, and runs
+    PATTERNS over it BEFORE the payload-text pass (Tier 1b); extracted text is returned as
+    `result.pdfText` and cached on `extraction_payload.pdfText` by the taskRegistry wrapper
+    (re-runs skip the refetch). Gemini Tier 2 unchanged: only for still-missing fields, graceful
+    skip on the dead key. PATTERNS tuned against the 20 real Nightingale PDFs (3 layouts:
+    DynamicPDF CMS-485 grid, Post Hospital Order, Kinnser print-preview short orders) —
+    alternates ADDED, test-kit patterns kept. New scoped `extractDiagnosisCodes` (codes mined
+    only from Diagnosis sections, dotless "J209" → "J20.9"); `classifyOrderType` now checks the
+    explicit "Order Type:" label then the document TITLE first (the real 485 attestation text
+    contains "recertify" + "face-to-face", which the old whole-document scan misclassified);
+    signedDate excludes clinician (RN/PT/…) digital stamps, physician "Electronically signed
+    by … on <date>" wins; 485 order-date falls back to the certification-period start.
+  - **`normalizers.js` `parseDate`**: explicit M/D/YYYY branch — the `new Date(slash)` local-TZ
+    round trip shifted dates a day on machines east of UTC (Vercel/UTC unaffected; local shim
+    runs against the live DB were at risk).
+  - **New `scripts/test-pdf-extraction.mjs`**: offline harness (no DB/network) scoring
+    extractPdfText+regexExtract over the 20 real PDFs (`REAL_PDF_DIR`) + the 6 test-kit PDFs
+    from `docs/manual-test-kit/orders_*.zip`. Rates on the real 20: name/DOB/MRN/orderNo/
+    orderDate/orderType/SOE/EOE/physician/ICD-10 100%, NPI+address 90%, agency 90%, SOC 35%,
+    sex 35%, signed 15% — every miss is a genuine document absence (Post Hospital carries no
+    NPI/address/agency label; short orders carry no SOC/sex; only 3 PDFs contain physician
+    signature stamps). Kit: 100% except O-TK-9002's by-design "(pending admission)" dates.
+  - **E2E on live DB** (throwaway script, not committed): temp run + sparse item (name only)
+    carrying a re-uploaded real PDF blobUrl → `ai.extractWithPatterns` task fn → 12 blank core
+    fields → `missingAfter: []`, tiersUsed `["pdf-regex"]`, all values verified against the
+    document (NPI 1225033673 = the provisioned Dr. Labib), 13.5KB pdfText cached, decisions
+    stamped — then run + blob deleted. lint + build pass; 12 api handlers unchanged.
+
 - **2026-07-09** — **Removed 3 system workflows; rewired uploads to daily-run row-append;
   tick appends silent agencies; Nightingale fixtures + Riverbend/Cedar Grove teardown.**
   - **R1 — removed `wf7` (update patients objects), `wf-signing` (Send To Physician),

@@ -1011,9 +1011,12 @@ export const taskRegistry = {
     return { ok: true, output: result };
   },
 
-  // n2: cost-tiered extraction (regex tier -> Gemini). Merges filled fields into
-  // the item payloads and stores the extracted shape on extraction_payload so the
-  // audit (Rule 3) + AI service can read it. Sets ai_extraction_success/fail.
+  // n2: cost-tiered extraction (regex over the real order PDF text fetched from
+  // extraction_payload.pdf.blobUrl -> regex over payload text -> Gemini). Merges
+  // filled fields into the item payloads and stores the extracted shape on
+  // extraction_payload so the audit (Rule 3) + AI service can read it. The
+  // extracted PDF text is cached on extraction_payload.pdfText (provenance +
+  // re-runs skip the blob refetch). Sets ai_extraction_success/fail.
   'ai.extractWithPatterns': async ({ item }) => {
     const result = await extractWithPatterns({ item, pdfBuffer: null });
     const patientPatch = result.data?.patient || {};
@@ -1053,6 +1056,7 @@ export const taskRegistry = {
         missingAfter: result.missingAfter,
         validationErrors: result.validationErrors,
         model: result.model,
+        ...(result.pdfText ? { pdfText: result.pdfText } : {}),
       },
       decisions,
     });

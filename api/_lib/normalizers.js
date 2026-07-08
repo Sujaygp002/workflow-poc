@@ -48,6 +48,16 @@ export function parseDate(value) {
   }
   const cleaned = cleanString(value);
   if (!cleaned) return null;
+  // US slash dates (M/D/YYYY, the order-PDF format) are converted directly:
+  // `new Date('06/20/2026')` parses as LOCAL midnight, so the toISOString()
+  // round-trip below shifts them a day on any machine east of UTC.
+  const slash = cleaned.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (slash) {
+    const year = slash[3].length <= 2 ? 2000 + Number(slash[3]) : Number(slash[3]);
+    const mm = String(slash[1]).padStart(2, '0');
+    const dd = String(slash[2]).padStart(2, '0');
+    return `${year}-${mm}-${dd}`;
+  }
   const parsed = new Date(cleaned);
   if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
   return cleaned;
