@@ -158,8 +158,11 @@ function encodeScene(dir, clipName) {
 
 function titleCard(lines, clipName, { seconds = 2.2, size = 46 } = {}) {
   const clip = path.join(WORK, `${clipName}.mp4`);
-  // Escape for drawtext.
-  const esc = (s) => s.replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/'/g, "’").replace(/,/g, '\\,');
+  // Escape for drawtext + swap the arrow glyph the default ffmpeg font lacks
+  // (· and — render fine with the bundled font).
+  const esc = (s) => s
+    .replace(/→/g, '->')
+    .replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/'/g, "’").replace(/,/g, '\\,');
   const draws = lines.map((ln, i) => {
     const y = `(h/2)-(${(lines.length - 1) * (size + 18)} /2)+${i * (size + 18)}`;
     const fs = i === 0 ? size : Math.round(size * 0.6);
