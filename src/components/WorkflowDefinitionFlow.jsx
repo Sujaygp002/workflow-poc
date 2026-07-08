@@ -480,7 +480,12 @@ function classifyObject(object, d = {}) {
   switch (object) {
     case 'Patient Unit':
       if (d.unit_not_exists || (d.patient_not_exists && (d.patient_write_success || d.patient_retry_success))) return 'created';
-      if (d.unit_exists || d.patient_exists) return d.unit_only_changed ? 'updated' : 'existed';
+      // An existing unit that a successful patient write touched counts as
+      // updated (the daily intake's patient.update path never stamps
+      // unit_only_changed — that was the wf7 record.checkChanges fork).
+      if (d.unit_exists || d.patient_exists) {
+        return (d.unit_only_changed || d.patient_write_success || d.patient_retry_success) ? 'updated' : 'existed';
+      }
       return null;
     case 'Patient Record':
       if (d.record_created || d.patient_not_exists) return 'created';
@@ -502,28 +507,30 @@ function classifyObject(object, d = {}) {
       if (d.order_write_success || d.order_retry_success) return 'created';
       if (d.order_skipped_duplicate || d.order_exists) return 'existed';
       return null;
-    case 'Order Signed':
-      if (d.signed_within_48h) return 'updated';
-      if (d.signing_overdue) return 'existed';
-      return null;
-    case 'Notification':
-      if (d.notification_sent) return 'created';
-      return null;
     default:
       return null;
   }
 }
 
-const OBJECTS_BY_WORKFLOW = {
-  wf7: ['Patient Unit', 'Patient Record', 'Admission Object', 'Episode Object', 'Order'],
-  'wf-signing': ['Order Signed'],
-  'wf-area-onboarding': ['Notification'],
-};
+// Object rows for a run, derived from the task keys the run actually carries —
+// so builder workflows (e.g. the daily intake pipeline) get the right rows
+// without a per-workflow-id map. Contact-only items contribute nothing (their
+// decisions carry no object flags).
+function objectsForRun(run) {
+  const keys = new Set((run.tasks || []).map((t) => t.task_key).filter(Boolean));
+  const has = (prefix) => [...keys].some((key) => key.startsWith(prefix));
+  const objects = [];
+  if (has('patient.') || has('record.')) objects.push('Patient Unit', 'Patient Record');
+  if (has('admission.')) objects.push('Admission Object');
+  if (has('episode.')) objects.push('Episode Object');
+  if (has('order.')) objects.push('Order');
+  return objects;
+}
 
 // `existedLabel` distinguishes the pre-trigger "already exist" column wording.
 export function runObjectStats(run) {
-  const objects = OBJECTS_BY_WORKFLOW[run.workflow_id];
-  if (!objects) return null;
+  const objects = objectsForRun(run);
+  if (!objects.length) return null;
   const tasks = run.tasks || [];
   // Collapse to one decisions object per distinct item.
   const byItem = new Map();

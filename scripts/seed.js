@@ -2,18 +2,11 @@ import { getSql, jsonParam } from '../api/_lib/db.js';
 import { WORKFLOW_DEFINITIONS } from '../api/_lib/workflowDefinition.js';
 import {
   createHhahFromPayload,
-  createTaskRunsForItem,
-  createWorkflowItem,
-  createWorkflowRun,
   findHhahByName,
-  findWorkflowRunBySourceLabel,
-  getActiveWorkflow,
   linkHhahToArea,
-  updateItem,
   upsertStatisticalArea,
   upsertWorkflowDefinition,
 } from '../api/_lib/repositories.js';
-import { runWorkflowAutomation } from '../api/_lib/workflowEngine.js';
 import { normalizeName, normalizeNpi, recordContextKey, unitKey } from '../api/_lib/normalizers.js';
 
 async function seedReferenceData() {
@@ -102,58 +95,6 @@ async function seedReferenceData() {
       });
     }
   }
-}
-
-async function seedAreaOnboardingRun() {
-  const sourceLabel = 'area-onboarding:boise-ada-metro-intake';
-  const existing = await findWorkflowRunBySourceLabel('wf-area-onboarding', sourceLabel);
-  if (existing) return;
-
-  const workflow = await getActiveWorkflow('wf-area-onboarding');
-  if (!workflow) return;
-
-  // One item per expected HHAH in the area, so the monitor's instance count reads 3.
-  // Boise Home Health is missing its upload (active manual email task); the other
-  // two received their uploads and continue normally.
-  const expectedHhahs = ['Boise Home Health', 'Sunrise Skilled Home Health', 'Treasure Valley Hospice'];
-  const run = await createWorkflowRun({
-    workflowId: workflow.id,
-    workflowVersion: workflow.version,
-    sourceLabel,
-    totalItems: expectedHhahs.length,
-    inputSummary: { trigger: 'onboarding_successful', area: 'Boise-Ada Metro Intake', expectedHhahs: expectedHhahs.length },
-  });
-
-  for (let i = 0; i < expectedHhahs.length; i += 1) {
-    const name = expectedHhahs[i];
-    const missing = i === 0; // first HHAH (Boise Home Health) is missing its upload
-    const hhah = await findHhahByName(name);
-    const item = await createWorkflowItem({
-      runId: run.id,
-      itemIndex: i,
-      patientPayload: {},
-      orderPayload: {},
-      referencePayload: {},
-      extractionPayload: { area: 'Boise-Ada Metro Intake', trigger: 'onboarding_successful', hhah: name },
-    });
-    await updateItem(item.id, {
-      decisions: missing
-        ? { upload_missing_after_24h: true, upload_received_within_24h: false }
-        : { upload_received_within_24h: true, upload_missing_after_24h: false },
-      referencePayload: hhah
-        ? { HHAH: { name: hhah.name, contact_info: hhah.contact_info || {} } }
-        : { HHAH: { name } },
-    });
-    await createTaskRunsForItem({
-      runId: run.id,
-      itemId: item.id,
-      steps: workflow.definition.steps,
-    });
-  }
-
-  // Run automation: received HHAHs continue normally; the missing one pauses at
-  // area-s4 as an active manual email task.
-  await runWorkflowAutomation({ runId: run.id, definition: workflow.definition, concurrency: expectedHhahs.length });
 }
 
 function demoPatientPayload({ soc = '', eoc = '', soe = '', eoe = '' } = {}) {
@@ -622,11 +563,12 @@ async function seedDemoPatientHierarchy() {
 }
 
 async function main() {
+  // WORKFLOW_DEFINITIONS is currently empty (no system workflows remain); the
+  // loop stays as the seam for any future system definition.
   for (const definition of WORKFLOW_DEFINITIONS) {
     await upsertWorkflowDefinition(definition, 1);
   }
   await seedReferenceData();
-  await seedAreaOnboardingRun();
   await seedDemoPatientHierarchy();
   console.log('seeded workflow definitions, reference records, and demo patient hierarchy');
 }

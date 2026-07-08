@@ -14,8 +14,18 @@ export function taskActions(task) {
   return [{ id: 'legacy', actionKey: 'legacy', taskKey: task.task_key, label: task.name }];
 }
 
+// TASK container (definition megaGroup) the task's step belongs to, so the
+// worker portal can read "TASK-Update Object Module › Review record".
+function taskGroupName(task) {
+  const groups = Array.isArray(task.workflow_mega_groups) ? task.workflow_mega_groups : [];
+  const group = groups.find((g) => Array.isArray(g?.stepIds) && g.stepIds.includes(task.step_id));
+  return group?.name || null;
+}
+
 function bucketRow(task) {
-  return { ...task, actions: taskActions(task) };
+  const row = { ...task, actions: taskActions(task), group_name: taskGroupName(task) };
+  delete row.workflow_mega_groups; // internal lookup column, not part of the payload
+  return row;
 }
 
 export default async function handler(req, res) {

@@ -2,9 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Activity, RefreshCw, Trash2, Clock } from 'lucide-react';
 import {
   deleteWorkflowRun,
-  fetchAreaIntakeStatus,
   fetchWorkflowRuns,
-  runAreaIntakeCheck,
   tickTimeTriggers,
 } from '../../lib/workflowApi';
 import {
@@ -14,84 +12,14 @@ import {
 } from '../../components/WorkflowDefinitionFlow';
 import { formatUiDateTime } from '../../lib/dateFormat';
 
-// Area intake sub-panel shown inside the wf-area-onboarding run card.
-function AreaIntakeSubPanel({ areas, loadingAreaId, onRunCheck }) {
-  if (!areas.length) return null;
-  return (
-    <div className="mt-4 border-t border-slate-100 pt-4">
-      <div className="mb-2 text-[11px] font-black uppercase tracking-wide text-slate-400">Area Intake Status</div>
-      <div className="grid gap-3 lg:grid-cols-2">
-        {areas.map((area) => {
-          const status = area.check?.status || 'monitoring';
-          const missing = area.hhahs.filter((h) => !h.received);
-          const done = area.received_count === area.expected_count && area.expected_count > 0;
-          const statusTone = status === 'complete' || done
-            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-            : status === 'missing_uploads'
-              ? 'bg-rose-50 text-rose-700 border-rose-200'
-              : 'bg-amber-50 text-amber-700 border-amber-200';
-          return (
-            <div key={area.id} className="rounded-xl border border-slate-200 p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="text-sm font-black text-slate-800">{area.name}</div>
-                  <div className="text-[11px] uppercase tracking-wide text-slate-400">{area.area_type?.replaceAll('_', ' ')}{area.state ? ` · ${area.state}` : ''}</div>
-                </div>
-                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${statusTone}`}>{status.replaceAll('_', ' ')}</span>
-              </div>
-              <div className="mt-3 grid grid-cols-3 gap-2">
-                <div className="rounded-lg bg-slate-50 px-2 py-1.5">
-                  <div className="text-lg font-black text-slate-800">{area.expected_count}</div>
-                  <div className="text-[10px] uppercase text-slate-400">expected</div>
-                </div>
-                <div className="rounded-lg bg-emerald-50 px-2 py-1.5">
-                  <div className="text-lg font-black text-emerald-700">{area.received_count}</div>
-                  <div className="text-[10px] uppercase text-emerald-600">received</div>
-                </div>
-                <div className="rounded-lg bg-rose-50 px-2 py-1.5">
-                  <div className="text-lg font-black text-rose-700">{area.missing_count}</div>
-                  <div className="text-[10px] uppercase text-rose-600">missing</div>
-                </div>
-              </div>
-              <div className="mt-3 divide-y divide-slate-100 rounded-lg border border-slate-100">
-                {area.hhahs.map((hhah) => (
-                  <div key={hhah.hhah_id} className="flex items-center justify-between gap-2 px-3 py-2">
-                    <div className="min-w-0">
-                      <div className="truncate text-xs font-semibold text-slate-700">{hhah.hhah_name}</div>
-                      <div className="text-[10px] text-slate-400">window {hhah.upload_window_hours || 24}h{hhah.run_count ? ` · ${hhah.run_count} run(s)` : ''}</div>
-                    </div>
-                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${hhah.received ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
-                      {hhah.received ? 'received' : 'missing'}
-                    </span>
-                  </div>
-                ))}
-              </div>
-              <button
-                type="button"
-                onClick={() => onRunCheck(area.id)}
-                disabled={loadingAreaId === area.id || missing.length === 0}
-                className="mt-3 inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-              >
-                <RefreshCw size={12} className={loadingAreaId === area.id ? 'animate-spin' : ''} />
-                Simulate 24h check
-              </button>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 // A single workflow run rendered as the clean flowchart, with run summary.
-function RunCard({ run, onDelete, areas, loadingAreaId, onRunCheck }) {
+function RunCard({ run, onDelete }) {
   const [open, setOpen] = useState(true);
   const definition = run.definition || {};
   const tasks = run.tasks || [];
   const totalManual = tasks.filter((t) => t.status === 'active' && t.actor === 'human').length;
   const totalRan = tasks.filter((t) => t.status !== 'pending' && t.status !== 'skipped').length;
   const items = run.total_items || 0;
-  const isAreaOnboarding = run.workflow_id === 'wf-area-onboarding';
   const hhahName = run.hhah_name || run.input_summary?.hhahName || run.input_summary?.area?.hhahName || '';
 
   const statusTone = run.status === 'completed'
@@ -140,9 +68,6 @@ function RunCard({ run, onDelete, areas, loadingAreaId, onRunCheck }) {
               accent={definition.builder ? 'violet' : 'slate'}
               subtitle={`${triggerLabel(definition.trigger)} · ${items} item(s) · ${totalRan} task run(s)`}
             />
-            {isAreaOnboarding && areas && areas.length > 0 && (
-              <AreaIntakeSubPanel areas={areas} loadingAreaId={loadingAreaId} onRunCheck={onRunCheck} />
-            )}
           </div>
           <RunObjectSidebar run={run} />
         </div>
@@ -183,13 +108,10 @@ function Legend() {
 
 export default function Orchestrator() {
   const [runs, setRuns] = useState([]);
-  const [areas, setAreas] = useState([]);
   const [dbError, setDbError] = useState(null);
-  const [areaError, setAreaError] = useState(null);
   const [filter, setFilter] = useState('all');
   const [live, setLive] = useState(true);
   const [lastSync, setLastSync] = useState(null);
-  const [checkingAreaId, setCheckingAreaId] = useState(null);
   const [tickError, setTickError] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const ticking = useRef(false);
@@ -201,14 +123,9 @@ export default function Orchestrator() {
     if (refreshing.current) return;
     refreshing.current = true;
     try {
-      const [dbRuns, areaRows] = await Promise.all([
-        fetchWorkflowRuns(),
-        fetchAreaIntakeStatus(),
-      ]);
+      const dbRuns = await fetchWorkflowRuns();
       setRuns(dbRuns);
-      setAreas(areaRows);
       setDbError(null);
-      setAreaError(null);
       setLastSync(new Date());
     } catch (err) {
       setRuns([]);
@@ -229,19 +146,6 @@ export default function Orchestrator() {
       setDbError(err.message);
     }
     await refresh();
-  }
-
-  async function handleRunAreaCheck(areaId) {
-    setCheckingAreaId(areaId);
-    setAreaError(null);
-    try {
-      await runAreaIntakeCheck({ areaId, forceExpired: true });
-    } catch (err) {
-      setAreaError(err.message);
-    } finally {
-      setCheckingAreaId(null);
-      await refresh();
-    }
   }
 
   useEffect(() => { refresh(); }, []);
@@ -279,12 +183,9 @@ export default function Orchestrator() {
   const completed = runs.filter((r) => r.status === 'completed');
   const manualBacklog = runs.reduce((sum, r) => sum + (r.tasks || []).filter((t) => t.status === 'active' && t.actor === 'human').length, 0);
 
-  // Split runs into groups, each sorted newest-first. The daily intake pipeline
-  // + all other builder/manual runs render in the "Daily Intake & other runs"
-  // section; only the area monitor keeps its own section.
+  // All runs (the daily intake pipeline + any builder/manual runs), newest first.
   const sortDesc = (a, b) => new Date(b.created_at) - new Date(a.created_at);
-  const areaRuns = runs.filter((r) => r.workflow_id === 'wf-area-onboarding').sort(sortDesc);
-  const otherRuns = runs.filter((r) => r.workflow_id !== 'wf-area-onboarding').sort(sortDesc);
+  const sortedRuns = [...runs].sort(sortDesc);
 
   const filterRun = (r) => (
     filter === 'running' ? r.status === 'running'
@@ -292,10 +193,7 @@ export default function Orchestrator() {
     : true
   );
 
-  const runCardProps = { onDelete: handleDelete, areas, loadingAreaId: checkingAreaId, onRunCheck: handleRunAreaCheck };
-
-  // Flatten filtered runs for simple "All" count chips.
-  const allFiltered = [...areaRuns, ...otherRuns].filter(filterRun);
+  const allFiltered = sortedRuns.filter(filterRun);
 
   return (
     <div className="p-6">
@@ -348,9 +246,6 @@ export default function Orchestrator() {
           DB workflow API unavailable: {dbError}
         </div>
       )}
-      {areaError && (
-        <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">Area intake error: {areaError}</div>
-      )}
       {tickError && (
         <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">Daily tick error: {tickError}</div>
       )}
@@ -380,27 +275,17 @@ export default function Orchestrator() {
         </div>
       ) : (
         <div>
-          {/* ── Trigger 1: Area Onboarding & Monitor ── */}
-          {areaRuns.filter(filterRun).map((run) => (
-            <RunCard key={run.id} run={run} {...runCardProps} />
-          ))}
-
-          {/* ── Daily Intake & other builder / manual runs ── */}
-          {otherRuns.filter(filterRun).length > 0 && (
-            <div className="mt-8">
-              <div className="mb-3 flex items-center gap-2">
-                <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-black uppercase tracking-wide text-sky-700">
-                  Daily Intake &amp; other runs
-                </span>
-                <span className="text-[11px] text-slate-400">the daily agency-intake pipeline and any builder / manual runs</span>
-              </div>
-              <div className="space-y-4">
-                {otherRuns.filter(filterRun).map((run) => (
-                  <RunCard key={run.id} run={run} {...runCardProps} />
-                ))}
-              </div>
-            </div>
-          )}
+          <div className="mb-3 flex items-center gap-2">
+            <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-black uppercase tracking-wide text-sky-700">
+              Daily Intake &amp; other runs
+            </span>
+            <span className="text-[11px] text-slate-400">the daily agency-intake pipeline and any builder / manual runs</span>
+          </div>
+          <div className="space-y-4">
+            {allFiltered.map((run) => (
+              <RunCard key={run.id} run={run} onDelete={handleDelete} />
+            ))}
+          </div>
         </div>
       )}
     </div>

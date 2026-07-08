@@ -31,7 +31,7 @@ extractor fills fields (and back-fills the sparse row).
 |--------|-----|----------|----------|-------|
 | HHAH upload | `/hhh-login` | `sunrise-test` | `TestAgency!2026` | Sunrise Meadows (TEST) |
 | PG practitioner (Bulk Sign) | `/pg-login` | `lakeside-test` | `TestPg!2026` | Lakeside (TEST) — Dr. Emily Carter, NPI 1568473921 |
-| Worker portal | `/worker` | `demo-rcm-coordinator` | `DemoWorker!2026` | completes the phase-1 human tasks |
+| Worker portal | `/worker` | `demo-rcm-coordinator` | `DemoWorker!2026` | completes the daily-intake human tasks |
 
 ---
 

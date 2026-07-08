@@ -1,6 +1,6 @@
 {
-  "name": "Agency Bulk Upload — Daily Intake (Phase 1)",
-  "description": "Phase 1 daily agency intake. Fires once per day per onboarded agency at 12:00 America/Chicago. If the agency has NOT uploaded today, one human task reaches out (call / sms / email) and the branch ends. If it HAS uploaded, the object model is updated end to end: AI extraction (regex + Gemini) with a human fallback on extraction failure, patient resolve (create vs update), admission date-gap fill then resolve, episode date-gap fill then resolve, order create vs skip-duplicate, and a final human review that settles the item. No RCM / AI-service / audit / rework steps (phase 2).",
+  "name": "Agency Bulk Upload — Daily Intake",
+  "description": "Daily agency intake. Fires once per day per onboarded agency at 12:00 America/Chicago. If the agency has NOT uploaded today, one human task reaches out (call / sms / email) and the branch ends. If it HAS uploaded, the object model is updated end to end: AI extraction (regex + Gemini) with a human fallback on extraction failure, patient resolve (create vs update), admission date-gap fill then resolve, episode date-gap fill then resolve, order create vs skip-duplicate, and a final human review that settles the item. No RCM / AI-service / audit / rework steps (phase 2).",
   "trigger": { "type": "daily_time", "hour": 12, "minute": 0, "tz": "America/Chicago" },
   "graph": {
     "entry": "n1",

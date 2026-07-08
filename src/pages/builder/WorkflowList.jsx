@@ -30,9 +30,8 @@ import {
 import WorkflowBuilder from './WorkflowBuilder';
 
 // Trigger number and colour for each system workflow id in the chain.
-const TRIGGER_META = {
-  'wf-area-onboarding': { num: 1, color: 'violet' },
-};
+// Empty since the last system workflow (wf-area-onboarding) was removed.
+const TRIGGER_META = {};
 
 const TRIGGER_COLOR = {
   violet:  { badge: 'bg-violet-100 text-violet-700 border-violet-200', ring: 'border-violet-200' },
@@ -192,10 +191,11 @@ function BuilderWorkflowCard({ wf, onEdit, onDeleted }) {
   );
 }
 
-// Chain order for the system section. Only the area monitor remains a system
-// workflow (wf7/wf-signing/wf-billing-monitor were removed); the daily intake
-// pipeline is now a builder workflow shown in the "Your workflows" section.
-const CHAIN_ORDER = ['wf-area-onboarding'];
+// Chain order for the system section. No system workflows remain (wf7,
+// wf-signing, wf-billing-monitor, and wf-area-onboarding were all removed);
+// the daily intake pipeline is a builder workflow in "Your workflows". Any
+// stray system definition still renders via `extras` below.
+const CHAIN_ORDER = [];
 const INDEPENDENT_ORDER = [];
 const CHAIN_CONNECTOR = {};
 // Workflows that begin a new standalone chain (shown with a section divider, not a connector).
@@ -253,7 +253,7 @@ export default function WorkflowList() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Workflows</h1>
-          <p className="text-sm text-slate-500 mt-1">Build your own workflows; system workflows run the built-in intake chain.</p>
+          <p className="text-sm text-slate-500 mt-1">Build your own workflows; they run on their trigger or the Run button.</p>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={refresh} className="flex items-center gap-2 px-3 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50">

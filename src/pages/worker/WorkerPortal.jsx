@@ -92,7 +92,10 @@ function TaskCard({ row, bucket, onOpen, opening }) {
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className={`font-semibold leading-tight ${isDone ? 'text-slate-500' : 'text-slate-800'}`}>{row.name}</span>
+            <span className={`font-semibold leading-tight ${isDone ? 'text-slate-500' : 'text-slate-800'}`}>
+              {row.group_name && <span className="text-slate-400">TASK-{row.group_name} › </span>}
+              {row.name}
+            </span>
             <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-violet-50 text-violet-600">
               {row.workflow_name || row.workflow_id}
             </span>
@@ -145,7 +148,9 @@ export default function WorkerPortal() {
   const [activeTab, setActiveTab] = useState('untouched');
   const [detail, setDetail] = useState(null);
   const [openingId, setOpeningId] = useState(null);
-  const [notice, setNotice] = useState('');
+  // notice: null | { text, tone: 'green' | 'amber' } — amber surfaces a
+  // completed task whose email attempt failed (SMTP), never silently green.
+  const [notice, setNotice] = useState(null);
 
   const resetToLogin = useCallback((message = '') => {
     clearAuthToken('worker');
@@ -156,7 +161,7 @@ export default function WorkerPortal() {
     setActiveTab('untouched');
     setPassword('');
     setAuthError('');
-    setNotice('');
+    setNotice(null);
     setLoginNotice(message);
   }, []);
 
@@ -251,7 +256,7 @@ export default function WorkerPortal() {
   // stamped (Untouched -> Processing) and the response carries the checklist.
   async function openTask(row) {
     setOpeningId(row.id);
-    setNotice('');
+    setNotice(null);
     try {
       const opened = await openWorkItem(row.id);
       // The open response task is the raw task-run row; keep the bucket row's
@@ -275,9 +280,22 @@ export default function WorkerPortal() {
     loadBuckets();
   }
 
-  function handleCompleted() {
+  // Surface any email action's real outcome distinctly: the task completes
+  // either way (SMTP is best-effort, never blocks completion), but a failed
+  // send must never be presented as sent.
+  function handleCompleted(response) {
     setDetail(null);
-    setNotice('Task completed — it moved to Done.');
+    const outputs = response?.result?.output?.actionOutputs || {};
+    const emails = Object.values(outputs).filter((out) => out && typeof out === 'object' && 'email_sent' in out);
+    const failed = emails.filter((out) => out.email_sent !== true);
+    if (failed.length) {
+      const reason = failed[0].email_reason || 'unknown error';
+      setNotice({ text: `Task completed, but the email was NOT sent — SMTP failed: ${reason}`, tone: 'amber' });
+    } else if (emails.length) {
+      setNotice({ text: 'Task completed — email sent and it moved to Done.', tone: 'green' });
+    } else {
+      setNotice({ text: 'Task completed — it moved to Done.', tone: 'green' });
+    }
     setActiveTab('done');
     loadBuckets();
   }
@@ -399,7 +417,7 @@ export default function WorkerPortal() {
                 return (
                   <button
                     key={tab.key}
-                    onClick={() => { setActiveTab(tab.key); setNotice(''); }}
+                    onClick={() => { setActiveTab(tab.key); setNotice(null); }}
                     className={`flex-1 flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors ${active ? 'bg-violet-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
                   >
                     <span className={`w-2 h-2 rounded-full ${tab.dot}`} />
@@ -413,9 +431,11 @@ export default function WorkerPortal() {
             </div>
 
             {notice && (
-              <div className="flex items-start gap-2 px-4 py-3 bg-green-50 border border-green-200 rounded-xl text-green-800 text-sm">
-                <ClipboardList size={16} className="mt-0.5 shrink-0" />
-                <span>{notice}</span>
+              <div className={`flex items-start gap-2 px-4 py-3 rounded-xl text-sm border ${notice.tone === 'amber' ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-green-50 border-green-200 text-green-800'}`}>
+                {notice.tone === 'amber'
+                  ? <AlertCircle size={16} className="mt-0.5 shrink-0" />
+                  : <ClipboardList size={16} className="mt-0.5 shrink-0" />}
+                <span>{notice.text}</span>
               </div>
             )}
 

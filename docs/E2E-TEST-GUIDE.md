@@ -1,11 +1,11 @@
-# End-to-End Test Guide — Agency Bulk Upload (Phase 1)
+# End-to-End Test Guide — Agency Bulk Upload — Daily Intake
 
 How to manually test the daily agency-intake workflow, end to end, covering every
 branch and edge case. Everything below works on the deployed Vercel site and locally.
 
 ## 1. What is live
 
-**One active workflow**: `Agency Bulk Upload — Daily Intake (Phase 1)` (builder-made,
+**One active workflow**: `Agency Bulk Upload — Daily Intake` (builder-made,
 daily trigger 12:00 America/Chicago, one item per onboarded agency).
 
 - Agency **didn't upload today** → human task **TASK-Contact Agency to Upload
@@ -91,7 +91,7 @@ orders_signed.zip). Log in as `sunrise-test`, attach all three manually, upload.
 
 ## 6. What to watch in each surface
 
-- **Workflow page**: the phase-1 card — START cap "For each onboarded agency ·
+- **Workflow page**: the daily-intake card — START cap "For each onboarded agency ·
   check if uploaded", the `agency not uploaded?` diamond, two TASK- boxes with
   (n) counts and **View** buttons that expand the inner mini-workflows. **Edit**
   opens the builder showing the task groups.

@@ -117,6 +117,51 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-07-09** — **Worker/Orchestrator feedback pass (F1–F6): contact-task context, honest SMTP
+  outcome, TASK-group hierarchy, per-object run counts, wf-area-onboarding removal, "Phase 1"
+  strip.**
+  - **F1 — contact-agency task context**: `WorkerTaskDetail.jsx` detects agency-contact
+    checklists (every action ∈ {call_agency, sms_agency, email_agency}) and swaps the
+    PATIENT/ORDER missing-grid + lifecycle chips for a compact `AgencyContactSummary` (agency
+    name + contact email + "No upload received today"; read-only variant says the task is
+    settled).
+  - **F2 — email via SMTP, surfaced honestly**: the worker UI now renders real inputs for the
+    agency-outreach actions — `email_agency` gets the EmailFields panel with To prefilled from
+    `references.HHAH.contact.email`, Call/Text render "coming soon" banners + confirm
+    checkboxes. After completion, `WorkerPortal.handleCompleted(response)` reads
+    `result.output.actionOutputs` and shows a green "email sent" notice or an amber
+    "Task completed, but the email was NOT sent — SMTP failed: <reason>" (send stays
+    best-effort and never blocks completion; SMTP creds are currently invalid → skip + reason).
+  - **F3 — TASK container hierarchy**: `BUCKET_ITEM_SELECT` (repositories.js) selects
+    `d.definition->'megaGroups'`; `api/work-items/index.js` maps the task's `step_id` into
+    `group_name` on every bucket row (internal column stripped). Bucket cards + the detail
+    header read "TASK-Update Object Module › Review record" / "TASK-Contact Agency to Upload
+    Documents › …".
+  - **F4 — per-object run counts on daily-run cards**: `runObjectStats` no longer keys off a
+    workflow-id map — `objectsForRun()` derives the object rows from the run's task keys
+    (patient./record./admission./episode./order.), so builder daily runs get the
+    created/updated sidebar. `classifyObject('Patient Unit')` counts a successful write on an
+    existing unit as *updated* (the daily flow never stamps `unit_only_changed`). Verified on
+    the live 2026-07-08 run: Patient Unit/Record 14 created · 6 updated, Admission 11 created ·
+    9 already exist, Episode 20 created, Order 20 created. No new taskRegistry stamps were
+    needed (admission/episode/order resolve fns already stamp created-vs-exists).
+  - **F5 — wf-area-onboarding removed**: definition deleted from `workflowDefinition.js`
+    (`WORKFLOW_DEFINITIONS = []`; `ensureSystemDefinitions` is now a no-op seam), from
+    `scripts/seed.js` (seedAreaOnboardingRun + unused imports dropped), from
+    `WorkflowList.jsx` (TRIGGER_META/CHAIN_ORDER emptied) and `Orchestrator.jsx`
+    (AreaIntakeSubPanel + area-runs section + area-intake fetches removed; all runs render in
+    one newest-first list). **DB**: 0 runs + 1 definition row (v1) deleted — 0 remain. The
+    `api/area-intake` route stays (12-handler cap; HhhLogin banner is data-driven).
+  - **F6 — "Phase 1" stripped**: live DB UPDATE renamed 8 definition rows (all versions of
+    cc-1783522521545 + cc-1783519722096) to `Agency Bulk Upload — Daily Intake` (name column +
+    definition.name), cleaned 8 definition descriptions ("Phase 1 daily agency intake" →
+    "Daily agency intake") and 1 run's `input_summary.workflowName`. Zero rows still match
+    'Phase 1'. `docs/phase1-agency-upload.graph.json` name field, `docs/E2E-TEST-GUIDE.md`,
+    and `docs/manual-test-kit/README.md` updated; `record-phase1-demo.mjs` run-card filter
+    regex now matches "Daily Intake".
+  - lint + build pass; verified in headless Chrome (worker portal contact task, Orchestrator
+    sidebar, Workflow page) with the real API against live Neon.
+
 - **2026-07-09** — **AI extraction Tier 1 now reads the REAL order PDFs (unpdf), PATTERNS tuned
   to the Nightingale document layouts.**
   - **New `api/_lib/pdfText.js`**: `extractPdfText(buffer)` — pure-JS PDF text extraction via

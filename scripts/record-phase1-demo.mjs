@@ -197,9 +197,9 @@ async function focusPhase1Runs(p) {
       const cards = [...document.querySelectorAll('div.rounded-2xl.border.bg-white.shadow-sm')];
       for (const c of cards) {
         const t = c.textContent || '';
-        // a run card has a status pill + item(s) chip; hide it unless it's phase-1
+        // a run card has a status pill + item(s) chip; hide it unless it's the daily intake
         const looksLikeRun = /item\\(s\\)/.test(t) && /(running|completed|failed)/.test(t);
-        if (looksLikeRun && !/Phase 1/.test(t)) c.style.display = 'none';
+        if (looksLikeRun && !/Daily Intake/.test(t)) c.style.display = 'none';
         else if (looksLikeRun) c.style.display = '';
       }
     };

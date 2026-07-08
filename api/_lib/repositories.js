@@ -80,9 +80,10 @@ export async function listActiveBuilderWorkflowsByTrigger(triggerType) {
 }
 
 // Idempotent: re-upsert the system workflow definitions (kind='system') when
-// missing — the wipe empties workflow_definitions. Only wf-area-onboarding
-// remains a system definition (wf7/wf-signing/wf-billing-monitor were removed).
-// NO user seeding.
+// missing — the wipe empties workflow_definitions. Currently a no-op:
+// WORKFLOW_DEFINITIONS is empty (wf7/wf-signing/wf-billing-monitor and finally
+// wf-area-onboarding were all removed); kept as the seam for any future system
+// definition. NO user seeding.
 export async function ensureSystemDefinitions() {
   for (const definition of SYSTEM_WORKFLOW_DEFINITIONS) {
     const existing = await getActiveWorkflow(definition.id);
@@ -412,6 +413,7 @@ const BUCKET_ITEM_SELECT = `
       r.source_label,
       r.created_at AS run_created_at,
       d.name AS workflow_name,
+      d.definition->'megaGroups' AS workflow_mega_groups,
       i.item_index,
       i.patient_payload,
       i.order_payload,

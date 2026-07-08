@@ -164,6 +164,30 @@ function RecordSummary({ payload }) {
   );
 }
 
+// Contact-agency tasks carry no patient/order — the PATIENT/ORDER missing grid
+// and lifecycle chips are meaningless there. Show a compact agency context
+// (name + contact email + why the task exists) instead.
+const AGENCY_CONTACT_ACTION_KEYS = new Set(['call_agency', 'sms_agency', 'email_agency']);
+
+function AgencyContactSummary({ payload, readOnly }) {
+  const hhah = payload?.references?.HHAH || {};
+  const email = hhah.contact?.email || hhah.contact_info?.email || hhah.email || '';
+  return (
+    <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+      <div className="text-[11px] font-bold uppercase tracking-wide text-amber-700 mb-1">Agency</div>
+      <div className="text-sm font-bold text-slate-800">{hhah.name || 'Unknown agency'}</div>
+      <div className="mt-0.5 text-xs text-slate-600">
+        Contact email: {email ? <span className="font-semibold text-slate-800">{email}</span> : <span className="font-semibold text-rose-600">none on file</span>}
+      </div>
+      <div className="mt-1.5 text-xs font-semibold text-amber-800">
+        {readOnly
+          ? 'This contact task is settled — see the outreach results below.'
+          : 'No upload received today — reach out using the actions below.'}
+      </div>
+    </div>
+  );
+}
+
 function PdfPanel({ pdf }) {
   const pdfUrl = pdf?.blobUrl || pdf?.url;
   const isSigned = pdf?.signed === true;
@@ -374,6 +398,16 @@ function initialActionResult(action, payload) {
         body: `Hi ${ctx.hhahName || ''},\n\n\n\nThank you.`,
         confirmed: false,
       };
+    case 'email_agency':
+      return {
+        to: refs.HHAH?.contact?.email || refs.HHAH?.contact_info?.email || refs.HHAH?.email || '',
+        subject: 'Please upload your daily documents',
+        body: `Hi ${ctx.hhahName || 'team'},\n\nWe have not received your document upload for today. Please upload your workbook and order PDFs as soon as possible.\n\nThank you.`,
+        confirmed: false,
+      };
+    case 'call_agency':
+    case 'sms_agency':
+      return { confirmed: false };
     case 'enter_admission_dates':
       return {
         SOC: ymd(payload?.patient?.admission_details?.SOC),
@@ -423,6 +457,7 @@ function BuilderActionInput({ action, value, onChange, payload }) {
   switch (action.actionKey) {
     case 'send_email_to_physician':
     case 'send_email_to_hhah':
+    case 'email_agency':
       return (
         <div className="space-y-3">
           <EmailFields value={value} onChange={merge} tone="violet" />
@@ -433,6 +468,22 @@ function BuilderActionInput({ action, value, onChange, payload }) {
           />
         </div>
       );
+    case 'call_agency':
+    case 'sms_agency': {
+      const channel = action.actionKey === 'call_agency' ? 'Calling' : 'Texting';
+      return (
+        <div className="space-y-2">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+            {channel} from Command Center is <span className="font-bold">coming soon</span> — no live integration yet. Reach out manually and confirm below.
+          </div>
+          <CheckboxField
+            checked={value.confirmed}
+            onChange={(checked) => merge({ confirmed: checked })}
+            label={action.actionKey === 'call_agency' ? 'I called the agency' : 'I texted the agency'}
+          />
+        </div>
+      );
+    }
     case 'enter_admission_dates':
       return (
         <DateFields
@@ -578,10 +629,14 @@ export default function WorkerTaskDetail({ detail, onBack, onCompleted, onAuthEx
     || payload?.references?.HHAH
   );
   const hasPdf = !!(pdf && (pdf.fileName || pdf.blobUrl || pdf.url));
+  // Contact-agency tasks (the agency-outreach checklist) carry no patient/order
+  // — swap the PATIENT/ORDER grid + lifecycle chips for a compact agency context.
+  const isAgencyContact = actions.length > 0
+    && actions.every((action) => AGENCY_CONTACT_ACTION_KEYS.has(action.actionKey));
   // Legacy email/CPO panels render standalone (as WorkBucket did); everything
   // else shows the record context + PDF beside the checklist.
-  const showRecordContext = hasRecordContext && !legacyEmailSpec && !isLegacyCpo;
-  const showPdf = hasPdf && !legacyEmailSpec && !isLegacyCpo;
+  const showRecordContext = hasRecordContext && !legacyEmailSpec && !isLegacyCpo && !isAgencyContact;
+  const showPdf = hasPdf && !legacyEmailSpec && !isLegacyCpo && !isAgencyContact;
 
   function buildSubmit() {
     if (legacyEmailSpec) {
@@ -644,6 +699,9 @@ export default function WorkerTaskDetail({ detail, onBack, onCompleted, onAuthEx
         </button>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
+            {task.group_name && (
+              <span className="font-semibold text-slate-400 leading-tight">TASK-{task.group_name} ›</span>
+            )}
             <span className="font-semibold text-slate-800 leading-tight">{task.name}</span>
             {statusBadge}
           </div>
@@ -665,6 +723,7 @@ export default function WorkerTaskDetail({ detail, onBack, onCompleted, onAuthEx
 
       <div className={showPdf ? 'grid xl:grid-cols-[minmax(0,1fr)_520px] gap-4' : ''}>
         <div className="space-y-3">
+          {isAgencyContact && <AgencyContactSummary payload={payload} readOnly={readOnly} />}
           {showRecordContext && <RecordSummary payload={payload} />}
 
           {readOnly ? (
