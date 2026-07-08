@@ -1,0 +1,188 @@
+{
+  "name": "Agency Bulk Upload — Daily Intake (Phase 1)",
+  "description": "Phase 1 daily agency intake. Fires once per day per onboarded agency at 12:00 America/Chicago. If the agency has NOT uploaded today, one human task reaches out (call / sms / email) and the branch ends. If it HAS uploaded, the object model is updated end to end: AI extraction (regex + Gemini) with a human fallback on extraction failure, patient resolve (create vs update), admission date-gap fill then resolve, episode date-gap fill then resolve, order create vs skip-duplicate, and a final human review that settles the item. No RCM / AI-service / audit / rework steps (phase 2).",
+  "trigger": { "type": "daily_time", "hour": 12, "minute": 0, "tz": "America/Chicago" },
+  "graph": {
+    "entry": "n1",
+    "groups": [
+      {
+        "id": "g-contact",
+        "name": "Contact Agency to Upload Documents",
+        "info": "Agency has not uploaded today — reach out (call / SMS placeholders + a real email). This branch ends the item.",
+        "nodeIds": ["t1"]
+      },
+      {
+        "id": "g-update",
+        "name": "Update Object Module",
+        "info": "Agency uploaded — build the object model end to end: AI extraction (regex + Gemini) with a human fallback, patient resolve (update vs create), admission date-gap fill then resolve, episode date-gap fill then resolve, order create vs skip-duplicate, then a final human review that settles the item.",
+        "nodeIds": ["n2", "t2", "n3", "n4", "t3", "n5", "t4", "n6", "n7", "n8", "t5"]
+      }
+    ],
+    "nodes": [
+      {
+        "id": "n1",
+        "kind": "system",
+        "name": "Check agency uploaded today",
+        "description": "Look at uploaded_documents for this agency on today's day bucket; stamps agency_uploaded / agency_not_uploaded.",
+        "actionKey": "check_agency_upload",
+        "next": "c1"
+      },
+      {
+        "id": "c1",
+        "kind": "condition",
+        "name": "Agency uploaded today?",
+        "conditionKey": "agency_not_uploaded",
+        "ifTrue": "t1",
+        "ifFalse": "n2",
+        "join": null
+      },
+      {
+        "id": "t1",
+        "kind": "task",
+        "name": "Contact agency to upload the documents",
+        "description": "Agency has not uploaded today. Reach out (call / sms are coming-soon placeholders; email is a real send). Branch ends here.",
+        "assigneeEmployeeId": "REPLACE_EMPLOYEE_ID",
+        "actions": [
+          { "id": "a_call", "actionKey": "call_agency", "label": "Call agency" },
+          { "id": "a_sms", "actionKey": "sms_agency", "label": "Text agency" },
+          { "id": "a_email", "actionKey": "email_agency", "label": "Email agency" }
+        ]
+      },
+      {
+        "id": "n2",
+        "kind": "system",
+        "name": "AI extract (regex + Gemini)",
+        "description": "Cost-tiered extraction: regex tier then Gemini for any still-missing fields. Merges into the item payloads; stamps ai_extraction_success / ai_extraction_fail.",
+        "actionKey": "ai_extract_with_patterns",
+        "next": "c2"
+      },
+      {
+        "id": "c2",
+        "kind": "condition",
+        "name": "AI extraction failed?",
+        "conditionKey": "ai_extraction_fail",
+        "ifTrue": "t2",
+        "join": "c3"
+      },
+      {
+        "id": "t2",
+        "kind": "task",
+        "name": "Manually fill missing data",
+        "description": "Extraction could not fill enough fields — a coordinator fills the missing patient/order values before the object-model writes.",
+        "assigneeEmployeeId": "REPLACE_EMPLOYEE_ID",
+        "actions": [
+          { "id": "a_fill", "actionKey": "fill_missing_fields", "label": "Fill missing fields" }
+        ]
+      },
+      {
+        "id": "c3",
+        "kind": "condition",
+        "name": "Patient exists?",
+        "conditionKey": "patient_exists",
+        "ifTrue": "n3",
+        "ifFalse": "n4",
+        "join": "c4"
+      },
+      {
+        "id": "n3",
+        "kind": "system",
+        "name": "Update patient",
+        "description": "Patient unit found by name + dob + mrn — update the existing unit/record.",
+        "actionKey": "update_patient"
+      },
+      {
+        "id": "n4",
+        "kind": "system",
+        "name": "Create patient",
+        "description": "No patient unit found — create the Patient Unit + Patient Record.",
+        "actionKey": "create_patient"
+      },
+      {
+        "id": "c4",
+        "kind": "condition",
+        "name": "Admission dates missing?",
+        "conditionKey": "admission_dates_missing",
+        "ifTrue": "t3",
+        "join": "n5"
+      },
+      {
+        "id": "t3",
+        "kind": "task",
+        "name": "Enter admission dates",
+        "description": "SOC (and EOC) are missing — a coordinator enters them so the admission row is written with real dates.",
+        "assigneeEmployeeId": "REPLACE_EMPLOYEE_ID",
+        "actions": [
+          { "id": "a_adm_dates", "actionKey": "enter_admission_dates", "label": "Enter admission dates (SOC/EOC)" }
+        ]
+      },
+      {
+        "id": "n5",
+        "kind": "system",
+        "name": "Check / create admission",
+        "description": "Resolve the admission by patient + SOC — reuse if it exists, else create it.",
+        "actionKey": "resolve_admission",
+        "next": "c5"
+      },
+      {
+        "id": "c5",
+        "kind": "condition",
+        "name": "Episode dates missing?",
+        "conditionKey": "episode_dates_missing",
+        "ifTrue": "t4",
+        "join": "n6"
+      },
+      {
+        "id": "t4",
+        "kind": "task",
+        "name": "Enter episode dates",
+        "description": "SOE/EOE are missing — a coordinator enters them so the episode row is written with real dates.",
+        "assigneeEmployeeId": "REPLACE_EMPLOYEE_ID",
+        "actions": [
+          { "id": "a_ep_dates", "actionKey": "enter_episode_dates", "label": "Enter episode dates (SOE/EOE)" }
+        ]
+      },
+      {
+        "id": "n6",
+        "kind": "system",
+        "name": "Check / create episode",
+        "description": "Resolve the episode within the admission by SOE/EOE — reuse if it exists, else create it.",
+        "actionKey": "resolve_episode",
+        "next": "c6"
+      },
+      {
+        "id": "c6",
+        "kind": "condition",
+        "name": "Order exists?",
+        "conditionKey": "order_exists",
+        "ifTrue": "n7",
+        "ifFalse": "n8",
+        "join": "t5"
+      },
+      {
+        "id": "n7",
+        "kind": "system",
+        "name": "Skip duplicate order",
+        "description": "Order number already exists — leave the existing order untouched and mark this row a skipped duplicate.",
+        "actionKey": "skip_duplicate_order"
+      },
+      {
+        "id": "n8",
+        "kind": "system",
+        "name": "Create order",
+        "description": "New order number — write the order row attached to the resolved admission/episode.",
+        "actionKey": "create_order"
+      },
+      {
+        "id": "t5",
+        "kind": "task",
+        "name": "Review record",
+        "description": "Coordinator reviews the assembled patient/admission/episode/order and confirms the checklist. Completing this settles the item.",
+        "assigneeEmployeeId": "REPLACE_EMPLOYEE_ID",
+        "actions": [
+          { "id": "a_review", "actionKey": "review_record", "label": "Review record" },
+          { "id": "a_confirm", "actionKey": "confirm_checklist", "label": "Confirm checklist" }
+        ]
+      }
+    ]
+  }
+}

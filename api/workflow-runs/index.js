@@ -12,6 +12,7 @@ import {
   findWorkflowRunBySourceLabel,
   getActiveWorkflow,
   getRunWithDefinition,
+  listActiveAgencies,
   listActiveBuilderWorkflowsByTrigger,
   listTaskRunsForRun,
   listTaskRunsForRuns,
@@ -19,6 +20,7 @@ import {
   runBillingMonitorPass,
 } from '../_lib/repositories.js';
 import { runWorkflowAutomation } from '../_lib/workflowEngine.js';
+import { dailySourceLabel, nowPartsInTz } from '../_lib/dailyBucket.js';
 import { httpError } from '../_lib/auth.js';
 
 async function ensureBillingWorkflow() {
@@ -90,7 +92,66 @@ async function tickHandler() {
     await runWorkflowAutomation({ runId: run.id, definition: workflow.definition });
     started.push(run.id);
   }
-  return { started };
+  const daily = await dailyTimeTickHandler();
+  return { started, daily: daily.started, dailySkipped: daily.skipped };
+}
+
+// daily_time trigger: fire ONCE per day (per active builder workflow) when the
+// current time in the trigger tz has reached hour:minute AND no run exists for
+// today's bucket. Each firing creates one run with one item per active agency;
+// referencePayload.HHAH = {id,name,contact}, extraction_payload.dayBucket set.
+// Idempotent via sourceLabel daily:<wfId>:<dayBucket>.
+async function dailyTimeTickHandler() {
+  const workflows = await listActiveBuilderWorkflowsByTrigger('daily_time');
+  const started = [];
+  const skipped = [];
+  for (const workflow of workflows) {
+    const trigger = workflow.definition?.trigger || {};
+    const tz = trigger.tz || 'America/Chicago';
+    const targetHour = Number.isFinite(Number(trigger.hour)) ? Number(trigger.hour) : 12;
+    const targetMinute = Number.isFinite(Number(trigger.minute)) ? Number(trigger.minute) : 0;
+    const { dayBucket, hour, minute } = nowPartsInTz(tz);
+
+    // Not yet time today.
+    if (hour * 60 + minute < targetHour * 60 + targetMinute) {
+      skipped.push({ workflowId: workflow.id, reason: 'before_fire_time', dayBucket });
+      continue;
+    }
+
+    const sourceLabel = dailySourceLabel(workflow.id, dayBucket);
+    const existing = await findWorkflowRunBySourceLabel(workflow.id, sourceLabel);
+    if (existing) {
+      skipped.push({ workflowId: workflow.id, reason: 'already_ran_today', dayBucket });
+      continue;
+    }
+
+    const agencies = await listActiveAgencies();
+    const run = await createWorkflowRun({
+      workflowId: workflow.id,
+      workflowVersion: workflow.version,
+      sourceLabel,
+      totalItems: Math.max(1, agencies.length),
+      inputSummary: { trigger: 'daily_time', dayBucket, tz, workflowName: workflow.name, agencyCount: agencies.length },
+    });
+
+    for (let i = 0; i < agencies.length; i += 1) {
+      const agency = agencies[i];
+      const contact = agency.contact_info || {};
+      const item = await createWorkflowItem({
+        runId: run.id,
+        itemIndex: i,
+        patientPayload: {},
+        orderPayload: {},
+        referencePayload: { HHAH: { id: agency.id, name: agency.name, contact } },
+        extractionPayload: { dayBucket, tz },
+      });
+      await createTaskRunsForItem({ runId: run.id, itemId: item.id, steps: workflow.definition.steps });
+    }
+
+    await runWorkflowAutomation({ runId: run.id, definition: workflow.definition, concurrency: Math.max(1, agencies.length) });
+    started.push({ runId: run.id, workflowId: workflow.id, dayBucket, agencyCount: agencies.length });
+  }
+  return { started, skipped };
 }
 
 function stepById(definition, stepId) {
@@ -339,9 +400,25 @@ async function runBillingMonitorHandler() {
   };
 }
 
+function actionFromUrl(req) {
+  // req.query is populated by Vercel; the local shim may only set req.url.
+  if (req.query && req.query.action) return req.query.action;
+  try {
+    const url = new URL(req.url, 'http://localhost');
+    return url.searchParams.get('action');
+  } catch {
+    return null;
+  }
+}
+
 export default async function handler(req, res) {
   try {
     if (req.method === 'GET') {
+      // GET /api/workflow-runs?action=tick — lets a vercel.json cron fire the
+      // daily_time (and time_interval) triggers with a simple GET.
+      if (actionFromUrl(req) === 'tick') {
+        return sendJson(res, 200, await tickHandler());
+      }
       const runs = await listWorkflowRuns();
       const allTasks = await listTaskRunsForRuns(runs.map((run) => run.id));
       const tasksByRun = new Map();

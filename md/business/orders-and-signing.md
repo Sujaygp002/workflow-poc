@@ -38,7 +38,7 @@ Note the misspelled JSON key **`SignedByPhyscianDate`** (in the DB payload) — 
 
 ## Invariants & gotchas
 - **Duplicate = skip, not update.** If you expect a re-upload to change an order, it won't — `writeOrderBundle` bails on conflict. Change this only if the business rule changes.
-- **`mark_order_sent` refuses to no-op:** the human action validates that a real created order is linked to the task (via `extraction_payload.orderId`); completing without one is a 400 (this was an owner-mandated fix). See [work-items route](../backend/routes/work-items.md).
+- **`mark_order_sent` refuses to no-op:** the human action validates that a real created order is linked to the task (via `extraction_payload.orderId`); completing without one is a 400 (this was an owner-mandated fix). See [builder-catalog](../backend/lib/builder-catalog.md) for validate/execute detail and [work-items route](../backend/routes/work-items.md) for the 400-retry path.
 - **Signed-ZIP orders skip the reminder path:** `startBulkSigningRun` pre-stamps `order_status` signed for orders whose matched PDF came from the signed ZIP, so `signing.checkSignedWithin48h` resolves to signed and no overdue email fires.
 - **Trigger 3 fires exactly once per wf7 run** and only after ALL items' `human.reviewRecord` completed — a single failed item blocks it forever for that run (see [intake pipeline](intake-pipeline.md)).
 - **Bulk sign PG scope comes from the session**, never the request body — the client can't sign for a PG it isn't logged into.

@@ -21,6 +21,12 @@ import { GEMINI_MODEL } from './config.js';
 import { sendEmail } from './mailer.js';
 import { runHumanActions } from './builderCatalog.js';
 import { cleanString, hasValue, normalizeNpi, safeJson } from './normalizers.js';
+import { checkUploadedToday } from './referenceLogic/agencyCheck.js';
+import { extractWithPatterns } from './referenceLogic/extraction.js';
+import { runAiService } from './referenceLogic/aiService.js';
+import { generateRcm } from './referenceLogic/rcm.js';
+import { auditRcm } from './referenceLogic/audit.js';
+import { reworkAudits } from './referenceLogic/rework.js';
 
 const REQUIRED_FIELDS = [
   ['patient.patient_info.name', (item) => item.patient_payload?.patient_info?.name],
@@ -344,6 +350,21 @@ export async function evaluateCondition(condition, item) {
     'physician_signature_missing',
     'cpo_month_billable',
     'cpo_month_not_billable',
+  ].includes(condition)) {
+    const known = item.decisions || {};
+    return known[condition] === true;
+  }
+
+  // Daily Agency Intake -> RCM Pipeline decision-driven conditions. Each is
+  // stamped onto item.decisions by its preceding system task (checkUploadedToday,
+  // ai.runService, ai.audit) before the condition step evaluates.
+  if ([
+    'agency_uploaded',
+    'agency_not_uploaded',
+    'ai_service_failed',
+    'ai_service_ok',
+    'audit_failed',
+    'audit_passed',
   ].includes(condition)) {
     const known = item.decisions || {};
     return known[condition] === true;
@@ -971,6 +992,124 @@ export const taskRegistry = {
   },
   'area.recordNotificationStatus': async () => ({ ok: true, output: { recorded: true, posted_to_login_page: true } }),
   'area.waitForHhahUpload': async () => ({ ok: true, output: { waiting: true } }),
+
+  // ── Daily Agency Intake -> RCM Pipeline (referenceLogic) ──
+  // Every system task here NEVER returns ok:false for a business "no/failed"
+  // outcome — instead it stamps decisions the condition nodes read (mirrors
+  // signing.checkSigned). ok:false is reserved for hard crashes, which the engine
+  // treats as an item failure.
+
+  // n1: has the item's agency uploaded documents for its day bucket?
+  'agency.checkUploadedToday': async ({ item, step }) => {
+    const tz = step?.input?.trigger?.tz || item?.extraction_payload?.tz || undefined;
+    const result = await checkUploadedToday({ item, ...(tz ? { tz } : {}) });
+    const decisions = setDecisions(item, {
+      agency_uploaded: result.uploaded === true,
+      agency_not_uploaded: result.uploaded !== true,
+    });
+    await updateItem(item.id, { decisions });
+    return { ok: true, output: result };
+  },
+
+  // n2: cost-tiered extraction (regex tier -> Gemini). Merges filled fields into
+  // the item payloads and stores the extracted shape on extraction_payload so the
+  // audit (Rule 3) + AI service can read it. Sets ai_extraction_success/fail.
+  'ai.extractWithPatterns': async ({ item }) => {
+    const result = await extractWithPatterns({ item, pdfBuffer: null });
+    const patientPatch = result.data?.patient || {};
+    const orderPatch = result.data?.order || {};
+    const patientPayload = mergeDeep(item.patient_payload, {
+      patient_info: { name: patientPatch.name, sex: patientPatch.sex, DOB: patientPatch.DOB },
+      personal_information: { address: { street: patientPatch.address } },
+      admission_details: {
+        MRN: patientPatch.MRN,
+        SOC: patientPatch.SOC,
+        EOC: patientPatch.EOC,
+        SOE: patientPatch.SOE,
+        EOE: patientPatch.EOE,
+        diagnosis_codes: patientPatch.diagnosis_codes,
+      },
+    });
+    const orderPayload = mergeDeep(item.order_payload, {
+      order_info: {
+        order_number: orderPatch.order_number,
+        order_type: orderPatch.order_type,
+        order_date: orderPatch.order_date,
+      },
+      order_admission_details: { billing_provider: { NPI: orderPatch.NPI } },
+    });
+    const decisions = setDecisions(item, {
+      ai_extraction_success: result.ok === true,
+      ai_extraction_fail: result.ok !== true,
+    });
+    await updateItem(item.id, {
+      patientPayload,
+      orderPayload,
+      extractionPayload: {
+        ...(item.extraction_payload || {}),
+        patient: result.data?.patient || {},
+        order: result.data?.order || {},
+        tiersUsed: result.tiersUsed,
+        missingAfter: result.missingAfter,
+        validationErrors: result.validationErrors,
+        model: result.model,
+      },
+      decisions,
+    });
+    return { ok: true, output: { tiersUsed: result.tiersUsed, missingAfter: result.missingAfter, ok: result.ok } };
+  },
+
+  // n4: AI CC-note / CPO service. Partial success is acceptable; sets
+  // ai_service_failed/ai_service_ok from the referenceLogic result.
+  'ai.runService': async ({ item }) => {
+    const result = await runAiService({ item });
+    const failed = result.ok === false || (Array.isArray(result.failures) && result.failures.length > 0);
+    const decisions = setDecisions(item, {
+      ai_service_failed: failed,
+      ai_service_ok: !failed,
+    });
+    await updateItem(item.id, { decisions });
+    return {
+      ok: true,
+      output: {
+        processedMonths: result.processedMonths,
+        generatedNotes: result.generatedNotes,
+        failures: result.failures || [],
+      },
+    };
+  },
+
+  // n5: generate + upsert RCM billing records for the item's agency.
+  'rcm.generate': async ({ item }) => {
+    const result = await generateRcm({ item });
+    return { ok: true, output: { records: result.records, skipped: result.skipped, error: result.error || null } };
+  },
+
+  // n6: audit the agency's RCM records. Sets audit_failed/audit_passed.
+  'ai.audit': async ({ item }) => {
+    const result = await auditRcm({ item });
+    const failed = (result.failed || []).length > 0;
+    const decisions = setDecisions(item, {
+      audit_failed: failed,
+      audit_passed: !failed,
+    });
+    await updateItem(item.id, { decisions });
+    return {
+      ok: true,
+      output: {
+        passed: (result.passed || []).length,
+        failed: (result.failed || []).length,
+        findings: (result.failed || []).map((f) => ({ rcmRecordId: f.rcmRecordId, findings: f.findings })),
+        error: result.error || null,
+      },
+    };
+  },
+
+  // n7: bounded auto-fix + re-audit loop.
+  'ai.rework': async ({ item }) => {
+    const result = await reworkAudits({ item });
+    return { ok: true, output: { cycles: result.cycles, fixed: result.fixed, remaining: result.remaining, error: result.error || null } };
+  },
 };
 
 // Lisa: the lifecycle view shows object existence/creation status for the

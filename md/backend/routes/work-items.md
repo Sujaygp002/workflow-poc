@@ -21,9 +21,9 @@
 // bucketRow = a workflow_task_runs row + { actions:[…] }  (actions defaulted for legacy tasks)
 ```
 Bucket rules (see [builder workflows](../../business/builder-workflows.md)) via `listEmployeeBucketItems(employeeId)`:
-- **Untouched:** `status='active' AND opened_at IS NULL AND (assigned_employee_id = me OR IS NULL)`
-- **Processing:** `status='active' AND opened_at NOT NULL AND assigned_employee_id = me`
-- **Done:** `status='completed' AND assigned_employee_id = me`
+- **Untouched:** `t.actor='human' AND status='active' AND opened_at IS NULL AND (assigned_employee_id = me OR IS NULL)`
+- **Processing:** `t.actor='human' AND status='active' AND opened_at NOT NULL AND assigned_employee_id = me`
+- **Done:** `t.actor='human' AND status='completed' AND assigned_employee_id = me`
 
 `POST {action:'open', taskRunId}` → `{ task, actions:[…], actionState:{}, payload: taskDisplayPayload(item), pdf: item.extraction_payload.pdf|null }`. `openTaskRun` sets `opened_at=now()` and claims (`assigned_employee_id=me`) if it was NULL; returns `{error,status}` on a guard failure (already completed/opened by another).
 

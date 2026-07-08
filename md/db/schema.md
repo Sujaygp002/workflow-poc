@@ -1,6 +1,6 @@
 # Database Schema — every table, column, relationship (Neon/Postgres)
 
-**Source:** `db/migrations/001_core_intake.sql`, `db/migrations/002_cpo_billing_monitor.sql`, `db/migrations/003_identity_and_builder.sql`
+**Source:** `db/migrations/001_core_intake.sql`, `db/migrations/002_cpo_billing_monitor.sql`, `db/migrations/003_identity_and_builder.sql`, `db/migrations/004_rcm_pipeline.sql`
 **Read this when:** adding/changing a table or column, understanding a foreign key, or writing a migration. Migrations are ADDITIVE and applied idempotently by `scripts/migrate.js` (`npm run db:migrate`).
 
 ## The object model (hierarchy)
@@ -36,13 +36,15 @@ Area monitor (Trigger 1): `statistical_areas`, `statistical_area_hhahs`, `area_i
 | `workflow_task_runs` | id | UNIQUE`(item_id,step_id)` | `run_id,item_id`, `assigned_to`→users, `assigned_employee_id`→employees [003] | `status,condition,input,output`; `opened_at`,`actions`,`action_state` [003] |
 | `uploaded_documents` | id | — | `run_id`, `hhah_id` | `blob_url/blob_path` |
 | `ai_extractions` | id | — | `item_id`, `document_id`→uploaded_documents | Gemini output |
-| `employees` [003] | id | `username` UNIQUE | — | `password_hash`(scrypt), `totp_secret`, `active` |
+| `employees` [003] | id | `username` UNIQUE | — | `password_hash`(scrypt), `totp_secret`(generated at creation, **unused by login — legacy**), `totp_enabled`, `display_name`, `job_role`, `active` |
 | `external_users` [003] | id | `username` UNIQUE | `agency_id`,`pg_id`,`practitioner_id` | `user_type`,`role`,`npi`; CHECKs below |
 | `auth_sessions` [003] | id | `token_hash` UNIQUE | — | `principal_type/id`, `stage`, `expires_at`, `meta` |
 | `statistical_areas` | id | UNIQUE`(name,area_type)` | — | Trigger-1 area |
 | `statistical_area_hhahs` | id | UNIQUE`(area_id,hhah_id)` | area, hhah | expected upload window |
 | `area_intake_checks` | id | UNIQUE`(area_id,check_date)` | area | monitoring status |
 | `missing_upload_notifications` | id | UNIQUE`(area_check_id,hhah_id)` | area_check, area, hhah | queued/sent/failed |
+| `rcm_records` [004] | id (uuid) | UNIQUE `(episode_id, cpo_month, cpt_code)` | `agency_id`, `patient_id`, `episode_id` | `cpt_code` (G0179/G0180/G0181/G0182), `amount_cents`, `status` (generated/…), `payload` jsonb; indexes on `agency_id`, `patient_id`; written by `referenceLogic/rcm.js` |
+| `audit_records` [004] | id (uuid) | — | `rcm_record_id`→rcm_records (CASCADE) | `agency_id`, `status` (pending/rework/done/sent), `rule_results` jsonb (structured findings `[{rule,code,field,message,fixable}]`), `change_log` jsonb; written/updated by `referenceLogic/audit.js` + `rework.js`; indexed on `rcm_record_id`, `agency_id` |
 | `users` | id (text) | — | — | legacy dummy worker pool; `workflow_task_runs.assigned_to` FK; superseded by `employees` |
 | `schema_migrations` | id (text) | — | — | applied-migration ledger |
 
@@ -56,6 +58,7 @@ Area monitor (Trigger 1): `statistical_areas`, `statistical_area_hhahs`, `area_i
 - **001** = the whole core model in one file (units/records/admissions/episodes/orders, reference, workflow runtime, area monitor, `users`).
 - **002** = CPO + status snapshots (adds `patient_episodes.status`, `patients.latest_episode_status`, `cpo_months`).
 - **003** = v2 identity + builder (adds `employees`, `external_users`, `auth_sessions`; `workflow_definitions.kind/created_by`; `workflow_task_runs.assigned_employee_id/opened_at/actions/action_state`).
+- **004** = RCM pipeline (adds `rcm_records` + `audit_records`; both `IF NOT EXISTS`; owned by `api/_lib/referenceLogic/rcm.js` + `audit.js` + `rework.js`).
 
 ## Invariants & gotchas
 - **Migrations must stay additive** (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`) so deployed code keeps working between `db:migrate` and code deploy. Never drop/rename core tables in a new migration.

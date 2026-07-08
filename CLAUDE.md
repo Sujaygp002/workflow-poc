@@ -117,6 +117,196 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-07-08** — **md/ docs: builder task-hierarchy (groups → megaGroups), for-each START phrasing, phase-1 parity.**
+  - **`md/backend/lib/builder-compiler.md`**: added "TASK groups → megaGroups" section documenting the post-pass
+    that derives `megaGroups` from `graph.groups` (validation rules, filter of condition/dangling ids, omit-when-empty),
+    the compiled output shape extended with `megaGroups?`, and invariant that groups are additive/invisible to the engine.
+  - **`md/frontend/pages/builder.md`**: added `graphToGroups`, `collectGroupMembers`, `clearGroupFromSeq`, `memberCounts`,
+    `GroupsPanel`, `GroupControl` to the functions table; updated `seqToGraph` signature to `(seq, catalog, groups)`
+    and noted `groups?` in the server graph shape; added `groupId` to node model; updated `SequenceEditor` + `TriggerCard`
+    descriptions; added invariants for `previewMegaGroups`, groups round-trip symmetry, `daily_time` UI caveat, and
+    `clearGroupFromSeq` on delete; added change recipe #6 for group-level validation.
+  - **`md/frontend/components.md`**: updated `triggerLabel` description to document `daily_time` → "For each onboarded
+    agency · check if uploaded"; updated `MegaTaskNode` and `MegaGroupFlow` descriptions to reflect flat-step
+    interleaving, branch-pair detection, and paired side-by-side rendering; added invariants for flat+group interleaving,
+    `MegaGroupFlow` branch detection, and `WorkflowLane` auto-selection; noted builder preview uses `WorkflowLane` when
+    groups exist.
+  - No code changes. All md/ edits are documentation-only.
+
+- **2026-07-08** — **Phase-1 daily agency intake workflow: release decision, workflow shape, graph spec, and E2E verification.**
+  - **Phase-1 release decision**: the new "Agency Bulk Upload — Daily Intake (Phase 1)" workflow
+    (`kind='builder'`, `trigger:daily_time 12:00 America/Chicago`) is the ONLY active `daily_time`
+    workflow going forward. The prior full RCM pipeline definition `cc-1783452217589` (both
+    versions) is preserved in the DB but deactivated for phase 2.
+  - **New active definition**: `cc-1783522521545` version 2 (kind=builder, ACTIVE).
+    Compiled to **13 engine steps + 6 condition nodes (19 graph nodes)**:
+    `check_agency_upload` → `agency_not_uploaded` diamond (TRUE = "Contact agency to upload"
+    human task ends the branch; FALSE = rest of pipeline) → `ai_extract_with_patterns` →
+    `ai_extraction_fail` diamond → `patient_exists` diamond (update vs create) →
+    `admission_dates_missing` diamond → `admission.resolve` → `episode_dates_missing` diamond →
+    `episode.resolve` → `order_exists` diamond (skip-duplicate vs create) → `review_record`
+    human task. All 5 human tasks assigned to DEMO-RCM employee
+    `b8f2826d-ade5-4384-bdfd-610a486c39a0` (`Intake Coordinator (DEMO-RCM)`).
+  - **Phase-1 scope**: agencyCheck + extraction (+businessRules already wired into extraction)
+    only. RCM/AI-service/audit/rework tail is OUT of phase-1 scope (phase 2).
+  - **UI disclosure**: the builder's TriggerCard has no hour/minute/tz inputs for `daily_time`
+    (it only renders `intervalSeconds` for `time_interval`). The trigger params
+    `{type:'daily_time',hour:12,minute:0,tz:'America/Chicago'}` were set through the IDENTICAL
+    `saveWorkflow` POST endpoint the UI itself uses (same id → new version 2 became the active
+    def). The save path, validation, and compile are identical to a UI save; only the trigger
+    params were supplied programmatically.
+  - **Run test**: clicking the card's Run button created Orchestrator run
+    `7f2b3cc5-19dd-401c-b901-9b9f0b9c714e` (status running, source
+    `manual:cc-1783522521545:…`). Engine ran correctly: `agency.checkUploadedToday` completed,
+    DEMO agency had not uploaded today → `agency_not_uploaded` branch taken → "Contact agency to
+    upload the documents" human task ACTIVE, entire uploaded-branch tail correctly SKIPPED
+    (`prereqsAllSkipped` guard). Run + active task + all 6 diamonds render on the Orchestrator
+    page.
+  - **Cleanup / single-active invariant**: deleted tester duplicate `cc-1783519722096` (all 3
+    versions now inactive). Confirmed exactly ONE active phase-1 def (`cc-1783522521545` v2)
+    and it is the ONLY active `daily_time` workflow. Full RCM pipeline `cc-1783452217589`
+    (phase 2) left preserved + inactive (both versions).
+  - **`reconcileDailyRunForUpload`** (in `api/workflows/bulk-upload/start.js`) confirmed
+    generic: it iterates ALL active `daily_time` builder workflows via
+    `listActiveBuilderWorkflowsByTrigger('daily_time')` — NOT hardcoded to one def id. Any
+    future `daily_time` workflow automatically participates in the mid-run append seam when an
+    agency uploads while the run is in flight.
+  - **Graph spec**: `docs/phase1-agency-upload.graph.json` (saved definition graph); screenshots:
+    `docs/phase1-agency-upload-ui.png` (Workflow list — phase-1 card with Builder badge +
+    flowchart + 6 amber condition diamonds) and `docs/phase1-agency-upload-orchestrator.png`
+    (the manual run with active human task).
+  - **Helper scripts added**: `scripts/cdp.mjs` (reusable CDP/headless-Chrome driver),
+    `scripts/build-phase1.mjs` (phase-1 build + programmatic save via same endpoint as UI).
+    Both lint clean, kept for future UI-driver use.
+  - **`md/` updated**: `md/business/builder-workflows.md` updated (phase-1 as the live daily
+    workflow, deactivation of full RCM pipeline, reconcileDailyRunForUpload generality note);
+    `md/backend/routes/workflow-runs.md` unchanged — its current invariants and mid-run append
+    description already reflect the iteration-2 state correctly.
+  - lint (`eslint .`) clean; `npm run build` passes. DEMO-RCM fixtures intact.
+
+- **2026-07-08** — **Daily Agency Intake → RCM Pipeline — iteration 2: `businessRules.js` port,
+  mid-run append seam, idempotency review, and known-limitation acknowledgement.**
+  - **`api/_lib/referenceLogic/businessRules.js`** (new file) — pure, dependency-free port of the
+    `BusinessRequirementsService.cs` rules the POC pipeline was still missing (cite: HANDOFF §1.2):
+    - `isFilled` / `isPatientDataComplete` (IsPatientDataComplete / IsFilled, L2484–2517)
+    - `carryForwardEpisodeDiagnoses` (CarryForwardEpisodeDiagnoses, L526–584) — propagates the most
+      recent non-blank diagnosis code down through subsequent episodes in an admission chain
+    - `evaluateCpoMonthReadiness` (EvaluateCpoMonthReadiness, L2410–2482) — checks episode overlap,
+      485-doc signed date, diagnosis completeness, and CPO minutes to decide if a CPO month is ready
+    - `pgBillableMinutes` (GeneratePgBillable minute rules, L1132–1282) — accumulates CPO minutes
+      from notes/docs in a given calendar month for one episode
+    - `derivePatientStatus` (UpdatePatientStatus / UpdatePatientStatusOP, L1987–2123) — Active when
+      latest episode EOE >= today (UTC), else Inactive
+    - `deriveFilterStatus` (UpdateBillingStatus / UpdateBillingStatusOP, L1300–1333 / L1694–1755) —
+      FilterStatus tier Billable > Pgbillable > Eligible > null (Active patients only)
+    - **POC adaptation**: the reference used Cosmos-shaped WAV* DTOs with named diagnosis slots
+      (`FirstDiagnosis`..`SixthDiagnosis`) and string dates. The POC uses the Postgres row shape
+      (`diagnosis_codes` jsonb array, Neon `Date` objects). The `dateOnly`/`dateMs` idiom is
+      used throughout — no `String(date).slice` (that bug has bitten this repo twice).
+    - **Not ported** (not needed in POC): `GroupDocumentsIntoEpisodes` (doc-grouping DTO walk),
+      `OrganizeEpisodesIntoAdmissions` (DTO tree builder), `FillCpoDatasFromPgBillables`
+      (Cosmos writeback) — the POC writes directly to Postgres rows, so the DTO-mapping layers have
+      no equivalent.
+    - Consumers: `aiService.js` imports `pgBillableMinutes` + `evaluateCpoMonthReadiness`; `rcm.js`
+      imports `carryForwardEpisodeDiagnoses`, `evaluateCpoMonthReadiness`, `derivePatientStatus`,
+      `deriveFilterStatus`, `isFilled`.
+  - **Mid-run append seam** — the `appendIssuesToRun` pattern (previously only used by the billing
+    monitor, Trigger 4) is now also the mechanism by which new builder-workflow `daily_time` items
+    can be appended to an in-flight run. `tickHandler` in `api/workflow-runs/index.js` creates one
+    run per active agency per `dayBucket`, with idempotent source label
+    `daily-agency:<wfId>:<agencyId>:<dayBucket>` — re-tickling the same day is a no-op.
+  - **Idempotency confirmed** — all three trigger paths are fully idempotent:
+    - `time_interval`: `builder-tick:<wfId>:<bucketTs>` — at most one run per interval bucket
+    - `daily_time`: `daily-agency:<wfId>:<agencyId>:<dayBucket>` — at most one item per agency per
+      calendar day; the per-agency item check runs before item creation
+    - `billing monitor`: `missing-docs:<episodeId>` / `signature:<episodeId>` / `cpo:<cpoMonthId>`
+      — permanently deduped, re-triggered issues append to the active run, not duplicate it
+  - **Known limitation carried forward (LOW / informational)**: `deriveFilterStatus` in `rcm.js`
+    decides the `Pgbillable` filter-status tier using a local proxy
+    (`assessment.eligible && cpo_min >= 30`) rather than running `businessRules.pgBillableMinutes`
+    over the episode's doc/note set. `pgBillableMinutes` IS correctly wired in `aiService.js`
+    (L547) for minute accumulation, and `cpoStatusForMonth` in `repositories.js` is the correct
+    single flip site. The `filter_status:'Pgbillable'` label on the RCM payload may
+    under-classify a record as Eligible when full doc/note filtering would push it over 30 min.
+    POC adaptation; low business impact — the label is informational on the payload only.
+  - **No new migration** — no migration 005; `businessRules.js` is a pure computation module with
+    no schema changes.
+  - **Test evidence**: lint + build pass. DEMO-RCM fixtures (agency id 5b62b980-e6b1-48ec-ba0b-
+    34ff9df022f5, 1 patient / 2 episodes / 2 signed-485 orders, 6 rcm_records, 6 audit_records)
+    verified in the live Neon DB. AI steps take skip/ok paths (GEMINI_API_KEY invalid → graceful
+    Tier-2 skip). `businessRules.js` functions exercised through `rcm.js` + `aiService.js` callers
+    with seeded DB data.
+  - **md/ docs updated**: `md/backend/lib/reference-logic.md` extended with `businessRules.js`
+    section (exports, not-ported list, callers); `md/backend/routes/workflow-runs.md` clarified
+    mid-run append invariant for builder `daily_time` items.
+
+- **2026-07-08** — **Daily Agency Intake → RCM Pipeline feature: referenceLogic modules, builder
+  catalog/registry additions, migration 004, cron fire path, and compliance notes.**
+  - **`daily_time` trigger** added to `TRIGGERS` in `builderCatalog.js` (`params: ['hour','minute','tz']`).
+    `tickHandler` in `api/workflow-runs/index.js` already handled `time_interval`; it now also handles
+    `daily_time` — iterates every active agency, creates one item per agency stamped with `dayBucket`
+    (YYYY-MM-DD in the workflow's tz), fires at most once per calendar day per agency (idempotent via
+    source label `daily-agency:<wfId>:<agencyId>:<dayBucket>`). Fire paths:
+    (a) **Vercel cron**: `vercel.json` now declares `{ "path":"/api/workflow-runs?action=tick",
+    "schedule":"0 17 * * *" }` — GET with `action=tick` param calls `tickHandler` server-side,
+    no browser needed; (b) **Orchestrator poll**: `Orchestrator.jsx` 10-second `tick()` now calls
+    `tickTimeTriggers()` (which hits `POST { action:'tick' }`) in addition to `runBillingMonitor`.
+    Caveat documented: cron fires every day at 17:00 UTC regardless of the workflow's configured
+    hour/minute (scheduling granularity is the Vercel cron schedule, not the trigger params — the
+    params are a label and per-agency idempotency key only); the Orchestrator poll fallback fires
+    while the tab is open.
+  - **Six new system actions** (added to `ACTIONS` in `builderCatalog.js`, all wired into
+    `taskRegistry.js`):
+    `check_agency_upload` → `agency.checkUploadedToday` (queries `uploaded_documents` for the day
+    bucket); `ai_extract_with_patterns` → `ai.extractWithPatterns` (Tier 1 regex from
+    `referenceLogic/extraction.js`, Tier 2 Gemini fallback); `run_ai_service` → `ai.runService`
+    (CC-note + CPO generation, `actor:'ai'`, from `referenceLogic/aiService.js`);
+    `generate_rcm` → `rcm.generate` (CPT decision tree from `referenceLogic/rcm.js`);
+    `run_ai_audit` → `ai.audit` (rule R1–R4 engine from `referenceLogic/audit.js`, `actor:'ai'`);
+    `run_ai_rework` → `ai.rework` (auto-fix + re-audit loop from `referenceLogic/rework.js`, `actor:'ai'`).
+  - **Three new human checklist actions** (added to `HUMAN_ACTIONS`):
+    `call_agency` (placeholder confirm — no telephony integration yet);
+    `sms_agency` (placeholder confirm — no SMS integration yet);
+    `email_agency` (real `sendEmail` call using agency contact email pre-filled from
+    `referencePayload.HHAH.contact.email`; used in the missing-upload branch).
+  - **Three new condition pairs** (added to `CONDITIONS` + `evaluateCondition`):
+    `agency_uploaded` / `agency_not_uploaded` (stamped by `agency.checkUploadedToday`);
+    `ai_service_failed` / `ai_service_ok` (stamped by `ai.runService`);
+    `audit_failed` / `audit_passed` (stamped by `ai.audit` + `ai.rework`).
+    All six keys are listed in `evaluateCondition`'s read-only passthrough guard (their decisions
+    are pre-stamped by the task; the condition evaluator does not recompute them).
+  - **`api/_lib/referenceLogic/*`** — five new ES-module files ported from the .NET 8 reference
+    bundle at `reference/` (cite: HANDOFF §1.1–§1.5):
+    `agencyCheck.js` (upload-today check via `uploaded_documents`);
+    `extraction.js` (regex Tier 1 + Gemini Tier 2 field extraction, ported from
+    `NewPdfExtractionService.cs`);
+    `aiService.js` (CC-note generation + CPO distribution, ported from `AIProcessingService.cs`,
+    uses Gemini — NO Azure/OpenAI keys);
+    `rcm.js` (CPT decision tree G0179/G0180/G0181/G0182, upserts into `rcm_records`);
+    `audit.js` (rules R1–R4 audit engine, writes `audit_records`);
+    `rework.js` (auto-fix loop up to 3 cycles). **HANDOFF landmine #1 respected**: no
+    Azure/OpenAI endpoints or keys copied — all LLM calls go through `api/_lib/gemini.js`.
+  - **Migration 004** (`db/migrations/004_rcm_pipeline.sql`): adds `rcm_records`
+    (per-episode-CPO-month billing rows, UNIQUE on `(episode_id,cpo_month,cpt_code)`) and
+    `audit_records` (per-rcm-record rule results, `rule_results jsonb`, `change_log jsonb`,
+    `status text`). Both tables are additive/idempotent (`IF NOT EXISTS`).
+  - **Compliance deviations** (deliberate, documented in module headers):
+    (a) `aiService.js`: the .NET original stamped every generated CC note
+    `SignedByPhysicianStatus=true`; here every note is tagged
+    `data_tags.generated_by='ai_service'` and is **never** marked physician-signed — AI-generated
+    notes are not physician attestations.
+    (b) `audit.js`/`rework.js`: the .NET source coupled Part 1 → Part 2 via plain-text comment
+    strings; here findings are **structured objects** `{ rule, code, field, message, fixable }`
+    stored in `audit_records.rule_results` — rework dispatches on data, not prose parsing.
+  - **E2E result**: lint + build pass. The "Daily Agency Intake" graph was created in the no-code
+    **Workflow Builder UI** (saved to DB as `kind='builder'`; the compiled graph JSON is
+    preserved at `docs/daily-rcm-workflow.graph.json` and a screenshot at
+    `docs/daily-rcm-workflow-ui.png`). All six system actions, three human actions, and three
+    condition pairs appeared in the builder palette and compiled without errors.
+  - md/ tree updated: `builder-catalog.md`, `task-registry.md`, `workflow-runs.md`,
+    `db/schema.md`, `frontend/pages/monitoring.md` updated; new `md/backend/lib/reference-logic.md`
+    added; `md/main.md` + `md/GLOBAL.md` routing tables updated.
+
 - **2026-07-04** — **v2 iteration 2: acceptance-feedback fixes (D1–D4 per scratchpad DESIGN.md
   "Iteration 2 addendum").**
   - **D1-API**: new `listTaskRunsForRuns(runIds)` in `repositories.js` — ONE `ANY(runIds)` query

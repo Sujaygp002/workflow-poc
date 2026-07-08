@@ -16,7 +16,8 @@ Employees compose custom workflows in a visual builder from a **fixed palette** 
 | 5 | System workflows are read-only in the builder: cannot be edited (save with a system id → 400) or deleted; builder delete is a soft delete (deactivate all versions) | `saveWorkflow` kind check + `deleteWorkflow` in `api/workflows/index.js` |
 | 6 | Trigger `document_upload`: an HHAH portal upload starts a run of **each** active builder workflow declaring it (one item per parsed workbook row); only if none exist does it fall back to system wf7 | `targetWorkflows` in `api/workflows/bulk-upload/start.js` → `listActiveBuilderWorkflowsByTrigger('document_upload')` |
 | 7 | Trigger `manual`: the Run button starts a run with one empty item (so system steps/conditions still evaluate) unless items are posted | `startWorkflowHandler` in `api/workflow-runs/index.js` (action `startWorkflow`) |
-| 8 | Trigger `time_interval`: a poller posts `{action:'tick'}`; each interval workflow starts a run only when the newest run is older than the interval, idempotent via source label `builder-tick:<wfId>:<bucketTs>` | `tickHandler` in `api/workflow-runs/index.js` |
+| 8 | Trigger `time_interval`: an external caller POSTs `{action:'tick'}` to `/api/workflow-runs`; each interval workflow starts a run only when the newest run is older than the interval, idempotent via source label `builder-tick:<wfId>:<bucketTs>`. Caller: the Orchestrator 10-second poll calls `tickTimeTriggers()` and the Vercel cron (`GET /api/workflow-runs?action=tick`, `0 17 * * *`) fires without a browser. | `tickHandler` in `api/workflow-runs/index.js`; `tickTimeTriggers` client in `src/lib/workflowApi.js` |
+| 8a | Trigger `daily_time`: fires once per calendar day per active agency. `tickHandler` iterates every active agency, creates one item per agency stamped with `dayBucket` (YYYY-MM-DD in the workflow's tz). Idempotent via source label `daily-agency:<wfId>:<agencyId>:<dayBucket>`. Same two callers as `time_interval` (Orchestrator poll + Vercel cron). | `tickHandler`; `dailyBucket.js` for single-sourced bucket math |
 | 9 | Human task = checklist: the compiled step carries `taskKey:'human.performActions'`, the action list, and `assigneeEmployeeId`; task rows persist `actions` + `assigned_employee_id`; the engine never re-assigns (NULL assignee = shared, used by system workflows) | `compileChain` (task branch); `createTaskRunsForItem` in `repositories.js`; human branch of `runItemAutomation` in `workflowEngine.js` |
 | 10 | Buckets: **Untouched** = active, unopened, mine-or-unassigned; **Processing** = active, opened, mine; **Done** = completed, mine. Opening a task claims it (`assigned_employee_id` + `opened_at`); completing an unclaimed shared task claims it implicitly | `listEmployeeBucketItems` / `openTaskRun` in `repositories.js`; `api/work-items/index.js`; claim-on-complete in `api/work-items/[taskRunId]/complete.js` |
 | 11 | Validation-retry: submitting a checklist validates **every** action server-side first; any failure returns HTTP 400 `{ error, actionErrors }` and the task **stays active/Processing** — nothing is marked failed, no side effect runs. Only when all validate do the actions' `execute()` side effects run (send email, merge dates, stamp order sent, add CPO minutes) | `runHumanActions` in `builderCatalog.js`; `human.performActions` in `taskRegistry.js` returns `{ retry: true, actionErrors }`; `completeHumanTask` in `workflowEngine.js` converts that to a 400 without touching task status |
@@ -42,6 +43,40 @@ Checklist completion request (`POST /api/work-items/[taskRunId]/complete`):
 // failure → 400 { error:'Action validation failed', actionErrors:{ a1:'A valid recipient email is required' } }
 ```
 
+## Live daily workflow (phase 1)
+
+**NEW ACTIVE PHASE-1 DEF: `cc-1783522521545` (kind=builder, ACTIVE version 2).** "Agency Bulk
+Upload — Daily Intake (Phase 1)" — fires at 12:00 America/Chicago, one item per active agency.
+Compiled to 13 engine steps + 6 condition nodes (19 graph nodes):
+
+```
+check_agency_upload
+  → agency_not_uploaded ◇ TRUE  → "Contact agency to upload" (human task, branch ends)
+                          FALSE → ai_extract_with_patterns
+                                    → ai_extraction_fail ◇ TRUE  → fill_missing_fields (human)
+                                                           FALSE → patient_exists ◇ TRUE  → update_patient
+                                                                                   FALSE → create_patient
+                                                                   → admission_dates_missing ◇ → enter_admission_dates / admission.resolve
+                                                                   → episode_dates_missing   ◇ → enter_episode_dates / episode.resolve
+                                                                   → order_exists ◇ TRUE  → skip_duplicate_order
+                                                                                   FALSE → create_order
+                                                                   → review_record (human)
+```
+
+All 5 human tasks assigned to DEMO-RCM employee `b8f2826d-ade5-4384-bdfd-610a486c39a0`.
+Graph spec: `docs/phase1-agency-upload.graph.json`. Screenshots: `docs/phase1-agency-upload-ui.png`,
+`docs/phase1-agency-upload-orchestrator.png`.
+
+**Phase-2 definition `cc-1783452217589`** (full RCM/audit/rework tail) is preserved in the DB
+but deactivated (both versions inactive). It is the only other `daily_time` workflow in the DB.
+**Single-active invariant**: at any time there is exactly ONE active `daily_time` builder workflow.
+
+**`reconcileDailyRunForUpload`** (mid-run append, `api/workflows/bulk-upload/start.js`) is
+**generic**: it iterates ALL active `daily_time` builder workflows via
+`listActiveBuilderWorkflowsByTrigger('daily_time')`. No hardcoded def id — any future `daily_time`
+workflow automatically participates in the append seam when an agency uploads while its run is in
+flight.
+
 ## Invariants & gotchas
 - **Adding a condition to the palette is a two-file change**: the key AND its negation must both exist in `CONDITIONS` *and* be evaluable by `taskRegistry.evaluateCondition` (which checks `item.decisions` first, then computes). A key only in the catalog silently evaluates false → the step always skips.
 - **A step carries at most one `condition`** — a condition node placed as the *first* node inside another condition's branch loses the outer gate (the inner branch heads get only the inner key). Keep at least one action/task node between nested conditions.
@@ -49,6 +84,7 @@ Checklist completion request (`POST /api/work-items/[taskRunId]/complete`):
 - `document_upload` starts a run of **every** matching builder workflow — two active builder intake workflows means duplicate patient/order writes per upload row.
 - Tick idempotency is per interval bucket; deploys with multiple concurrent tick callers are safe (`findWorkflowRunBySourceLabel` check), but shortening `intervalSeconds` changes the bucket math, not existing runs.
 - Deleting a builder workflow deactivates all versions but existing runs keep working: runs pin `workflow_version` and `getRunWithDefinition` joins on it.
+- **Single-active `daily_time` invariant**: only ONE `daily_time` builder workflow should be active at a time. Activating a second one doubles the per-agency daily items. To release a new phase: activate the new def (save new version → it becomes active), then explicitly deactivate the old one (`deleteWorkflow` soft-deactivates all versions).
 
 ## Change recipes
 1. **Add a system action to the palette**: add the entry to `ACTIONS` in `api/_lib/builderCatalog.js` with a `taskKey` that already exists in `taskRegistry` (add the task fn there first if new); nothing else — compiler and catalog endpoint pick it up.

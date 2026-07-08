@@ -11,8 +11,7 @@ All `fetch` calls to `/api/*` live here — pages never call `fetch` directly. `
 |---|---|---|---|
 | `getAuthToken` / `setAuthToken` / `clearAuthToken` | `(kind[, token]) -> string\|void` | sessionStorage under `TOKEN_KEYS = { worker: 'cc_worker_token', hhah: 'cc_hhah_token', pg: 'cc_pg_token' }`; try/catch-safe | portals, WorkerPortal |
 | `authHeaders` | `(kind) -> {Authorization?} ` | `{ Authorization: 'Bearer <token>' }` or `{}` when no token | workflowApi, getSession, logout |
-| `workerLogin` | `({username, password}) -> {tempToken,...}` | POST `/api/auth` `{action:'workerLogin'}` — step 1 of 2FA, does NOT store a token | WorkerPortal |
-| `workerTotp` | `({code, tempToken}) -> {token,...}` | POST `{action:'workerTotp', code}` with `Authorization: Bearer <tempToken>`; on success stores the worker token | WorkerPortal |
+| `workerLogin` | `({username, password}) -> {token, employee,...}` | POST `/api/auth` `{action:'workerLogin'}`; single-factor — on success stores the worker token immediately | WorkerPortal |
 | `externalLogin` | `({username, password, kind}) -> {token,...}` | POST `{action:'externalLogin'}`; stores token under `kind` (`'hhah'` or `'pg'`) if given | HhhLogin, PgLogin |
 | `logout` | `(kind) -> {ok:true}` | POST `{action:'logout'}` with that kind's auth header; ALWAYS clears the local token (finally) | portals, WorkerPortal |
 | `getSession` | `(kind) -> session` | GET `/api/auth?session=1` with auth header; throws `error.status` on 401 | portals (restore on mount) |
@@ -34,7 +33,7 @@ All `postAuth` errors carry `error.status = res.status`.
 | `fetchPatientUnits` | GET `/api/patients?view=units` | → `body.units` — **currently unused by any page** | — |
 | `fetchPgUnsignedOrders` | GET `/api/orders?pgUnsigned=1[&pgId=]` | unsigned orders for PG bulk sign | PgLogin |
 | `bulkSignPgOrders` | POST `/api/orders` `{action:'bulkSign', orderIds, pgId, date}` + `authHeaders('pg')` | PG bulk sign | PgLogin |
-| `runBillingMonitor` | POST `/api/workflow-runs` `{action:'runBillingMonitor'}` | manual Trigger-4 tick | Orchestrator |
+| `runBillingMonitor` | POST `/api/workflow-runs` `{action:'runBillingMonitor'}` | Trigger-4 pass; **this is the only action the Orchestrator poll calls** — `tickTimeTriggers` (`tick`) is NOT called by the poll | Orchestrator |
 | `fetchPatientTree` | GET `/api/patients/:id` | full unit hierarchy (fed to PatientHierarchyView) | HhhLogin |
 | `fetchReferenceData` | GET `/api/reference-data` | agencies/PGs/practitioners | Entity, ExternalUsers, NetworkMap |
 | `createAgency`/`createPg`/`createPractitioner`/`mapPgToPractitioner` | POST `/api/reference-data` `{action, ...}` | via private `postReferenceData` | Entity |
@@ -42,7 +41,7 @@ All `postAuth` errors carry `error.status = res.status`.
 | `deleteWorkflow` | POST `/api/workflows` `{action:'deleteWorkflow', id}` | | WorkflowList |
 | `fetchBuilderCatalog` | POST `/api/workflows` `{action:'catalog'}` | task/trigger/condition catalog for the builder palette | WorkflowBuilder |
 | `startWorkflow` | POST `/api/workflow-runs` `{action:'startWorkflow', workflowId, items?, sourceLabel?}` | manual run launch | WorkflowList |
-| `tickTimeTriggers` | POST `/api/workflow-runs` `{action:'tick'}` | fires due time triggers — **currently unused by any page** | — |
+| `tickTimeTriggers` | POST `/api/workflow-runs` `{action:'tick'}` | fires due time triggers — **not called by the Orchestrator poll or any page**; builder `time_interval` workflows need an external caller to hit this endpoint | — |
 | `fetchMyBuckets` | GET `/api/work-items` + `authHeaders('worker')` | bearer-scoped buckets; throws with `error.status` (401 → re-login) | WorkerPortal |
 | `openWorkItem` | POST `/api/work-items` `{action:'open', taskRunId}` + worker auth | claims/opens a task | WorkerPortal |
 | `fetchWorkItems(userId)` / `fetchWorkUsers()` | GET `/api/work-items[?userId=]` (no auth header) | legacy unauthenticated reads — **currently unused** | — |
@@ -71,7 +70,7 @@ dbWorkItemToAction(item)  // work-item row -> action card shape — currently un
 `dateFormat.js`: `formatUiDate(value, fallback='Missing') -> 'MM/DD/YYYY'` and `formatUiDateTime -> 'MM/DD/YYYY h:mm AM'`; invalid dates return `String(value)`, falsy returns the fallback.
 
 ## Invariants & gotchas
-- **Tokens are sessionStorage, per-surface.** Worker/HHAH/PG sessions coexist in one tab but die with the tab. `workerLogin` alone grants nothing — only `workerTotp` stores `cc_worker_token`.
+- **Tokens are sessionStorage, per-surface.** Worker/HHAH/PG sessions coexist in one tab but die with the tab. `workerLogin` is single-factor and stores `cc_worker_token` directly on success — there is no `workerTotp` step.
 - **Error contract is load-bearing:** WorkerTaskDetail reads `error.actionErrors` (400 = validation, task stays active); WorkflowBuilder reads `error.messages`; WorkerPortal reads `error.status === 401` to force re-login. Keep these fields when refactoring.
 - `startBulkUploadRun` intentionally does NOT set `Content-Type` (browser sets the multipart boundary); it merges only `authHeaders('hhah')`.
 - `orderZip` is a back-compat alias for `unsignedZip` — first non-null wins.

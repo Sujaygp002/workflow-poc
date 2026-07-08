@@ -38,7 +38,7 @@ Validation failure → `400 { error: "Workflow validation failed", messages: [..
 - Old versions stay in the table (inactive) because runs pin `workflow_version`; `getRunWithDefinition` joins on `(workflow_id, workflow_version)`.
 - New builder id format is `cc-${Date.now()}` when `body.id` is absent; passing an existing `id` re-versions that workflow.
 - System workflows (`kind !== 'builder'`) cannot be edited (`saveWorkflow` 400s) or deleted (`deleteWorkflow` 400s). They are re-created by `ensureSystemDefinitions()` on every GET if missing — deleting a system def only lasts until the next list call.
-- `deleteWorkflow` is a soft delete (sets `active=false` on ALL versions); rows and past runs remain intact.
+- `deleteWorkflow` is a soft delete (`deactivateWorkflowDefinition(id)` sets `active=false` on the currently active version only; already-inactive historical versions are untouched); rows and past runs remain intact.
 - Unknown `body.action` → `400 { error: 'Unsupported workflows action.' }`.
 
 ## Change recipes

@@ -20,7 +20,7 @@
 - **`wipe.js`** — one `TRUNCATE … CASCADE` over every data table (patients, orders, runs, entities, employees, external users, workflows, sessions, area tables…), keeping the schema and `schema_migrations`. Prints before/after row counts. System workflow definitions re-appear on demand via `ensureSystemDefinitions()` (called by `GET /api/workflows` and the upload route).
 - **`seed.js`** — upserts workflow definitions + optional demo domain data.
 - **`seed-map-demo.js`** — additive Coverage-Map demo network (agencies/PGs/practitioners/patients/orders).
-- **`totp.js`** — `node scripts/totp.js <BASE32_SECRET>` prints the current 6-digit TOTP code (test/QA helper for worker login).
+- **`totp.js`** — `node scripts/totp.js <BASE32_SECRET>` prints the current 6-digit TOTP code (test/QA helper; worker login is single-factor so this is only useful for manual TOTP testing via the legacy `totpCode` helper in `api/_lib/auth.js`).
 
 ## Deploy
 - **Vercel**: pushing to `main` on the GitHub repo auto-deploys production at `workflow-poc-tawny.vercel.app`. `vercel.json` rewrites `/worker`→`worker.html` and the SPA catch-all →`index.html` (excludes `api/`, `assets/`, extension paths).

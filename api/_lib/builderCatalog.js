@@ -14,6 +14,7 @@ export const TRIGGERS = [
   { key: 'document_upload', label: 'Document upload (HHAH portal)', description: 'Fires when an HHAH uploads a workbook + order PDFs. One item per parsed row.' },
   { key: 'manual', label: 'Manual (Run button)', description: 'Started on demand from the Workflow page.' },
   { key: 'time_interval', label: 'Time interval', description: 'Started on a fixed interval (intervalSeconds).', params: ['intervalSeconds'] },
+  { key: 'daily_time', label: 'Daily at time (per agency)', description: 'Fires once per day at hour:minute in tz; one item per active agency.', params: ['hour', 'minute', 'tz'] },
 ];
 
 // System actions: run unattended by the engine via the existing taskRegistry.
@@ -31,6 +32,14 @@ export const ACTIONS = {
   send_order_to_physician_system: { key: 'send_order_to_physician_system', kind: 'system', label: 'Send order to physician (system)', taskKey: 'signing.sendToPhysician' },
   update_order_signed: { key: 'update_order_signed', kind: 'system', label: 'Update order status — signed', taskKey: 'signing.updateOrderSigned' },
   check_patient_eligible: { key: 'check_patient_eligible', kind: 'system', label: 'Check patient eligible', taskKey: 'billing.checkPatientEligible' },
+
+  // ── Daily Agency Intake -> RCM Pipeline (referenceLogic) ──
+  check_agency_upload: { key: 'check_agency_upload', kind: 'system', label: 'Check agency uploaded today', taskKey: 'agency.checkUploadedToday' },
+  ai_extract_with_patterns: { key: 'ai_extract_with_patterns', kind: 'system', label: 'AI extract (regex + Gemini)', taskKey: 'ai.extractWithPatterns', actor: 'ai' },
+  run_ai_service: { key: 'run_ai_service', kind: 'system', label: 'Run AI service (CC notes / CPO)', taskKey: 'ai.runService', actor: 'ai' },
+  generate_rcm: { key: 'generate_rcm', kind: 'system', label: 'Generate RCM billing records', taskKey: 'rcm.generate' },
+  run_ai_audit: { key: 'run_ai_audit', kind: 'system', label: 'Run AI audit', taskKey: 'ai.audit', actor: 'ai' },
+  run_ai_rework: { key: 'run_ai_rework', kind: 'system', label: 'Run AI rework', taskKey: 'ai.rework', actor: 'ai' },
 };
 
 function mergeDeep(target, source) {
@@ -209,6 +218,54 @@ export const HUMAN_ACTIONS = {
       return null;
     },
   },
+
+  // ── Agency outreach (missing-upload branch) ──
+  // Placeholder (coming-soon) channels: no live telephony/SMS integration yet, so
+  // these just require the worker to confirm the outreach was made.
+  call_agency: {
+    key: 'call_agency',
+    label: 'Call agency (coming soon)',
+    inputs: ['confirmed', 'note'],
+    validate(action, result) {
+      if (!result || result.confirmed !== true) return 'Confirm the agency was called';
+      return null;
+    },
+    async execute(action, result) {
+      return { channel: 'call', placeholder: true, confirmed: true, note: result?.note || null };
+    },
+  },
+  sms_agency: {
+    key: 'sms_agency',
+    label: 'Text agency (coming soon)',
+    inputs: ['confirmed', 'note'],
+    validate(action, result) {
+      if (!result || result.confirmed !== true) return 'Confirm the agency was texted';
+      return null;
+    },
+    async execute(action, result) {
+      return { channel: 'sms', placeholder: true, confirmed: true, note: result?.note || null };
+    },
+  },
+  // Real email send. Recipient prefills from the agency's contact_info.email
+  // (referencePayload.HHAH.contact.email) so the worker portal shows it pre-filled.
+  email_agency: {
+    key: 'email_agency',
+    label: 'Email agency (missing upload)',
+    inputs: ['to', 'subject', 'body', 'confirmed'],
+    validate(action, result) {
+      if (!result || !EMAIL_RE.test(String(result.to || ''))) return 'A valid recipient email is required';
+      if (result.confirmed !== true) return 'Confirm the email was reviewed before sending';
+      return null;
+    },
+    async execute(action, result) {
+      const mail = await sendEmail({
+        to: result.to,
+        subject: result.subject || 'Please upload your daily documents',
+        text: result.body || 'We have not received your document upload for today. Please upload as soon as possible.',
+      });
+      return { channel: 'email', email_sent: mail.sent, email_skipped: mail.skipped || false, email_reason: mail.reason || null };
+    },
+  },
 };
 
 // Conditions: each declares its negation so if/else compiles. All keys are
@@ -232,6 +289,14 @@ export const CONDITIONS = {
   physician_signature_missing: { key: 'physician_signature_missing', label: 'Signature missing', negation: 'physician_signed', description: 'physician has not signed yet' },
   patient_eligible: { key: 'patient_eligible', label: 'Patient eligible', negation: 'patient_not_eligible', description: 'required 485 and valid F2F documents exist' },
   patient_not_eligible: { key: 'patient_not_eligible', label: 'Patient not eligible', negation: 'patient_eligible', description: 'required 485 or F2F document missing' },
+
+  // ── Daily Agency Intake -> RCM Pipeline ──
+  agency_uploaded: { key: 'agency_uploaded', label: 'Agency uploaded today', negation: 'agency_not_uploaded', description: 'the agency uploaded documents for the day bucket' },
+  agency_not_uploaded: { key: 'agency_not_uploaded', label: 'Agency has not uploaded', negation: 'agency_uploaded', description: 'no documents uploaded for the day bucket' },
+  ai_service_failed: { key: 'ai_service_failed', label: 'AI service failed', negation: 'ai_service_ok', description: 'the AI CC-note / CPO service reported failures' },
+  ai_service_ok: { key: 'ai_service_ok', label: 'AI service ok', negation: 'ai_service_failed', description: 'the AI service completed without failures' },
+  audit_failed: { key: 'audit_failed', label: 'Audit failed', negation: 'audit_passed', description: 'one or more RCM records failed the audit rules' },
+  audit_passed: { key: 'audit_passed', label: 'Audit passed', negation: 'audit_failed', description: 'all RCM records passed the audit rules' },
 };
 
 // Validate a task's actionResults, then run each action's execute. Used by

@@ -16,13 +16,14 @@
 | `ACTOR` | const map | actor → tone/label (system/ai/human) |
 | `actorOf(step)` | `(step)->'system'\|'ai'\|'human'` | derives actor for coloring |
 | `stepStats(tasks, stepId)` | `(tasks, stepId)->{ran, …}` | per-step run counts (the `(n)` badge) |
-| `conditionLabel(condition)` / `triggerLabel(trigger)` | formatters | human labels for a condition key / trigger |
+| `conditionLabel(condition)` / `triggerLabel(trigger)` | formatters | human labels for a condition key / trigger; `daily_time` renders as `"For each onboarded agency · check if uploaded"` (the per-agency fan-out START phrasing); `time_interval` renders as `"Time trigger · every Ns"` |
 | `DecisionDiamond({condition, downLabel, rightLabel})` | JSX | the rotated-square if/else diamond |
 | `StepInfo({step})` / `StepNode({step, stats})` | JSX | ⓘ popover / a single step box |
 | `Connector()` | JSX | vertical connector between nodes |
-| `WorkflowFlow({definition, tasks, steps})` | JSX | the main renderer; `steps` overrides `definition.steps` (used by the builder preview) |
-| `MegaTaskNode({definition, tasks, megaTask, name, info, steps})` | JSX | collapses a step group into one box with a View expander |
-| `MegaGroupFlow({definition, tasks})` | JSX | renders a `megaGroups` definition as a vertical chain of mega-tasks |
+| `WorkflowFlow({definition, tasks, steps, employeesById})` | JSX | the main renderer; `steps` overrides `definition.steps` (used by the builder preview); `employeesById` maps assigneeEmployeeId → employee for human-step assignee display |
+| `WorkflowLane({definition, tasks, employeesById, subtitle, accent})` | JSX | opinionated wrapper: renders the right inner component (`WorkflowFlow`/`MegaTaskNode`/`MegaGroupFlow`) inside a rounded border lane with a workflow name header; used by both Orchestrator and Workflow list cards |
+| `MegaTaskNode({definition, tasks, megaTask, name, info, steps})` | JSX | collapses a step group into one box with a (n) instance count, ⓘ info popover, and a View button that expands the inner flowchart |
+| `MegaGroupFlow({definition, tasks, employeesById})` | JSX | renders a `megaGroups` definition interleaving group boxes with flat step spans: steps belonging to NO group render flat (via `WorkflowFlow`), steps in a group collapse into a `MegaTaskNode`; two adjacent group boxes whose lead steps share a `preReq` and each carry a `condition` are detected as a branch pair and rendered side-by-side under ONE diamond (mirrors `WorkflowFlow` pairing logic) |
 | `runObjectStats(run)` / `RunObjectSidebar({run})` | fn / JSX | per-run created/updated object counts sidebar |
 | `TriggerChainConnector({triggerNum, label})` | JSX | violet "after end → Trigger N" pill |
 
@@ -38,9 +39,12 @@ For the **builder preview**, pass the freshly compiled `steps` via the `steps` p
 ## Invariants & gotchas
 - **Conditions render as if/else diamonds** with down/right exits labeled by the ACTUAL branch truth (a step's `condition` key + its negation), not a hardcoded YES/NO — see `DecisionDiamond`/`BranchArm`. A builder condition compiles to `condition` on branch-head steps (no separate node); this renderer reconstructs the diamond from those.
 - **`megaGroups[].stepIds` must list EVERY step id** in the group or the flowchart silently drops the missing step. wf7's non-contiguous ids (`wf7-s22/s23` retired) are a classic trap.
+- **`MegaGroupFlow` interleaves flat steps with group boxes.** Steps belonging to no group are batched into flat spans and rendered between group boxes in compiled order. A step cannot simultaneously be in a flat span and a group. This means a workflow can have flat steps before/between/after TASK group boxes — branches between grouped steps render as a diamond OUTSIDE the boxes, with group boxes as the branch arms.
+- **Branch detection in `MegaGroupFlow`** uses the same pairing heuristic as `WorkflowFlow`: two adjacent rendered entries that are both group boxes, whose lead steps both carry a `condition` and share the same `preReq` JSON, are rendered as a side-by-side pair under one diamond.
 - The same file backs three surfaces — a change to `StepNode`/`DecisionDiamond` affects Orchestrator, Workflow list, AND builder preview simultaneously.
 - `stepStats` counts distinct items that ran a step (instances), not raw step-runs — the `(n)` on a mega box is "items processed."
 - Actor colors are the app-wide convention (system=sky, human=pink, condition=amber); match it if you add a node type.
+- `WorkflowLane` auto-selects the inner renderer: `megaGroups` → `MegaGroupFlow`, `megaTask` → `MegaTaskNode`, else `WorkflowFlow`. The builder preview uses `WorkflowLane` (with `megaGroups` from `previewMegaGroups`) when groups exist, else plain `WorkflowFlow`.
 
 ## Change recipes
 1. **Change flowchart appearance/behavior:** edit `StepNode`/`DecisionDiamond`/`Connector`/`WorkflowFlow` in `WorkflowDefinitionFlow.jsx` — verify all three consumers ([monitoring](pages/monitoring.md), [builder](pages/builder.md)).

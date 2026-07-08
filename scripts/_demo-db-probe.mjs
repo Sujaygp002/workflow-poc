@@ -1,0 +1,15 @@
+import { getSql } from '../api/_lib/db.js';
+const sql = getSql();
+const emp = await sql`SELECT id, username, display_name, active FROM employees WHERE id='b8f2826d-ade5-4384-bdfd-610a486c39a0'`;
+console.log('EMP:', JSON.stringify(emp));
+const ag = await sql`SELECT id, name, contact_info FROM home_health_agencies WHERE id='5b62b980-e6b1-48ec-ba0b-34ff9df022f5'`;
+console.log('AGENCY:', JSON.stringify(ag));
+const ext = await sql`SELECT id, username, display_name, user_type, agency_id, active FROM external_users WHERE agency_id='5b62b980-e6b1-48ec-ba0b-34ff9df022f5'`;
+console.log('EXT_USERS_FOR_AGENCY:', JSON.stringify(ext));
+const wf = await sql`SELECT id, name, kind, version, active, definition->'trigger' as trigger FROM workflow_definitions WHERE active=true AND definition->'trigger'->>'type'='daily_time'`;
+console.log('ACTIVE_DAILY_WF:', JSON.stringify(wf));
+const allAg = await sql`SELECT id, name FROM home_health_agencies ORDER BY created_at`;
+console.log('ALL_AGENCIES:', JSON.stringify(allAg));
+const runsToday = await sql`SELECT id, source_label, status, created_at FROM workflow_runs WHERE source_label LIKE 'daily:%' ORDER BY created_at DESC LIMIT 10`;
+console.log('DAILY_RUNS:', JSON.stringify(runsToday));
+process.exit(0);

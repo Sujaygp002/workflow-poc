@@ -11,7 +11,7 @@
 |---|---|---|---|
 | `handler` (index) | index.js | `(req,res)` | GET list-with-tasks / POST action switch |
 | `startWorkflowHandler` | index.js | `(body{workflowId, items?, sourceLabel?}) -> {run, tasks}` | one run, `items` default `[{}]`; creates items+task-runs, runs automation, returns refreshed run | POST `startWorkflow` (201) |
-| `tickHandler` | index.js | `() -> {started:[runId]}` | for each active builder `time_interval` workflow, start a run if the newest is older than `intervalSeconds`; idempotent via `builder-tick:<wfId>:<bucketTs>` | POST `tick` |
+| `tickHandler` | index.js | `() -> {started:[runId]}` | handles both `time_interval` and `daily_time` triggers: for `time_interval` starts a run if the newest is older than `intervalSeconds` (idempotent via `builder-tick:<wfId>:<bucketTs>`); for `daily_time` iterates active agencies, creates one item per agency stamped with `dayBucket` (idempotent via `daily-agency:<wfId>:<agencyId>:<dayBucket>`) | POST `tick` OR GET `?action=tick` (Vercel cron) |
 | `runBillingMonitorHandler` | index.js | `() -> {updatedEpisodes, updatedPatients, updatedCpoMonths, issues, tasks}` | runs `runBillingMonitorPass`, dedups issues by signature, groups by HHAH, one run per HHAH (or appends to an active one) | POST `runBillingMonitor` |
 | `createHhahIssueRun` / `appendIssuesToRun` | index.js | `({workflow, group\|runId, issues}) -> {…}` | create a new HHAH billing run / append fresh issues to an in-flight one | `runBillingMonitorHandler` |
 | `handler` ([id]) | [id].js | `(req,res)` | GET `{run:{…,tasks}}` / DELETE `{ok:true}` / 404 | Orchestrator card |
@@ -19,14 +19,14 @@
 ## Data shapes
 `GET /api/workflow-runs` → `{ runs: [ { …workflow_runs row, tasks:[…workflow_task_runs rows] } ] }`. Tasks are fetched in ONE batched query (`listTaskRunsForRuns`) then grouped in memory — not per-run (that was the pre-fix N+1). Bucketed grouping: `tasksByRun` Map keyed by `run_id`.
 `POST startWorkflow` body: `{ action:'startWorkflow', workflowId, items?:[{patientPayload,orderPayload,referencePayload,extractionPayload}], sourceLabel? }`.
-`POST tick` body: `{ action:'tick' }` → `{ started:[runId] }`.
+`POST tick` body: `{ action:'tick' }` → `{ started:[runId] }`. Also callable as `GET /api/workflow-runs?action=tick` (used by the Vercel cron declared in `vercel.json`: `{ "path":"/api/workflow-runs?action=tick", "schedule":"0 17 * * *" }`). This means `tick` now has TWO real callers: the Orchestrator frontend poll (POST, browser) and the daily cron (GET, Vercel infra).
 `POST runBillingMonitor` → counts + `tasks:[]` where each entry is `{created:true, runId,…}` | `{created:false, existingRunId, issueSignature}` | `{created:false, appended:true, existingRunId, itemIds}`.
 Billing issue signatures: `missing-docs:<episodeId>`, `signature:<episodeId>`, `cpo:<cpoMonthId>` (dedup keys — see [eligibility & billing](../../business/eligibility-billing.md)).
 
 ## Invariants & gotchas
 - **GET is the Orchestrator's heaviest call** and it polls every 2.5 s — keep the payload lean (`listTaskRunsForRuns` returns slim columns, no payload blobs) and never reintroduce the per-run N+1 loop.
-- **`tick` only fires while the Orchestrator page is open** — that page's poll is what calls it. There is no server cron. Idempotency is per interval bucket, so two ticks in the same window start at most one run.
-- Billing monitor is **HHAH-grouped**: all of an agency's new issues become ONE run (one item per issue). If that HHAH already has an active billing run, new issues are **appended** to it (`appendIssuesToRun`) rather than dropped — otherwise late-arriving issues (e.g. a CPO month that only became checkable once the episode turned billable) would wait for the whole run to finish.
+- **`tick` now has real callers**: (a) `Orchestrator.jsx` 10-second poll calls `tickTimeTriggers()` alongside `runBillingMonitor` — so builder `time_interval` and `daily_time` workflows fire while the Orchestrator tab is open; (b) a Vercel cron (`GET /api/workflow-runs?action=tick`, schedule `0 17 * * *`) fires daily without a browser. Previously the caveat was "nothing calls tick" — that is now resolved. Idempotency per interval bucket/agency+dayBucket ensures two concurrent ticks start at most one run.
+- Billing monitor is **HHAH-grouped**: all of an agency's new issues become ONE run (one item per issue). If that HHAH already has an active billing run, new issues are **appended** to it (`appendIssuesToRun`) rather than dropped — otherwise late-arriving issues (e.g. a CPO month that only became checkable once the episode turned billable) would wait for the whole run to finish. The `appendIssuesToRun` helper is the **mid-run append seam** and is reusable for any future builder workflow that needs to add items to an in-flight run.
 - Each billing item runs a SINGLE step (`runnableStep` clears `preReq`/`condition`), chosen by `issue.stepId` (`billing-s2`/`s5`/`s7`).
 - `startWorkflow` with no `items` still creates one empty item so system steps/conditions can evaluate (a manual run of a document-upload workflow has no rows, but its system steps still fire on `{}`).
 - `DELETE` cascades via FK `ON DELETE CASCADE` to items/task-runs but leaves created patients/orders — deleting a run is history cleanup, not a domain undo.
@@ -43,4 +43,4 @@ Billing issue signatures: `missing-docs:<episodeId>`, `signature:<episodeId>`, `
 - [workflow-engine](../lib/workflow-engine.md) — `runWorkflowAutomation` these handlers call
 - [repositories](../lib/repositories.md) — run/item/billing SQL
 - [workflow-definitions](../lib/workflow-definitions.md) — `WF_BILLING_MONITOR_DEFINITION` + its steps
-- [monitoring frontend](../../frontend/pages/monitoring.md) — the Orchestrator that calls GET + `tick` + `runBillingMonitor`
+- [monitoring frontend](../../frontend/pages/monitoring.md) — the Orchestrator poll calls GET + `runBillingMonitor` + `tickTimeTriggers` (POST `{action:'tick'}`) on every 10s cycle; the Vercel cron covers the server-only path daily

@@ -69,6 +69,29 @@ export async function validateGraph(graph, trigger) {
     if (node.next && !byId.has(node.next)) messages.push(`Node "${node.id}" points to missing node "${node.next}".`);
   }
 
+  // Optional TASK groups (authoring metadata → megaGroups). Additive; absent =>
+  // flat rendering (today's behavior). A group references system/task node ids
+  // (condition nodes emit no step, so they cannot be group members).
+  if (graph?.groups !== undefined) {
+    if (!Array.isArray(graph.groups)) {
+      messages.push('graph.groups must be an array when present.');
+    } else {
+      const groupIds = new Set();
+      for (const group of graph.groups) {
+        if (!group?.id) { messages.push('Every TASK group needs an id.'); continue; }
+        if (groupIds.has(group.id)) messages.push(`Duplicate group id "${group.id}".`);
+        groupIds.add(group.id);
+        if (!group.name || !String(group.name).trim()) messages.push(`Group "${group.id}" needs a name.`);
+        const nodeIds = Array.isArray(group.nodeIds) ? group.nodeIds : [];
+        for (const ref of nodeIds) {
+          const member = byId.get(ref);
+          if (!member) messages.push(`Group "${group.id}" references missing node "${ref}".`);
+          else if (member.kind === 'condition') messages.push(`Group "${group.id}" cannot contain condition node "${ref}".`);
+        }
+      }
+    }
+  }
+
   // Cycle / reachability check: walk from entry, guard against revisits.
   if (byId.size && graph?.entry && byId.has(graph.entry)) {
     const visited = new Set();
@@ -178,5 +201,21 @@ export async function compileGraph(graph, trigger) {
       if (CONDITIONS[negation]) conditions[negation] = CONDITIONS[negation].description;
     }
   }
-  return { steps, conditions };
+
+  // TASK groups → megaGroups. Pure post-pass, derived ONLY from graph.groups:
+  // it is NEVER passed into compileChain, so `steps`/`conditions` above are
+  // byte-for-byte identical whether or not groups are authored. megaGroups is
+  // presentation/authoring metadata (exactly like wf7's megaGroups). Drops any
+  // condition/dangling ids and empty groups; omitted entirely when there are none.
+  const stepById = new Map(steps.map((step) => [step.id, step]));
+  const megaGroups = (graph.groups || [])
+    .map((group) => ({
+      id: group.id,
+      name: group.name,
+      info: group.info || '',
+      stepIds: (group.nodeIds || []).filter((id) => stepById.has(id)),
+    }))
+    .filter((group) => group.stepIds.length > 0);
+
+  return { steps, conditions, ...(megaGroups.length ? { megaGroups } : {}) };
 }

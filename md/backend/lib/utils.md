@@ -1,7 +1,7 @@
-# Backend Utils — config, db, http, mailer, gemini, blobStore, multipart, normalizers
+# Backend Utils — config, db, http, mailer, gemini, blobStore, multipart, normalizers, excelParser
 
-**Source:** `api/_lib/config.js`, `api/_lib/db.js`, `api/_lib/http.js`, `api/_lib/mailer.js`, `api/_lib/gemini.js`, `api/_lib/blobStore.js`, `api/_lib/multipart.js`, `api/_lib/normalizers.js`
-**Read this when:** touching env/credentials, the Neon client, HTTP response/error helpers, outbound email, PDF AI extraction, Blob upload, multipart parsing, or the name/date/key normalizers.
+**Source:** `api/_lib/config.js`, `api/_lib/db.js`, `api/_lib/http.js`, `api/_lib/mailer.js`, `api/_lib/gemini.js`, `api/_lib/blobStore.js`, `api/_lib/multipart.js`, `api/_lib/normalizers.js`, `api/_lib/excelParser.js`
+**Read this when:** touching env/credentials, the Neon client, HTTP response/error helpers, outbound email, PDF AI extraction, Blob upload, multipart parsing, name/date/key normalizers, or workbook/patient-payload parsing.
 
 ## What each file does
 - **`config.js`** — every credential as `export const X = process.env.X || '<hardcoded fallback>'`: `DATABASE_URL`, `GEMINI_API_KEY`, `GEMINI_MODEL` (`gemini-2.5-flash`), `BLOB_READ_WRITE_TOKEN`, and SMTP (`SMTP_HOST/PORT/SECURE/USER/PASS/FROM`). Env vars override. **These are live secrets committed to the repo** — rotate before real use (see [ops](../../ops/scripts-and-deploy.md)).
@@ -11,11 +11,13 @@
 - **`gemini.js`** — wraps `@google/genai` to extract missing patient/order fields from an order PDF buffer (used by the `ai.extractMissingDataFromPdf` task).
 - **`blobStore.js`** — `uploadPdfBufferToBlob(...)` (skips gracefully with no token), plus PDF↔order-number helpers `orderNumberFromPdfName` / `withPdfOrderKey` used by the intake pipeline.
 - **`multipart.js`** — parses `multipart/form-data` uploads into fields + files (workbook + `unsignedZip`/`signedZip`). Fields arrive as arrays (hence `firstField` in the route).
-- **`normalizers.js`** — the identity/key + date functions the whole domain shares (below).
+- **`normalizers.js`** — the identity/key + date functions the whole domain shares (below). **Canonical owner of the `unitKey`/`recordContextKey` dedup formulas** — see the Data shapes section for the authoritative definitions.
+- **`excelParser.js`** (~347 lines) — **unrouted parsing helper**; not mounted as a serverless function. Defines internal constants `PATIENT_HEADERS` and `ORDER_HEADERS` (objects mapping column-key → accepted alias strings) and internal `makePatientPayload`/`makeOrderPayload`/`makeReferencePayload` helpers. The single public export is `parseWorkflowWorkbook(filePath) -> joined[]` where each entry is `{patientPayload, orderPayload, referencePayload, sourceRows}` — joins patient Sheet1 rows with order Sheet2 rows (order-only and patient-only rows both included) and maps them into the intake payload shape consumed by the bulk-upload pipeline.
 
 ## Key functions / exports
 | file | export | signature -> return | behavior |
 |---|---|---|---|
+| excelParser.js | `parseWorkflowWorkbook` | `async (filePath) -> {patientPayload, orderPayload, referencePayload, sourceRows}[]` | joins patient + order xlsx sheets into the intake payload shape; the only public export |
 | db.js | `getSql` | `() -> neon sql` | cached tagged-template client |
 | db.js | `jsonParam` | `(value) -> param` | jsonb bind helper |
 | http.js | `sendJson`/`methodNotAllowed`/`readJson`/`handleError` | see above | HTTP plumbing every route uses |
@@ -31,8 +33,9 @@
 ## Data shapes
 ```js
 // password/session/etc. shapes live in md/backend/lib/auth.md, not here.
-// normalizers key formats:
+// normalizers key formats — CANONICAL DEFINITIONS (cross-references in repositories.md and patient-model.md point here):
 patientKey  = `${normalizeName(name)}|${dob.toLowerCase()}|${normalizeName(mrn)}`
+unitKey     = patientKey  // same function; the stable Patient Unit identity
 recordContextKey = `${unitKey}|${normalizeName(HHAH.name)}|${normalizeName(PG.name)}`
 sendEmail() -> { sent:true, messageId, accepted, rejected }
             |  { sent:false, skipped:true, reason:'smtp_not_configured'|'no_recipient'|'smtp_error: …' }

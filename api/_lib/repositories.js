@@ -539,6 +539,17 @@ export async function getHhahById(id) {
   return rows[0] || null;
 }
 
+// Active agencies for the daily-intake trigger. home_health_agencies has no
+// `active` column, so every agency row is treated as active.
+export async function listActiveAgencies() {
+  const sql = getSql();
+  return sql`
+    SELECT id, name, contact_info
+    FROM home_health_agencies
+    ORDER BY created_at, name
+  `;
+}
+
 // Find the Patient RECORD for this care context (Unit + HHAH + PG). A different
 // HHAH or PG is a different record, so the reference payload is required to key it.
 export async function findPatient(patientPayload, referencePayload) {
@@ -1806,6 +1817,53 @@ export async function resolveOverdueSigningTasksForOrders(orderIds = [], date = 
   return { resolved: rows.map((row) => row.id) };
 }
 
+// R1 daily-reconcile helper (modeled on resolveOverdueSigningTasksForOrders):
+// when an agency uploads while today's daily run is in flight and that agency's
+// item is still blocked on the open "Ask agency to bulk upload" task, auto-complete
+// that task so the item settles. The ask task is the "not uploaded" arm of the
+// daily graph: a human task (task_key='human.performActions') gated on the
+// agency_not_uploaded condition. We key on the CONDITION rather than a hardcoded
+// step_id because the builder compiler assigns auto-generated node ids
+// (e.g. 'nmrb1e11h3'), not stable literals like 't1' — the condition is the stable
+// identifier of that branch. Matches the uploading agency by reference_payload.HHAH.id.
+// Idempotent — the status='active' clause matches zero rows on a second same-day upload.
+export async function resolveOpenAgencyAskTaskForRun(runId, agencyId) {
+  if (!runId || !agencyId) return { resolved: [] };
+  const sql = getSql();
+  const rows = await sql`
+    UPDATE workflow_task_runs t
+    SET status = 'completed',
+        notes = 'Agency uploaded — resolved automatically',
+        output = ${await jsonParam({ autoResolved: true, reason: 'agency_uploaded_after_ask' })}::jsonb,
+        completed_at = now(),
+        updated_at = now()
+    FROM workflow_items i
+    WHERE t.item_id = i.id
+      AND t.run_id = ${runId}
+      AND t.task_key = 'human.performActions'
+      AND t.condition = 'agency_not_uploaded'
+      AND t.status = 'active'
+      AND (i.reference_payload->'HHAH'->>'id') = ${String(agencyId)}
+    RETURNING t.id, t.item_id, t.run_id
+  `;
+  // Settle each affected item (completed when all its non-skipped tasks are
+  // completed, else running) and recompute run status — identical loop to
+  // resolveOverdueSigningTasksForOrders.
+  const runIds = new Set();
+  for (const row of rows) {
+    const itemTasks = await sql`SELECT status FROM workflow_task_runs WHERE item_id = ${row.item_id}`;
+    const live = itemTasks.filter((task) => task.status !== 'skipped');
+    const allDone = live.length > 0 && live.every((task) => task.status === 'completed');
+    await sql`
+      UPDATE workflow_items SET status = ${allDone ? 'completed' : 'running'}, updated_at = now()
+      WHERE id = ${row.item_id}
+    `;
+    runIds.add(row.run_id);
+  }
+  for (const rid of runIds) await updateRunStatus(rid);
+  return { resolved: rows.map((row) => row.id) };
+}
+
 export async function listPgUnsignedOrders(pgId = null) {
   const sql = getSql();
   return sql`
@@ -1898,20 +1956,30 @@ function cpoMonthDatesForEpisode(episode) {
   return months;
 }
 
-function cpoStatusForMonth(cpoMonth, episodeStatus) {
+// AC10: the TRUE billable flip site. A CPO month flips to 'billable' only when
+// the episode is billable AND >=30 CPO minutes were captured. `monthReady` is an
+// optional CPO-month-readiness co-requisite (businessRules.evaluateCpoMonthReadiness
+// .dataComplete, surfaced on the rcm payload): when it is an explicit `false` the
+// billable flip is suppressed even at >=30 minutes (incomplete demographics or no
+// signed 485). `monthReady === null/undefined` means "readiness unknown" and leaves
+// the existing minutes>=30 rule intact — so callers that don't thread a verdict
+// (e.g. runBillingMonitorPass) behave byte-for-byte as before.
+function cpoStatusForMonth(cpoMonth, episodeStatus, monthReady = null) {
   const hasMinutes = Number(cpoMonth.cpo_min || 0) >= 30;
   const episodeBillable = episodeStatus === 'billable';
+  const readinessBlocks = monthReady === false;
   return {
-    status: episodeBillable && hasMinutes ? 'billable' : 'not_billable',
+    status: episodeBillable && hasMinutes && !readinessBlocks ? 'billable' : 'not_billable',
     reason: {
       episodeBillable,
       cpoMin: Number(cpoMonth.cpo_min || 0),
       cpoMinutesCaptured: hasMinutes,
+      ...(monthReady === null ? {} : { cpoMonthReady: monthReady }),
     },
   };
 }
 
-export async function updateCpoMinutes({ cpoMonthId, cpoMin = 30 }) {
+export async function updateCpoMinutes({ cpoMonthId, cpoMin = 30, monthReady = null }) {
   const sql = getSql();
   const current = (await sql`
     SELECT cm.*, e.status AS episode_status
@@ -1921,7 +1989,7 @@ export async function updateCpoMinutes({ cpoMonthId, cpoMin = 30 }) {
     LIMIT 1
   `)[0];
   if (!current) throw new Error('CPO month not found');
-  const next = cpoStatusForMonth({ ...current, cpo_min: cpoMin }, current.episode_status);
+  const next = cpoStatusForMonth({ ...current, cpo_min: cpoMin }, current.episode_status, monthReady);
   const rows = await sql`
     UPDATE cpo_months
     SET cpo_min = ${Number(cpoMin) || 0},

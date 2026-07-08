@@ -9,10 +9,10 @@ Defines the entire vocabulary the workflow builder can use, as data. `TRIGGERS`,
 ## Key functions / exports
 | name | signature (params -> return) | behavior in one line | called by |
 |------|------------------------------|----------------------|-----------|
-| `TRIGGERS` | `[{ key, label, description, params? }]` | 3 trigger types: `document_upload`, `manual`, `time_interval` (declares `params:['intervalSeconds']`) | `builderCompiler.validateGraph`, `builderCatalog()` |
-| `ACTIONS` | `{ [key]: { key, kind:'system', label, taskKey, actor? } }` | 13 system actions, each pointing at an existing `taskRegistry` key; only `ai_extract_pdf_fields` sets `actor:'ai'` (others default to `system` at compile) | `builderCompiler` (validate + compile), `builderCatalog()` |
-| `HUMAN_ACTIONS` | `{ [key]: { key, label, inputs[], validate?, execute? } }` | 9 checklist actions (see table below) | `runHumanActions`, `builderCompiler` (validate + label fallback), `builderCatalog()` |
-| `CONDITIONS` | `{ [key]: { key, label, negation, description } }` | 18 condition keys (9 pairs), every key names its negation; all keys are implemented in `taskRegistry.evaluateCondition` | `builderCompiler` (branch compilation + per-key descriptions), `builderCatalog()` |
+| `TRIGGERS` | `[{ key, label, description, params? }]` | 4 trigger types: `document_upload`, `manual`, `time_interval` (params:['intervalSeconds']), `daily_time` (params:['hour','minute','tz'] — fires once per day per active agency) | `builderCompiler.validateGraph`, `builderCatalog()` |
+| `ACTIONS` | `{ [key]: { key, kind:'system', label, taskKey, actor? } }` | 19 system actions; `ai_extract_pdf_fields`, `run_ai_service`, `run_ai_audit`, `run_ai_rework`, `ai_extract_with_patterns` set `actor:'ai'`; 6 new Daily Agency Intake → RCM Pipeline actions (see table below) | `builderCompiler` (validate + compile), `builderCatalog()` |
+| `HUMAN_ACTIONS` | `{ [key]: { key, label, inputs[], validate?, execute? } }` | 12 checklist actions (9 original + 3 new agency-outreach: `call_agency`, `sms_agency`, `email_agency`) | `runHumanActions`, `builderCompiler` (validate + label fallback), `builderCatalog()` |
+| `CONDITIONS` | `{ [key]: { key, label, negation, description } }` | 24 condition keys (12 pairs); 3 new pairs for the RCM pipeline: `agency_uploaded`/`agency_not_uploaded`, `ai_service_failed`/`ai_service_ok`, `audit_failed`/`audit_passed` | `builderCompiler` (branch compilation + per-key descriptions), `builderCatalog()` |
 | `runHumanActions` | `({ actions, results, item }) -> { errors: {actionId: msg}, outputs: {actionId: out} }` | Validates ALL actions first (unknown actionKey = error); any error → `{ errors, outputs:{} }` and NO execute runs; else runs each `execute` in order (no-execute actions output `{ done:true }`) | `taskRegistry['human.performActions']` |
 | `builderCatalog` | `() -> { triggers, actions:{system[],human[]}, conditions[] }` | Palette for the UI — strips `taskKey`/`validate`/`execute`, keeps key/label/kind/inputs/negation/description | `api/workflows/index.js` action `catalog` |
 | `resolveOrderForItem` (internal) | `(item) -> order row \| null` | Real order for an item: `extraction_payload.orderId` (stamped by a prior Create-order step) via `findOrderById`, else `order_payload.order_info.order_number` via `findOrder` | `mark_order_sent` validate + execute |
@@ -31,6 +31,19 @@ Defines the entire vocabulary the workflow builder can use, as data. `TRIGGERS`,
 | `add_cpo_minutes` | minutes | `minutes >= 30` AND `item.extraction_payload.cpoMonthId` present | `updateCpoMinutes({ cpoMonthId, cpoMin })`; returns `{ cpoMonthId, cpoMin, status }` |
 | `mark_order_sent` | (none) | `resolveOrderForItem(item)` finds a row (async validate) | `markOrderSentToPhysician(order.id)`; throws `NO_LINKED_ORDER_MESSAGE` if the order vanished between validate and execute |
 | `confirm_checklist` | confirmed | `confirmed === true` | none → output `{ done:true }` |
+| `call_agency` | confirmed, note | `confirmed === true` | placeholder only — no live telephony; returns `{ channel:'call', placeholder:true, note }` |
+| `sms_agency` | confirmed, note | `confirmed === true` | placeholder only — no SMS integration; returns `{ channel:'sms', placeholder:true, note }` |
+| `email_agency` | to, subject, body, confirmed | valid email `to`, `confirmed === true` | `sendEmail(...)` (to = agency contact email, pre-fillable from `referencePayload.HHAH.contact.email`); returns `{ channel:'email', email_sent, email_skipped, email_reason }` |
+
+New system actions added for the Daily Agency Intake → RCM Pipeline:
+| actionKey | taskKey | actor | behavior |
+|-----------|---------|-------|----------|
+| `check_agency_upload` | `agency.checkUploadedToday` | system | queries `uploaded_documents` for the item's agency + `dayBucket`; stamps `agency_uploaded`/`agency_not_uploaded` |
+| `ai_extract_with_patterns` | `ai.extractWithPatterns` | ai | Tier 1 regex extraction (referenceLogic/extraction.js) → Tier 2 Gemini fallback for unfilled fields |
+| `run_ai_service` | `ai.runService` | ai | CC-note generation + CPO minute distribution (referenceLogic/aiService.js); stamps `ai_service_failed`/`ai_service_ok` |
+| `generate_rcm` | `rcm.generate` | system | CPT decision tree (G0179/G0180/G0181/G0182), upserts `rcm_records` (referenceLogic/rcm.js) |
+| `run_ai_audit` | `ai.audit` | ai | rules R1–R4 audit over `rcm_records`; writes `audit_records`; stamps `audit_failed`/`audit_passed` |
+| `run_ai_rework` | `ai.rework` | ai | bounded auto-fix + re-audit loop (up to 3 cycles); re-stamps `audit_failed`/`audit_passed` |
 
 `runHumanActions` input (from `human.performActions`):
 ```js
@@ -53,6 +66,8 @@ Catalog response (per `builderCatalog()`):
 - `sendEmail` (mailer.js) never throws — SMTP failure returns `{ sent:false, skipped:true, reason }`, so email actions COMPLETE even when nothing was delivered; check `email_sent` in the task output, not the task status.
 - Every `CONDITIONS` key must also be handled by `taskRegistry.evaluateCondition`; a catalog-only key evaluates false at runtime → the gated step always skips. Negations must be symmetric (`a.negation === b.key` and vice versa) or the compiler stamps a wrong false-branch condition.
 - Unknown `actionKey` at runtime is a per-action validation error (`Unknown action "x"`), not a crash — old runs survive palette renames only until someone submits.
+- `time_interval` and `daily_time` triggers fire via two paths: (a) the Orchestrator's 10s poll now calls `tickTimeTriggers()` (which posts `{action:'tick'}`) as well as `runBillingMonitor`; (b) a Vercel cron (`vercel.json` `0 17 * * *`) hits `GET /api/workflow-runs?action=tick` daily. Without at least one of these running, neither trigger type advances.
+- `daily_time` trigger params (`hour`/`minute`/`tz`) control the idempotency key (one run per agency per calendar day in the configured tz). The Vercel cron fires unconditionally at 17:00 UTC; whether that coincides with the configured hour/minute is the operator's responsibility.
 - `add_cpo_minutes` depends on the item carrying `extraction_payload.cpoMonthId` — only billing-monitor issue items have it (stamped by `runBillingMonitorHandler` in `api/workflow-runs/index.js`).
 - Date validation is strict `YYYY-MM-DD` string (`YMD_RE` + `Date.parse`) — Date objects or ISO datetimes are rejected.
 

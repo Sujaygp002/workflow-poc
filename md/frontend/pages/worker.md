@@ -1,19 +1,19 @@
-# Worker Pages — employee 2FA portal with task buckets + per-action checklist detail
+# Worker Pages — employee portal with task buckets + per-action checklist detail
 
 **Source:** `src/pages/worker/WorkerPortal.jsx`, `src/pages/worker/WorkerTaskDetail.jsx`
-**Read this when:** changing the worker login/TOTP flow, the Untouched/Processing/Done buckets, how a task is opened/claimed, any per-action input (builder actions or legacy system-workflow panels), or the complete-task submit payload/error contract.
+**Read this when:** changing the worker login flow, the Untouched/Processing/Done buckets, how a task is opened/claimed, any per-action input (builder actions or legacy system-workflow panels), or the complete-task submit payload/error contract.
 
 ## What it does
-`WorkerPortal` is the standalone `/worker` app (own chrome, no sidebar): two-step login (username/password → 6-digit TOTP via `workerLogin`/`workerTotp`), then three bucket tabs — **Untouched | Processing | Done** — fed by `fetchMyBuckets()` (bearer-scoped `GET /api/work-items`) with a 5s poll. Clicking an Untouched/Processing card calls `openWorkItem` — the API claims the task, stamps `opened_at` (Untouched → Processing) and returns the checklist detail; Done cards open read-only from the bucket row alone. `WorkerTaskDetail` renders the context panel (patient/order summary + PDF iframe) plus one input row per action, and submits `completeDbWorkItem` — builder tasks send `payload.actionResults`, legacy system-workflow tasks reuse the old WorkBucket panels (email compose, CPO minutes, missing-fields editor).
+`WorkerPortal` is the standalone `/worker` app (own chrome, no sidebar): **single-step login** (username + password via `workerLogin`, which returns `{token, employee}` directly — no TOTP second step), then three bucket tabs — **Untouched | Processing | Done** — fed by `fetchMyBuckets()` (bearer-scoped `GET /api/work-items`) with a 5s poll. Clicking an Untouched/Processing card calls `openWorkItem` — the API claims the task, stamps `opened_at` (Untouched → Processing) and returns the checklist detail; Done cards open read-only from the bucket row alone. `WorkerTaskDetail` renders the context panel (patient/order summary + PDF iframe) plus one input row per action, and submits `completeDbWorkItem` — builder tasks send `payload.actionResults`, legacy system-workflow tasks reuse the old WorkBucket panels (email compose, CPO minutes, missing-fields editor).
 
 ## Key functions / exports
 | name | signature (params -> return) | behavior in one line | called by |
 |---|---|---|---|
-| `WorkerPortal` (default) | `() -> JSX` | Phase machine `boot → login → totp → portal`; session restore, poll, tabs, detail swap | `src/WorkerApp.jsx` |
+| `WorkerPortal` (default) | `() -> JSX` | Phase machine `boot → login → portal`; session restore, poll, tabs, detail swap | `src/WorkerApp.jsx` |
 | `loadBuckets` | `() -> Promise<boolean>` | Fetch `{employee, untouched, processing, done}`; 401 → `resetToLogin('session expired')` | mount restore, 5s poll, open/back/complete |
 | `openTask` | `(row) -> Promise` | `openWorkItem(row.id)` claims + returns detail; merges bucket row into `opened.task` to keep joined fields | `TaskCard` onOpen (untouched/processing) |
 | `detailFromDoneRow` | `(row) -> detail` | Builds a `readOnly:true` detail straight from the bucket row (Done tasks cannot be re-opened via the API) | `TaskCard` onOpen (done) |
-| `resetToLogin` | `(message) -> void` | Clears worker token + all portal state, shows amber notice on the login form | 401 paths, sign-out, TOTP "different account" |
+| `resetToLogin` | `(message) -> void` | Clears worker token + all portal state, shows amber notice on the login form | 401 paths, sign-out |
 | `TaskCard` | `({ row, bucket, onOpen, opening }) -> JSX` | Card: name, workflow badge, action count, patient/order chips, per-bucket timestamp + CTA (Open/Resume/View) | bucket list |
 | `WorkerTaskDetail` (default) | `({ detail, onBack, onCompleted, onAuthExpired }) -> JSX` | Context + checklist + submit; read-only rendering for Done | `WorkerPortal` |
 | `initialActionResult` | `(action, payload) -> object` | Prefill per `actionKey` (email to/subject/body from references + `subjectTemplate` interpolation, dates via `ymd`, `minutes:'30'`, …) | detail `useState` init |
@@ -55,7 +55,7 @@ Legacy email panels: `LEGACY_EMAIL_TASKS` keyed by `task.task_key` — `area.sen
 - `ymd()` only accepts strings starting `YYYY-MM-DD`; Date objects or other formats prefill as `''` (empty date inputs), never crash. `interpolate` leaves unresolved `{{tokens}}` visible in the subject.
 - "Back to buckets" deliberately keeps the task in Processing (`opened_at` stays stamped); only successful completion moves it to Done (`handleCompleted` switches to the Done tab + green notice).
 - The 5s poll skips when `document.hidden` and only runs in `phase === 'portal'`; any 401 from poll/open/complete funnels through `resetToLogin` / `onAuthExpired` with the "session expired" notice.
-- Auth tokens live under kind `'worker'` (`getAuthToken/clearAuthToken('worker')` in `src/lib/authApi.js`); `workerTotp` stores the real token, `workerLogin` only returns a `tempToken`. Session restore on mount = try `fetchMyBuckets()` with the stored token.
+- Auth tokens live under kind `'worker'` (`getAuthToken/clearAuthToken('worker')` in `src/lib/authApi.js`); `workerLogin` returns `{token, employee}` and stores the token immediately — there is no TOTP step. Session restore on mount = try `fetchMyBuckets()` with the stored token.
 - CPO minutes: legacy panel seeds from `payload.extraction.cpoMin` when ≥30 else `'30'`; builder `add_cpo_minutes` always seeds `'30'`. Min-30 enforcement is server-side; inputs only set `min="30"`.
 - `PdfPanel` uses `pdf.blobUrl || pdf.url` in an iframe and shows a signed/unsigned badge from `pdf.signed === true`; no URL renders the "filename must match the order number" hint.
 
@@ -68,7 +68,7 @@ Legacy email panels: `LEGACY_EMAIL_TASKS` keyed by `task.task_key` — `area.sen
 
 ## Related
 - [work-items route](../../backend/routes/work-items.md) — buckets/open/complete API this page drives
-- [auth-model](../../business/auth-model.md) — employee accounts, TOTP, worker bearer sessions
+- [auth-model](../../business/auth-model.md) — employee accounts, single-factor login, worker bearer sessions
 - [task-registry](../../backend/lib/task-registry.md) — server execution of `human.performActions` + legacy task fns
 - [frontend lib](../lib.md) — `fetchMyBuckets`/`openWorkItem`/`completeDbWorkItem`/`authApi` contracts
 - [eligibility-billing](../../business/eligibility-billing.md) — why CPO-minutes and billing email tasks exist

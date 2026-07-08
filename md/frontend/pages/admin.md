@@ -1,10 +1,10 @@
 # Admin Pages — Employees, Entity, and External Users management screens
 **Source:** `src/pages/employees/Employees.jsx`, `src/pages/entity/Entity.jsx`, `src/pages/external/ExternalUsers.jsx`
-**Read this when:** changing account creation/deactivation UI, the one-time TOTP enrollment modal, HHAH/PG/practitioner entity creation, PG↔practitioner mapping, practitioner-login NPI matching, or password-reset flows.
+**Read this when:** changing account creation/deactivation UI, HHAH/PG/practitioner entity creation, PG↔practitioner mapping, practitioner-login NPI matching, or password-reset flows.
 
 ## What it does
 Three internal admin screens (main app sidebar, no auth gate on the pages themselves):
-- **`/employees`** (`Employees.jsx`) — CRUD-ish management of internal worker-portal accounts: create (with one-time 2FA secret modal), reset password, activate/deactivate toggle.
+- **`/employees`** (`Employees.jsx`) — CRUD-ish management of internal worker-portal accounts: create, reset password, activate/deactivate toggle.
 - **`/entity`** (`Entity.jsx`) — create the reference entities: Agencies (HHAH), Physician Groups (PG), Practitioners; and map PGs to practitioners (the link the Coverage Map and practitioner logins depend on).
 - **`/external-users`** (`ExternalUsers.jsx`) — create/manage the logins for the HHAH portal (`/hhh-login`) and PG portal (`/pg-login`), including PG *practitioner* logins that must map (by NPI) to an Entity-page practitioner.
 
@@ -13,10 +13,8 @@ Three internal admin screens (main app sidebar, no auth gate on the pages themse
 |---|---|---|---|
 | `Employees` (default) | `() -> JSX` | Lists employees via `listEmployees()`, hosts AddEmployeeCard + per-row actions | route `/employees` in `src/App.jsx` |
 | `AddEmployeeCard` | `({onCreated}) -> JSX` | Validates (name+username required, password ≥8, match), calls `createEmployee`, passes result up | `Employees` |
-| `TwoFactorModal` | `({enrollment, onClose}) -> JSX` | Shows `totpSecret` (Base32) + `otpauthUrl` ONCE after create, with copy buttons | `Employees` when `enrollment` set |
 | `ResetPasswordRow` (both files) | `({employee\|user, onDone, onCancel}) -> JSX` | Inline `<tr>` form; calls `updateEmployee`/`updateExternalUser` with `{id, password}` | employee/user table rows |
 | `toggleActive` (both files) | `(row) -> Promise` | `window.confirm` on deactivate only, then `update*({id, active})` + refresh | Active toggle + Deactivate/Reactivate buttons |
-| `copyText` | `(value) -> Promise<bool>` | Clipboard API with hidden-textarea `execCommand` fallback (http contexts) | `CopyButton` |
 | `Entity` (default) | `() -> JSX` | Three `EntityCard`s (agency/PG/practitioner) + PG↔practitioner mapping panel | route `/entity` |
 | `mergeCreated` | `(listKey, row) -> void` | Optimistically prepends the POST-response row into `data[listKey]`, deduped by id, so it's usable before the follow-up GET | `submitAgency/Pg/Practitioner` |
 | `submitMapping` | `(event) -> Promise` | Loops `mapPgToPractitioner({pgId, practitionerId})` **sequentially** (API maps one per call), collects per-practitioner failures | mapping form |
@@ -30,9 +28,10 @@ Employee row (from `listEmployees()`): `{ id, username, display_name, job_role, 
 ```js
 // payload
 { username, displayName, jobRole?, password }
-// response (drives TwoFactorModal — totpSecret shown exactly once)
-{ employee: { id, display_name, username, ... }, totpSecret, otpauthUrl }
+// response
+{ employee: { id, display_name, username, job_role, totp_enabled, active, created_at, updated_at } }
 ```
+Note: TOTP enrollment was removed from the login flow. The server still generates and stores a `totp_secret` in the DB column (NOT NULL constraint) but it is unused at login. No secret is returned to the client.
 External user row: `{ id, username, display_name, user_type: 'hhah'|'pg', role: 'admin'|'practitioner', agency_name?, pg_name?, practitioner_name?, npi?, active, created_at }`.
 `createExternalUser` payload:
 ```js
@@ -46,7 +45,7 @@ Entity reference (from `fetchReferenceData()`): `{ hhahs: [{id,name,npi,contact_
 PG↔practitioner mapping state lives in `physician_groups.contact_info.physician_ids[]` (array of practitioner ids) — the mapping panel and PG card "N mapped practitioners" both read it.
 
 ## Invariants & gotchas
-- **TOTP secret is shown exactly once**: the `TwoFactorModal` renders from the `createEmployee` response held in local state; there is no re-fetch path. Closing the modal loses the secret forever (server stores only the hash-side).
+- **Worker login is single-factor** (username + password only); TOTP enrollment was removed. The `totp_secret` column still exists and is populated at employee creation (DB NOT NULL), but it is not verified at login. The `totp_enabled` field in the employee row is legacy and unused by the login path — see the verified code facts in `api/auth/index.js` `workerLogin`.
 - `MIN_PASSWORD = 8` is duplicated in `Employees.jsx` and `ExternalUsers.jsx` — change both (server also validates, see [auth routes](../../backend/routes/auth.md)).
 - Practitioner login creation is a **two-step dependency**: the practitioner must first exist on the Entity page; `CreateExternalUserCard` filters `reference.practitioners` to exact `npi_digits === npiDigitsOf(npi)` matches, auto-selects when exactly one matches, and clears a selection that stops matching. The server re-verifies the NPI/practitioner match — the client filter is UX, not security.
 - For HHAH users the role is silently forced to `'admin'` in the payload; the role radio only appears for PG type.

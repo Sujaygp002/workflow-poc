@@ -26,9 +26,9 @@
 
 **Response** `201`:
 ```js
-{ run:  /* first target workflow's run */,
+{ run:  /* first target workflow's full run object */,
   tasks:/* first run's task rows */,
-  runs: [ { workflowId, runId, taskCount } ],   // one per target workflow
+  runs: [ /* full run object */ ],   // one per target workflow (same shape as `run`)
   inputSummary: { joinedRows, patientRows, orderRows, … } }
 ```
 

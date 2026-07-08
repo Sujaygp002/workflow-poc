@@ -55,6 +55,12 @@ Maps every step `taskKey` (from the workflow definitions and builder-compiled st
 | `billing.addCpoMinutes` | `updateCpoMinutes({cpoMonthId, cpoMin})` with `cpoMin = max(30, payload.cpoMin)`; `ok:false` if `extraction_payload.cpoMonthId` missing |
 | `area.monitorExpectedUploads` / `.continueUploadWorkflow` / `.recordNotificationStatus` / `.waitForHhahUpload` | No-op markers for the area monitor flow |
 | `area.sendMissingUploadNotification` | Human: emails the HHAH (wraps `sendEmail` in try/catch → `ok:false` on throw); stamps `notification_sent` which gates `area-s5` |
+| `agency.checkUploadedToday` | Queries `uploaded_documents` for the item's agency + `dayBucket` (`extraction_payload.dayBucket`); stamps `agency_uploaded`/`agency_not_uploaded`. If no `agencyId` resolves from the item, returns `agency_not_uploaded` with `error:'no_agency_on_item'` |
+| `ai.extractWithPatterns` | Tier 1 regex over workbook payload fields (`referenceLogic/extraction.js`), Tier 2 Gemini fallback for unfilled fields; stamps `ai_extraction_success`/`ai_extraction_fail` |
+| `ai.runService` | CC-note generation + CPO minute distribution (`referenceLogic/aiService.js`); stamps `ai_service_failed`/`ai_service_ok`; **compliance: notes tagged `data_tags.generated_by='ai_service'`, never physician-signed** |
+| `rcm.generate` | CPT decision tree (G0179/G0180/G0181/G0182) over the item's eligible episodes; upserts `rcm_records` idempotently (referenceLogic/rcm.js) |
+| `ai.audit` | Runs rules R1–R4 over every `rcm_record` for the item's agency; writes/updates `audit_records` rows; stamps `audit_failed`/`audit_passed` |
+| `ai.rework` | Auto-fix + re-audit loop (up to 3 cycles) consuming structured `audit_records.rule_results`; re-stamps `audit_failed`/`audit_passed` |
 
 ## Data shapes
 
@@ -108,3 +114,4 @@ Maps every step `taskKey` (from the workflow definitions and builder-compiled st
 - [utils](./utils.md) — `gemini.js`, `mailer.js`, `normalizers.js` helpers used here
 - [eligibility & billing](../../business/eligibility-billing.md) — where billing inputs are computed
 - [patient model](../../business/patient-model.md) — Unit vs Record, con1/con2 fork
+- [reference logic](./reference-logic.md) — the five referenceLogic modules imported by the new RCM task keys

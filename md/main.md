@@ -5,7 +5,7 @@
 ## System in 10 lines
 Command Center is a DB-backed workflow platform for home-health (HHH) patient + order intake.
 - **Stack:** Vite + React + Tailwind SPA (`src/`), Vercel serverless functions (`api/`), Neon/Postgres over the serverless HTTP driver (`db/migrations`), Google Gemini (PDF field extraction), Vercel Blob (PDFs), nodemailer (best-effort email).
-- **Five surfaces:** Command Center admin SPA (Workflow builder, Orchestrator, Coverage Map, Employees, Entity, External Users) · Worker portal `/worker` (password + TOTP 2FA, three task buckets) · HHAH portal `/hhh-login` (upload) · PG portal `/pg-login` (admin dashboard / practitioner Bulk Sign).
+- **Four surfaces:** Command Center admin SPA (Workflow builder, Orchestrator, Coverage Map, Employees, Entity, External Users) · Worker portal `/worker` (username + password login, three task buckets) · HHAH portal `/hhh-login` (upload) · PG portal `/pg-login` (admin dashboard / practitioner Bulk Sign). All four use single-factor password authentication.
 - **Core loop:** an HHAH uploads documents → a workflow run starts (one item per row) → system steps run automatically, conditions branch, human **tasks** land in the assigned employee's **Untouched** bucket → the employee opens (Processing) and completes (Done, server-validated) → orders get sent → a PG practitioner bulk-signs.
 - **Workflows are user-built** in a no-code builder (trigger + system actions + if/else conditions + employee-assigned tasks-of-actions), stored as editable JSON and compiled to the engine's `steps[]`.
 
@@ -17,7 +17,7 @@ Command Center is a DB-backed workflow platform for home-health (HHH) patient + 
 | Order create/dedup, mark sent, mark signed, bulk sign, wf-signing | [business/orders-and-signing](business/orders-and-signing.md) | `api/_lib/repositories.js`, `api/_lib/workflowEngine.js` |
 | Eligible/billable logic, CPO months, billing monitor (Trigger 4) | [business/eligibility-billing](business/eligibility-billing.md) | `api/_lib/repositories.js`, `api/workflow-runs/index.js` |
 | Builder graph JSON, triggers, bucket lifecycle, validation-retry semantics | [business/builder-workflows](business/builder-workflows.md) | `api/_lib/builderCatalog.js`, `api/_lib/builderCompiler.js` |
-| Who can log in where, 2FA, roles, portal scoping | [business/auth-model](business/auth-model.md) | `api/_lib/auth.js`, `api/auth/index.js` |
+| Who can log in where, login policy, roles, portal scoping | [business/auth-model](business/auth-model.md) | `api/_lib/auth.js`, `api/auth/index.js` |
 | Add/modify a **system action** (a computer step) | [backend/lib/builder-catalog](backend/lib/builder-catalog.md) | `api/_lib/builderCatalog.js`, `api/_lib/taskRegistry.js` |
 | Add/modify a **human action** (checklist item) or its validation | [backend/lib/builder-catalog](backend/lib/builder-catalog.md) + [backend/lib/task-registry](backend/lib/task-registry.md) | `api/_lib/builderCatalog.js`, `api/_lib/taskRegistry.js` |
 | Add/modify a **condition** (yes/no question) | [backend/lib/builder-catalog](backend/lib/builder-catalog.md) + [backend/lib/task-registry](backend/lib/task-registry.md) | `api/_lib/builderCatalog.js`, `api/_lib/taskRegistry.js` |
@@ -27,7 +27,8 @@ Command Center is a DB-backed workflow platform for home-health (HHH) patient + 
 | Any SQL / repository function | [backend/lib/repositories](backend/lib/repositories.md) | `api/_lib/repositories.js` |
 | Password hashing, TOTP, sessions, adding an auth guard | [backend/lib/auth](backend/lib/auth.md) | `api/_lib/auth.js` |
 | Employee / external-user / session SQL | [backend/lib/identity-repo](backend/lib/identity-repo.md) | `api/_lib/identityRepo.js` |
-| Config/env, Neon client, HTTP helpers, email, Gemini, blob, multipart, normalizers | [backend/lib/utils](backend/lib/utils.md) | `api/_lib/{config,db,http,mailer,gemini,blobStore,multipart,normalizers}.js` |
+| Config/env, Neon client, HTTP helpers, email, Gemini, blob, multipart, normalizers, excelParser | [backend/lib/utils](backend/lib/utils.md) | `api/_lib/{config,db,http,mailer,gemini,blobStore,multipart,normalizers,excelParser}.js` |
+| The Daily Agency Intake → RCM Pipeline modules (agency upload check, extraction, CC-note/CPO service, RCM billing records, audit R1–R4, rework; `businessRules.js` pure utility library from BusinessRequirementsService.cs) | [backend/lib/reference-logic](backend/lib/reference-logic.md) | `api/_lib/referenceLogic/{agencyCheck,extraction,aiService,rcm,audit,rework,businessRules}.js` |
 | The login / employee / external-user API (`/api/auth`) | [backend/routes/auth](backend/routes/auth.md) | `api/auth/index.js` |
 | Save/list/delete builder workflows, the builder palette (`catalog`) | [backend/routes/workflows](backend/routes/workflows.md) | `api/workflows/index.js` |
 | List runs (Orchestrator feed), manual/time triggers, billing monitor, delete run | [backend/routes/workflow-runs](backend/routes/workflow-runs.md) | `api/workflow-runs/index.js`, `[id].js` |
@@ -42,7 +43,7 @@ Command Center is a DB-backed workflow platform for home-health (HHH) patient + 
 | Employees / Entity / External Users pages | [frontend/pages/admin](frontend/pages/admin.md) | `src/pages/employees/`, `entity/`, `external/` |
 | The `/hhh-login` or `/pg-login` portal UI | [frontend/pages/portals](frontend/pages/portals.md) | `src/pages/hhh/HhhLogin.jsx`, `src/pages/pg/PgLogin.jsx` |
 | The Orchestrator or the Coverage Map | [frontend/pages/monitoring](frontend/pages/monitoring.md) | `src/pages/orchestrator/Orchestrator.jsx`, `src/pages/map/` |
-| A table, column, foreign key, or write a migration | [db/schema](db/schema.md) | `db/migrations/001,002,003.sql` |
+| A table, column, foreign key, or write a migration | [db/schema](db/schema.md) | `db/migrations/001_core_intake.sql`, `002_cpo_billing_monitor.sql`, `003_identity_and_builder.sql` |
 | npm scripts, DB scripts, deploy, env/credentials, the 12-function cap | [ops/scripts-and-deploy](ops/scripts-and-deploy.md) | `package.json`, `scripts/*.js`, `vite.config.js`, `vercel.json`, `api/_lib/config.js` |
 
 ## The tree
@@ -60,7 +61,7 @@ md/
 │   ├── lib/                        ← the engine + primitives
 │   │   ├── auth.md · identity-repo.md · builder-catalog.md · builder-compiler.md
 │   │   ├── task-registry.md · workflow-engine.md · workflow-definitions.md
-│   │   ├── repositories.md · utils.md
+│   │   ├── repositories.md · utils.md · reference-logic.md
 │   └── routes/                     ← the HTTP surface (12 serverless functions)
 │       ├── auth.md · workflows.md · workflow-runs.md · work-items.md
 │       ├── bulk-upload.md · data-reads.md
@@ -82,5 +83,7 @@ md/
 8. **Line numbers rot — these docs reference file paths + function names.** If a function moved, grep for its name; don't trust a stale line number anywhere.
 
 ## Also see
-- `CLAUDE.md` (repo root) — conventions + dated Change Log of past changes.
+- `CLAUDE.md` (repo root) — conventions + dated Change Log of past changes. CLAUDE.md is a supplement (project conventions + history), not a competing second source of truth — this `md/` tree is the authoritative documentation source.
+- `ChatGPT.md` (repo root) — **legacy/stale**; references removed test123 credentials and dummy users that no longer exist. Superseded by this `md/` tree. Do not rely on it.
+- [GLOBAL.md](GLOBAL.md) — single-file distillation of the entire `md/` tree; use it for a full-system overview without reading every doc.
 - The user guide PDF / demo video document the product for humans; this tree documents the code for AI.

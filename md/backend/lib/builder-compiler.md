@@ -34,8 +34,25 @@ Compiled output (spliced next to the raw graph in the saved `definition`):
       actor:'system'|'ai', taskKey:'patient.create', actionKey:'create_patient' },   // system
     { id, name, preReq:[…], actor:'human', taskKey:'human.performActions',
       assigneeEmployeeId, actions:[{id,actionKey,label,params}] } ],                  // task
-  conditions: { patient_exists:'…desc…', patient_not_exists:'…desc…' } }
+  conditions: { patient_exists:'…desc…', patient_not_exists:'…desc…' },
+  // Present only when graph.groups was authored and ≥1 group has member steps:
+  megaGroups?: [{ id:'g1', name:'Update Object Module', info:'…desc…', stepIds:['n2','n3'] }] }
 ```
+
+## TASK groups → megaGroups
+
+`graph.groups` is optional authoring metadata. When present, `validateGraph` checks:
+- `graph.groups` is an array (if the field exists at all).
+- Every group has a non-empty `id` (no duplicates) and a non-empty `name`.
+- Every `nodeId` in a group's `nodeIds` references an existing node and is NOT a condition node (condition nodes emit no step, so they cannot be group members).
+
+`compileGraph` runs a **post-pass** after `compileChain` finishes:
+1. Walks `steps[]` (already compiled, byte-for-byte identical whether or not groups are authored).
+2. For each `graph.groups` entry, maps `nodeIds` → keep only ids that produced a step (filtering out condition/missing references with `stepById.has(id)`).
+3. Drops empty groups; omits `megaGroups` entirely when none remain.
+4. Returns `{ steps, conditions, ...(megaGroups.length ? { megaGroups } : {}) }`.
+
+`megaGroups` is **presentation-only**: the engine never reads it. It is saved alongside the compiled `steps` in `workflow_definitions.definition` and consumed by the renderer (`MegaGroupFlow` in `WorkflowDefinitionFlow.jsx`).
 
 ## Invariants & gotchas
 - **A condition node never becomes a step.** It only stamps `condition`/negation onto branch heads and merges branch tails into the join's preReq. If you look for a step whose `id` == a condition node id, you won't find one.
@@ -45,6 +62,7 @@ Compiled output (spliced next to the raw graph in the saved `definition`):
 - `time_interval` triggers require `intervalSeconds >= 5` (also clamped at run time in the tick handler).
 - Unknown `actionKey`/`conditionKey`/`kind` are validation errors — the source of truth for valid keys is [builder-catalog](./builder-catalog.md) (`ACTIONS`, `HUMAN_ACTIONS`, `CONDITIONS`, `TRIGGERS`).
 - The cycle check is a reachability walk from `entry` with a `visited` set; it reports the first revisited node. Unreachable nodes are simply never compiled (not an error).
+- **Groups are additive and invisible to the engine.** Adding or removing `graph.groups` produces zero change to `steps[]` or `conditions`. The compiled `megaGroups` array (in the saved definition) is strictly for the renderer.
 
 ## Change recipes
 1. **Add a new node kind:** handle it in `validateGraph`'s per-node `if/else`, in `compileChain`'s walk, and give it a `steps[]` emission; then teach the builder UI to create it ([builder page](../../frontend/pages/builder.md)).

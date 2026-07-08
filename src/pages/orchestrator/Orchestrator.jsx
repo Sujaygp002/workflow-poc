@@ -6,6 +6,7 @@ import {
   fetchWorkflowRuns,
   runBillingMonitor,
   runAreaIntakeCheck,
+  tickTimeTriggers,
 } from '../../lib/workflowApi';
 import {
   RunObjectSidebar,
@@ -262,6 +263,9 @@ export default function Orchestrator() {
       billingRunning.current = true;
       try {
         await runBillingMonitor();
+        // Also fire builder time triggers (time_interval + daily_time) so they
+        // run during demos even without the vercel cron.
+        await tickTimeTriggers().catch(() => {});
         setBillingError(null);
         await refresh();
       } catch (err) {

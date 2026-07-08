@@ -30,6 +30,18 @@ function prereqsSatisfied(step, taskMap) {
   });
 }
 
+// A step is UNREACHABLE when it has prerequisites but every one of them was
+// skipped (none completed) — i.e. no incoming branch was actually taken. The
+// engine treats `skipped` as satisfying a preReq so the untaken arm of a diamond
+// never blocks the join; but when BOTH/ALL arms feeding a join skipped, the join
+// itself sits on an untaken path and must skip too (rather than spuriously
+// activating). Steps with no prerequisites (entry) are always reachable.
+function prereqsAllSkipped(step, taskMap) {
+  const prereqs = step.preReq || [];
+  if (!prereqs.length) return false;
+  return prereqs.every((stepId) => taskMap[stepId]?.status === 'skipped');
+}
+
 function terminal(task) {
   return ['completed', 'skipped', 'failed'].includes(task.status);
 }
@@ -53,6 +65,18 @@ export async function runItemAutomation({ definition, itemId, context = {} }) {
       if (task.status !== 'pending') continue;
       const step = steps[task.step_id];
       if (!step || !prereqsSatisfied(step, taskMap)) continue;
+
+      // Unreachable join: every prerequisite skipped => this step is on an
+      // untaken path. Skip it (and let the skip cascade to its own successors).
+      if (prereqsAllSkipped(step, taskMap)) {
+        await updateTask(task.id, {
+          status: 'skipped',
+          completedAt: new Date().toISOString(),
+          output: { unreachable: true, skipped: true },
+        });
+        changed = true;
+        break;
+      }
 
       const freshItem = await getItem(itemId);
       const conditionMet = await evaluateCondition(step.condition, freshItem);

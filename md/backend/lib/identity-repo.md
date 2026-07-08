@@ -9,7 +9,7 @@ Thin JDBC-style data layer (Neon tagged-template SQL via `db.js getSql()`) for t
 | name | signature (params -> return) | behavior in one line | called by |
 |---|---|---|---|
 | `createEmployeeRow` | `({username, displayName, jobRole, passwordHash, totpSecret}) -> public row` | INSERT with lowercased username; RETURNING public cols (no secrets) | `createEmployee` in `api/auth/index.js` |
-| `findEmployeeByUsername` | `(username) -> full row \| null` | lowercased lookup; **includes `password_hash` + `totp_secret`** | `workerLogin`, `createEmployee` dup-check |
+| `findEmployeeByUsername` | `(username) -> full row \| null` | lowercased lookup; **includes `password_hash` + `totp_secret`** (totp_secret is stored but unused by the single-factor login) | `workerLogin`, `createEmployee` dup-check |
 | `getEmployee` | `(id) -> full row \| null` | by-id fetch, full row | `requireSession` (auth.js), `updateEmployeeRow`, `api/_lib/builderCompiler.js` |
 | `listEmployees` | `() -> public rows[]` | public cols only, newest first | `listEmployees` action; `api/workflows/index.js` (builder bucket assignment) |
 | `updateEmployeeRow` | `(id, {displayName, jobRole, active, passwordHash}) -> public row \| null` | read-modify-write; **`undefined` = keep current, `null`/value = overwrite**; bumps `updated_at` | `updateEmployee` in `api/auth/index.js` |
@@ -52,7 +52,7 @@ Thin JDBC-style data layer (Neon tagged-template SQL via `db.js getSql()`) for t
 - Updates are **read-modify-write** (SELECT then UPDATE), not atomic; concurrent updates last-write-wins per field snapshot. Fine for this POC's admin UI.
 - `updateExternalUserRow` deliberately cannot change `user_type`, `role`, `agency_id`, `pg_id`, `practitioner_id`, `npi` — scope is fixed at creation; deactivate + recreate to rescope.
 - `auth_sessions.principal_id` has **no FK** — deleting an employee/external user leaves orphan sessions, but `requireSession` 401s them because the principal fetch returns null.
-- `employees.totp_enabled` defaults true and nothing in the codebase ever sets it false — TOTP is effectively mandatory for employees.
+- `employees.totp_enabled` defaults true and `totp_secret` is stored, but the current single-factor login does not use them — they are legacy columns. TOTP verification is not part of the login flow.
 - `createEmployeeRow`/`createExternalUserRow` will throw the raw Postgres unique-violation on duplicate usernames; routes avoid this by dup-checking with `find*ByUsername` first (a benign race for a POC).
 - Session expiry cleanup is **lazy only** (`deleteExpiredSessions` inside `requireSession`); no scheduled job.
 

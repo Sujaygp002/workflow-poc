@@ -1,0 +1,134 @@
+{
+  "name": "Daily Agency Intake -> RCM Pipeline",
+  "description": "Fires daily per active agency. If the agency has not uploaded, a human reaches out (call/sms/email). If it has, run AI extraction -> AI CC-note/CPO service -> RCM generation -> AI audit -> AI rework, with human tasks gated on each failure condition.",
+  "trigger": { "type": "daily_time", "hour": 12, "minute": 0, "tz": "America/Chicago" },
+  "graph": {
+    "entry": "n1",
+    "nodes": [
+      {
+        "id": "n1",
+        "kind": "system",
+        "name": "Check agency upload",
+        "actionKey": "check_agency_upload",
+        "next": "c1"
+      },
+      {
+        "id": "c1",
+        "kind": "condition",
+        "name": "Agency uploaded today?",
+        "conditionKey": "agency_not_uploaded",
+        "ifTrue": "t1",
+        "ifFalse": "n2",
+        "join": null
+      },
+      {
+        "id": "t1",
+        "kind": "task",
+        "name": "Ask agency to bulk upload documents",
+        "assigneeEmployeeId": "REPLACE_EMPLOYEE_ID",
+        "actions": [
+          { "id": "a_call", "actionKey": "call_agency", "label": "Call agency" },
+          { "id": "a_sms", "actionKey": "sms_agency", "label": "Text agency" },
+          { "id": "a_email", "actionKey": "email_agency", "label": "Email agency" }
+        ]
+      },
+      {
+        "id": "n2",
+        "kind": "system",
+        "name": "AI extract (regex + Gemini)",
+        "actionKey": "ai_extract_with_patterns",
+        "next": "c2"
+      },
+      {
+        "id": "c2",
+        "kind": "condition",
+        "name": "AI extraction failed?",
+        "conditionKey": "ai_extraction_fail",
+        "ifTrue": "t2",
+        "join": "t3"
+      },
+      {
+        "id": "t2",
+        "kind": "task",
+        "name": "Manually fill missing data",
+        "assigneeEmployeeId": "REPLACE_EMPLOYEE_ID",
+        "actions": [
+          { "id": "a_fill", "actionKey": "fill_missing_fields", "label": "Fill missing fields" }
+        ]
+      },
+      {
+        "id": "t3",
+        "kind": "task",
+        "name": "Final review & submit",
+        "assigneeEmployeeId": "REPLACE_EMPLOYEE_ID",
+        "next": "n4",
+        "actions": [
+          { "id": "a_review", "actionKey": "review_record", "label": "Review record" },
+          { "id": "a_confirm", "actionKey": "confirm_checklist", "label": "Confirm checklist" }
+        ]
+      },
+      {
+        "id": "n4",
+        "kind": "system",
+        "name": "Run AI service (CC notes / CPO)",
+        "actionKey": "run_ai_service",
+        "next": "c3"
+      },
+      {
+        "id": "c3",
+        "kind": "condition",
+        "name": "AI service failed?",
+        "conditionKey": "ai_service_failed",
+        "ifTrue": "t4",
+        "join": "n5"
+      },
+      {
+        "id": "t4",
+        "kind": "task",
+        "name": "Fix AI service failures",
+        "assigneeEmployeeId": "REPLACE_EMPLOYEE_ID",
+        "actions": [
+          { "id": "a_fill", "actionKey": "fill_missing_fields", "label": "Fill missing fields" },
+          { "id": "a_confirm", "actionKey": "confirm_checklist", "label": "Confirm checklist" }
+        ]
+      },
+      {
+        "id": "n5",
+        "kind": "system",
+        "name": "Generate RCM billing records",
+        "actionKey": "generate_rcm",
+        "next": "n6"
+      },
+      {
+        "id": "n6",
+        "kind": "system",
+        "name": "Run AI audit",
+        "actionKey": "run_ai_audit",
+        "next": "c4"
+      },
+      {
+        "id": "c4",
+        "kind": "condition",
+        "name": "Audit failed?",
+        "conditionKey": "audit_failed",
+        "ifTrue": "t5",
+        "join": "n7"
+      },
+      {
+        "id": "t5",
+        "kind": "task",
+        "name": "Resolve audit failures",
+        "assigneeEmployeeId": "REPLACE_EMPLOYEE_ID",
+        "actions": [
+          { "id": "a_confirm", "actionKey": "confirm_checklist", "label": "Confirm checklist" }
+        ]
+      },
+      {
+        "id": "n7",
+        "kind": "system",
+        "name": "Run AI rework",
+        "actionKey": "run_ai_rework"
+      }
+    ]
+  }
+}

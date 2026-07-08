@@ -22,7 +22,7 @@ async function saveWorkflow(body) {
 
   const messages = await validateGraph(graph, trigger);
   if (messages.length) throw httpError(400, 'Workflow validation failed', { messages });
-  const { steps, conditions } = await compileGraph(graph, trigger);
+  const { steps, conditions, megaGroups } = await compileGraph(graph, trigger);
 
   const workflowId = id || `cc-${Date.now()}`;
   if (id) {
@@ -38,9 +38,14 @@ async function saveWorkflow(body) {
     description,
     builder: true,
     trigger,
-    graph: { entry: graph.entry, nodes: graph.nodes },
+    // Persist graph.groups (when authored) so the editor round-trips group
+    // membership; nodes/entry are unchanged. groups is authoring metadata only.
+    graph: { entry: graph.entry, nodes: graph.nodes, ...(graph.groups ? { groups: graph.groups } : {}) },
     steps,
     conditions,
+    // megaGroups rides alongside steps/conditions as pure presentation metadata
+    // (same as wf7). The engine never reads it; only the flowchart renderer does.
+    ...(megaGroups ? { megaGroups } : {}),
   };
 
   // Same id => new version becomes the single active one (older versions stay

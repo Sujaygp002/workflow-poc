@@ -26,3 +26,6 @@ dist-ssr
 *.sln
 *.sw?
 .vercel
+
+# Ported source from order_and_patient_staging (contains hardcoded API keys - do not commit)
+reference/

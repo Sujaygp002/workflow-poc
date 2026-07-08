@@ -4,8 +4,8 @@
 **Read this when:** changing what counts as "the same patient", when a new record/admission/episode is created vs reused, or the patient write bundle.
 
 ## The business rules
-1. **A person is identified by name + DOB + MRN — the Patient UNIT.** Same three values = same human, regardless of which agency or physician group sent them. `unit_key = normalizeName(name) | lower(DOB) | normalizeName(MRN)`.
-2. **A Patient RECORD is the care context: Unit + HHAH + PG.** The same person under a *different* agency or physician group gets a NEW record (a "fork"), sharing the Unit. `record_context_key = unit_key | normalizeName(HHAH) | normalizeName(PG)`. Same context → reuse the existing record.
+1. **A person is identified by name + DOB + MRN — the Patient UNIT.** Same three values = same human, regardless of which agency or physician group sent them (the `unit_key`; exact formula in [backend/lib/utils.md](../backend/lib/utils.md)).
+2. **A Patient RECORD is the care context: Unit + HHAH + PG.** The same person under a *different* agency or physician group gets a NEW record (a "fork"), sharing the Unit (the `record_context_key`; exact formula in [backend/lib/utils.md](../backend/lib/utils.md)). Same context → reuse the existing record.
 3. **Admissions are identified within a record by Start of Care** (`patient_admissions UNIQUE(patient_id, soc, eoc)`) — same SOC reuses, new SOC creates.
 4. **Episodes are identified within an admission by SOE/EOE** (`patient_episodes UNIQUE(admission_id, soe, eoe)`) — same dates reuse, new dates create.
 5. **Orders hang off the episode**, deduped by `order_number` (see [orders & signing](orders-and-signing.md)).
@@ -14,8 +14,8 @@
 ## How the rules map to code
 | Rule | Code |
 |---|---|
-| Unit identity | `unitKey`/`patientKey` in `normalizers.js`; `patient_units.unit_key` UNIQUE |
-| Record context / fork | `recordContextKey` in `normalizers.js`; `patients.record_context_key` UNIQUE; `evaluateRecordChanges` in `taskRegistry.js` decides `record_context_changed` vs `unit_only_changed` |
+| Unit identity | `unitKey`/`patientKey` in `normalizers.js`; `patient_units.unit_key` UNIQUE. Formula: see [utils](../backend/lib/utils.md) |
+| Record context / fork | `recordContextKey` in `normalizers.js`; `patients.record_context_key` UNIQUE; `evaluateRecordChanges` in `taskRegistry.js` decides `record_context_changed` vs `unit_only_changed`. Formula: see [utils](../backend/lib/utils.md) |
 | Patient-exists decision | `patient.resolve` (`evaluatePatientExistence`) keys `patient_exists` on the UNIT |
 | Create vs update vs fork | `patient.create` (new unit+record), `patient.update` (update unit), `record.create` (new record under existing unit) — all call `runPatientWrite` → `writePatientBundle` |
 | Admission reuse/create | `admission.resolve` → find by (patient, SOC) else create |
@@ -36,7 +36,7 @@ The workflow item's `patient_payload` feeds this write:
 `{ patient_info:{name,sex,DOB}, personal_information:{address}, admission_details:{HHAH,PG,MRN,SOC,EOC,SOE,EOE,diagnosis_codes} }` and `reference_payload:{HHAH:{name}, PG:{name}, practitioner:{NPI}}`.
 
 ## Invariants & gotchas
-- **`unitKey === patientKey`** (same function) — the Unit key and the item's `patient_key` are identical. Changing name/MRN normalization in `normalizers.js` silently re-buckets identity everywhere (dedup, joins, existence checks).
+- **`unitKey === patientKey`** (same function) — the Unit key and the item's `patient_key` are identical. Canonical formula definitions live in [backend/lib/utils.md](../backend/lib/utils.md). Changing name/MRN normalization in `normalizers.js` silently re-buckets identity everywhere (dedup, joins, existence checks).
 - **A PG or HHAH change forks a new Record, NOT a new Unit.** This is intentional — the same person legitimately appears under multiple agencies. `record.create` runs only when `record_context_changed` is true AND the original Unit exists.
 - **Reuse keys are exact-match on normalized values.** A typo in DOB/MRN/name creates a *different* Unit — there is no fuzzy matching. Dates are normalized via `parseDate` to `YYYY-MM-DD` before keying.
 - Admission/episode UNIQUE constraints include the end dates (`eoc`, `eoe`) — a different EOC is a different admission even with the same SOC. Watch this when "reuse" seems not to happen.

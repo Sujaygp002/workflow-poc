@@ -48,11 +48,15 @@ export function conditionLabel(condition) {
   return (condition || '').replaceAll('_', ' ');
 }
 
-// Label for the START cap. Time-interval triggers read as "Time trigger · every Ns".
+// Label for the START cap. Time-interval triggers read as "Time trigger · every Ns";
+// daily_time triggers read as the per-agency fan-out ("For each onboarded agency …").
 export function triggerLabel(trigger) {
   if (!trigger) return 'trigger';
   if (trigger.type === 'time_interval' && trigger.intervalSeconds) {
     return trigger.label || `Time trigger · every ${trigger.intervalSeconds}s`;
+  }
+  if (trigger.type === 'daily_time') {
+    return trigger.label || 'For each onboarded agency · check if uploaded';
   }
   return trigger.label || trigger.id || trigger.type || 'trigger';
 }
@@ -240,7 +244,7 @@ export function WorkflowLane({ definition, tasks = [], employeesById = {}, subti
   }[accent] || 'border-slate-200';
 
   let inner;
-  if (definition.megaGroups) inner = <MegaGroupFlow definition={definition} tasks={tasks} />;
+  if (definition.megaGroups) inner = <MegaGroupFlow definition={definition} tasks={tasks} employeesById={employeesById} />;
   else if (definition.megaTask) inner = <MegaTaskNode definition={definition} tasks={tasks} megaTask={definition.megaTask} />;
   else inner = <WorkflowFlow definition={definition} tasks={tasks} employeesById={employeesById} />;
 
@@ -365,30 +369,106 @@ export function MegaTaskNode({ definition, tasks = [], megaTask, name, info, ste
 }
 
 // ── Mega-group flow ───────────────────────────────────
-// Renders a workflow whose steps are partitioned into `megaGroups` as a vertical
-// chain of MegaTaskNode boxes, one per group, with connectors between them.
-export function MegaGroupFlow({ definition, tasks = [] }) {
-  const groups = definition.megaGroups || [];
-  const stepsById = Object.fromEntries((definition.steps || []).map((s) => [s.id, s]));
+// Renders a workflow whose steps are partitioned into `megaGroups`. Grouped steps
+// collapse into MegaTaskNode boxes; steps that belong to NO group render FLAT (via
+// WorkflowFlow, so their decision diamonds show OUTSIDE the boxes) in their compiled
+// position, interleaved with the group boxes. This is what lets phase-1 read as
+// START → n1 (flat) → agency diamond (OUTSIDE both boxes) → the two TASK boxes as
+// the two branch outcomes. wf7 has every step grouped and no branching between its
+// two boxes, so it renders as the same box → connector → box chain as before.
+function groupBox(definition, tasks, group, stepsById, branchLabel) {
+  const steps = (group.stepIds || []).map((id) => stepsById[id]).filter(Boolean);
   return (
-    <div className="flex w-full flex-col items-center">
-      {groups.map((group, idx) => {
-        const groupSteps = (group.stepIds || []).map((id) => stepsById[id]).filter(Boolean);
-        return (
-          <div key={group.id} className="flex w-full flex-col items-center">
-            {idx > 0 && <Connector />}
-            <MegaTaskNode
-              definition={definition}
-              tasks={tasks}
-              name={group.name}
-              info={group.info}
-              steps={groupSteps}
-            />
-          </div>
-        );
-      })}
+    <div className="flex flex-col items-center">
+      {branchLabel && <span className="mb-1 text-[10px] font-black text-emerald-600">{branchLabel}</span>}
+      <MegaTaskNode definition={definition} tasks={tasks} name={group.name} info={group.info} steps={steps} />
     </div>
   );
+}
+
+export function MegaGroupFlow({ definition, tasks = [], employeesById = {} }) {
+  const groups = definition.megaGroups || [];
+  const allSteps = definition.steps || [];
+  const stepsById = Object.fromEntries(allSteps.map((s) => [s.id, s]));
+  // Map each step id → the group it belongs to (first group wins on overlap).
+  const groupOfStep = new Map();
+  for (const group of groups) {
+    for (const id of group.stepIds || []) {
+      if (!groupOfStep.has(id)) groupOfStep.set(id, group);
+    }
+  }
+  // The step that leads a group (its first member in compiled order) — its
+  // `condition`/`preReq` decide whether the group is a branch arm of a diamond.
+  const leadStep = (group) => stepsById[(group.stepIds || [])[0]];
+
+  // Walk steps in compiled order, batching contiguous ungrouped steps into flat
+  // spans and emitting each group box once (at the position of its first member).
+  const rendered = [];
+  const emittedGroups = new Set();
+  let flatSpan = [];
+  const flushFlat = () => {
+    if (!flatSpan.length) return;
+    const span = flatSpan;
+    flatSpan = [];
+    rendered.push({ kind: 'flat', key: `flat-${span[0].id}`, steps: span });
+  };
+  for (const step of allSteps) {
+    const group = groupOfStep.get(step.id);
+    if (!group) { flatSpan.push(step); continue; }
+    flushFlat();
+    if (emittedGroups.has(group.id)) continue;
+    emittedGroups.add(group.id);
+    rendered.push({ kind: 'group', key: group.id, group });
+  }
+  flushFlat();
+
+  // Pass 2: two adjacent group boxes whose lead steps carry a `condition` and
+  // share the same `preReq` are the two arms of ONE decision diamond — render the
+  // diamond OUTSIDE both boxes, boxes side-by-side (mirrors WorkflowFlow pairing).
+  const out = [];
+  for (let i = 0; i < rendered.length; i += 1) {
+    const entry = rendered[i];
+    const next = rendered[i + 1];
+    if (entry.kind === 'group' && next?.kind === 'group') {
+      const a = leadStep(entry.group);
+      const b = leadStep(next.group);
+      const pair = a?.condition && b?.condition
+        && JSON.stringify(a.preReq) === JSON.stringify(b.preReq);
+      if (pair) {
+        out.push(
+          <div key={entry.key} className="flex w-full flex-col items-center">
+            {out.length > 0 && <Connector />}
+            <DecisionDiamond condition={a.condition} downLabel="YES" rightLabel="else →" />
+            <div className="flex w-full items-start justify-center gap-4">
+              {groupBox(definition, tasks, entry.group, stepsById, conditionLabel(a.condition))}
+              {groupBox(definition, tasks, next.group, stepsById, conditionLabel(b.condition))}
+            </div>
+          </div>,
+        );
+        i += 1; // consumed `next`
+        continue;
+      }
+    }
+    out.push(
+      <div key={entry.key} className="flex w-full flex-col items-center">
+        {out.length > 0 && <Connector />}
+        {entry.kind === 'group'
+          ? (() => {
+            const a = leadStep(entry.group);
+            // A lone group whose lead step is conditional gets its own diamond.
+            return (
+              <>
+                {a?.condition && <DecisionDiamond condition={a.condition} downLabel="YES" />}
+                {groupBox(definition, tasks, entry.group, stepsById, null)}
+              </>
+            );
+          })()
+          : <WorkflowFlow definition={definition} tasks={tasks} steps={entry.steps} employeesById={employeesById} />}
+      </div>,
+    );
+  }
+
+  return <div className="flex w-full flex-col items-center">{out}</div>;
 }
 
 // ── Per-object created/updated/existing aggregation ───

@@ -18,6 +18,7 @@ import {
   ChevronUp,
   Cog,
   GitFork,
+  Layers,
   Loader2,
   Plus,
   Save,
@@ -26,13 +27,25 @@ import {
   Zap,
 } from 'lucide-react';
 import { fetchBuilderCatalog, saveWorkflow } from '../../lib/workflowApi';
-import { Connector, WorkflowFlow, triggerLabel } from '../../components/WorkflowDefinitionFlow';
+import { Connector, WorkflowFlow, WorkflowLane, triggerLabel } from '../../components/WorkflowDefinitionFlow';
 
 // ── id helpers ────────────────────────────────────────────────────────────────
 let idCounter = 0;
 function newId(prefix) {
   idCounter += 1;
   return `${prefix}${Date.now().toString(36)}${idCounter}`;
+}
+
+// TASK-group tint palette (cycled by group index). A group's member node cards
+// get a tinted border + a group-name pill in the header so membership is visible.
+const GROUP_TINTS = [
+  { ring: 'border-violet-400', pill: 'bg-violet-100 text-violet-700 border-violet-300', dot: 'bg-violet-500' },
+  { ring: 'border-teal-400', pill: 'bg-teal-100 text-teal-700 border-teal-300', dot: 'bg-teal-500' },
+  { ring: 'border-orange-400', pill: 'bg-orange-100 text-orange-700 border-orange-300', dot: 'bg-orange-500' },
+  { ring: 'border-fuchsia-400', pill: 'bg-fuchsia-100 text-fuchsia-700 border-fuchsia-300', dot: 'bg-fuchsia-500' },
+];
+function groupTint(index) {
+  return GROUP_TINTS[((index % GROUP_TINTS.length) + GROUP_TINTS.length) % GROUP_TINTS.length];
 }
 
 // Extra per-action params surfaced in the task editor (design §4.2 example).
@@ -53,17 +66,19 @@ function makeAction(catalog) {
 
 function makeNode(kind, catalog) {
   if (kind === 'system') {
-    return { id: newId('n'), kind: 'system', name: '', actionKey: catalog?.actions?.system?.[0]?.key || 'check_required_fields' };
+    return { id: newId('n'), kind: 'system', name: '', actionKey: catalog?.actions?.system?.[0]?.key || 'check_required_fields', groupId: null };
   }
   if (kind === 'task') {
-    return { id: newId('n'), kind: 'task', name: '', assigneeEmployeeId: '', actions: [makeAction(catalog)] };
+    return { id: newId('n'), kind: 'task', name: '', assigneeEmployeeId: '', groupId: null, actions: [makeAction(catalog)] };
   }
   return { id: newId('n'), kind: 'condition', conditionKey: catalog?.conditions?.[0]?.key || 'patient_exists', ifTrue: [], ifFalse: [] };
 }
 
 // ── graph <-> nested sequence conversion ─────────────────────────────────────
 // graphToSeq: rebuild the nested editor model from a saved definition.graph.
-function chainToSeq(startId, stopId, byId) {
+// `groupOfNode` maps a node id → its group id (from graph.groups) so system/task
+// nodes hydrate their `groupId` for the group-membership controls.
+function chainToSeq(startId, stopId, byId, groupOfNode) {
   const seq = [];
   let currentId = startId;
   const guard = new Set();
@@ -76,8 +91,8 @@ function chainToSeq(startId, stopId, byId) {
         id: node.id,
         kind: 'condition',
         conditionKey: node.conditionKey,
-        ifTrue: node.ifTrue ? chainToSeq(node.ifTrue, node.join || null, byId) : [],
-        ifFalse: node.ifFalse ? chainToSeq(node.ifFalse, node.join || null, byId) : [],
+        ifTrue: node.ifTrue ? chainToSeq(node.ifTrue, node.join || null, byId, groupOfNode) : [],
+        ifFalse: node.ifFalse ? chainToSeq(node.ifFalse, node.join || null, byId, groupOfNode) : [],
       });
       currentId = node.join || null;
     } else if (node.kind === 'task') {
@@ -86,11 +101,12 @@ function chainToSeq(startId, stopId, byId) {
         kind: 'task',
         name: node.name || '',
         assigneeEmployeeId: node.assigneeEmployeeId || '',
+        groupId: groupOfNode.get(node.id) || null,
         actions: (node.actions || []).map((a) => ({ id: a.id, actionKey: a.actionKey, label: a.label || '', params: a.params || {} })),
       });
       currentId = node.next || null;
     } else {
-      seq.push({ id: node.id, kind: 'system', name: node.name || '', actionKey: node.actionKey });
+      seq.push({ id: node.id, kind: 'system', name: node.name || '', actionKey: node.actionKey, groupId: groupOfNode.get(node.id) || null });
       currentId = node.next || null;
     }
   }
@@ -99,7 +115,18 @@ function chainToSeq(startId, stopId, byId) {
 
 function graphToSeq(graph) {
   const byId = new Map((graph?.nodes || []).map((node) => [node.id, node]));
-  return graph?.entry ? chainToSeq(graph.entry, null, byId) : [];
+  const groupOfNode = new Map();
+  for (const group of graph?.groups || []) {
+    for (const id of group.nodeIds || []) {
+      if (!groupOfNode.has(id)) groupOfNode.set(id, group.id);
+    }
+  }
+  return graph?.entry ? chainToSeq(graph.entry, null, byId, groupOfNode) : [];
+}
+
+// Rebuild the group metadata list [{id,name,info}] from a saved graph.
+function graphToGroups(graph) {
+  return (graph?.groups || []).map((g) => ({ id: g.id, name: g.name || '', info: g.info || '' }));
 }
 
 // seqToGraph: flatten the nested model to the server graph shape. A condition's
@@ -149,10 +176,31 @@ function seqToNodes(seq, out, catalog) {
   }
 }
 
-function seqToGraph(seq, catalog) {
+// Collect group membership (node ids per group) in flow/traversal order.
+function collectGroupMembers(seq, membersByGroup) {
+  for (const node of seq) {
+    if (node.kind === 'condition') {
+      collectGroupMembers(node.ifTrue, membersByGroup);
+      collectGroupMembers(node.ifFalse, membersByGroup);
+    } else if (node.groupId) {
+      if (!membersByGroup.has(node.groupId)) membersByGroup.set(node.groupId, []);
+      membersByGroup.get(node.groupId).push(node.id);
+    }
+  }
+}
+
+// seqToGraph: flatten nodes AND re-emit graph.groups from {groups, node.groupId}.
+// Only groups that end up with ≥1 member node are emitted; the graph shape is
+// otherwise unchanged (entry + nodes). Groups is authoring metadata only.
+function seqToGraph(seq, catalog, groups = []) {
   const nodes = [];
   seqToNodes(seq, nodes, catalog);
-  return { entry: seq[0]?.id || null, nodes };
+  const membersByGroup = new Map();
+  collectGroupMembers(seq, membersByGroup);
+  const emitted = groups
+    .map((g) => ({ id: g.id, name: (g.name || '').trim() || 'TASK group', info: (g.info || '').trim(), nodeIds: membersByGroup.get(g.id) || [] }))
+    .filter((g) => g.nodeIds.length > 0);
+  return { entry: seq[0]?.id || null, nodes, ...(emitted.length ? { groups: emitted } : {}) };
 }
 
 // ── client-side compile mirror (preview only; server compile is authoritative) ─
@@ -267,7 +315,33 @@ function InsertPoint({ onInsert, hint }) {
   );
 }
 
-function NodeShell({ tone, badge, title, onRemove, children }) {
+// Per-node group selector + membership pill, rendered in the header of a
+// system/task NodeCard. Condition nodes never get this (they emit no step).
+function GroupControl({ node, groups, onChange }) {
+  const idx = groups.findIndex((g) => g.id === node.groupId);
+  const member = idx >= 0 ? groups[idx] : null;
+  const tint = member ? groupTint(idx) : null;
+  return (
+    <span className="ml-auto flex items-center gap-1.5">
+      {member && (
+        <span className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${tint.pill}`}>
+          <span className={`h-1.5 w-1.5 rounded-full ${tint.dot}`} /> {member.name || 'TASK group'}
+        </span>
+      )}
+      <select
+        value={node.groupId || ''}
+        onChange={(e) => onChange({ ...node, groupId: e.target.value || null })}
+        title="Assign this step to a TASK group"
+        className="rounded-lg border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-bold text-slate-600 focus:border-violet-400 focus:outline-none"
+      >
+        <option value="">Group: —</option>
+        {groups.map((g) => <option key={g.id} value={g.id}>{g.name || 'TASK group'}</option>)}
+      </select>
+    </span>
+  );
+}
+
+function NodeShell({ tone, badge, title, onRemove, children, groupControl, ringOverride }) {
   const tones = {
     sky: { ring: 'border-sky-300', bg: 'bg-sky-50', badge: 'bg-sky-600' },
     pink: { ring: 'border-pink-300', bg: 'bg-pink-50', badge: 'bg-pink-600' },
@@ -275,14 +349,15 @@ function NodeShell({ tone, badge, title, onRemove, children }) {
   };
   const t = tones[tone];
   return (
-    <div className={`w-full rounded-xl border-2 ${t.ring} ${t.bg} p-3 shadow-sm`}>
+    <div className={`w-full rounded-xl border-2 ${ringOverride || t.ring} ${t.bg} p-3 shadow-sm`}>
       <div className="flex items-center gap-2">
         <span className={`rounded-md ${t.badge} px-1.5 py-0.5 text-[9px] font-black uppercase text-white`}>{badge}</span>
         <span className="text-xs font-black uppercase tracking-wide text-slate-500">{title}</span>
+        {groupControl}
         <button
           type="button"
           onClick={onRemove}
-          className="ml-auto flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-white/70 hover:text-rose-600"
+          className={`${groupControl ? '' : 'ml-auto '}flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-white/70 hover:text-rose-600`}
           title="Remove this node"
         >
           <Trash2 size={13} />
@@ -293,11 +368,19 @@ function NodeShell({ tone, badge, title, onRemove, children }) {
   );
 }
 
-function SystemNodeCard({ node, onChange, onRemove, catalog }) {
+function SystemNodeCard({ node, onChange, onRemove, catalog, groups = [] }) {
   const actions = catalog?.actions?.system || [];
   const selected = actions.find((a) => a.key === node.actionKey);
+  const gIdx = groups.findIndex((g) => g.id === node.groupId);
   return (
-    <NodeShell tone="sky" badge="SYS" title="System action" onRemove={onRemove}>
+    <NodeShell
+      tone="sky"
+      badge="SYS"
+      title="System action"
+      onRemove={onRemove}
+      ringOverride={gIdx >= 0 ? groupTint(gIdx).ring : undefined}
+      groupControl={groups.length ? <GroupControl node={node} groups={groups} onChange={onChange} /> : undefined}
+    >
       <label className="block">
         <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Action</span>
         <select
@@ -374,8 +457,9 @@ function TaskActionRow({ action, index, count, onChange, onMove, onRemove, catal
   );
 }
 
-function TaskNodeCard({ node, onChange, onRemove, catalog }) {
+function TaskNodeCard({ node, onChange, onRemove, catalog, groups = [] }) {
   const employees = catalog?.employees || [];
+  const gIdx = groups.findIndex((g) => g.id === node.groupId);
   const updateAction = (i, next) => {
     const actions = [...node.actions];
     actions[i] = next;
@@ -393,7 +477,14 @@ function TaskNodeCard({ node, onChange, onRemove, catalog }) {
     onChange({ ...node, actions: node.actions.filter((_, idx) => idx !== i) });
   };
   return (
-    <NodeShell tone="pink" badge="HUMAN" title="Task" onRemove={onRemove}>
+    <NodeShell
+      tone="pink"
+      badge="HUMAN"
+      title="Task"
+      onRemove={onRemove}
+      ringOverride={gIdx >= 0 ? groupTint(gIdx).ring : undefined}
+      groupControl={groups.length ? <GroupControl node={node} groups={groups} onChange={onChange} /> : undefined}
+    >
       <label className="block">
         <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Task name <span className="text-rose-500">*</span></span>
         <input
@@ -450,7 +541,7 @@ function TaskNodeCard({ node, onChange, onRemove, catalog }) {
   );
 }
 
-function ConditionNodeCard({ node, onChange, onRemove, catalog }) {
+function ConditionNodeCard({ node, onChange, onRemove, catalog, groups = [] }) {
   const conditions = catalog?.conditions || [];
   const selected = conditions.find((c) => c.key === node.conditionKey);
   const negation = conditions.find((c) => c.key === selected?.negation);
@@ -476,6 +567,7 @@ function ConditionNodeCard({ node, onChange, onRemove, catalog }) {
             seq={node.ifTrue}
             onChange={(seq) => onChange({ ...node, ifTrue: seq })}
             catalog={catalog}
+            groups={groups}
             emptyHint="add at least one node"
           />
         </div>
@@ -487,6 +579,7 @@ function ConditionNodeCard({ node, onChange, onRemove, catalog }) {
             seq={node.ifFalse}
             onChange={(seq) => onChange({ ...node, ifFalse: seq })}
             catalog={catalog}
+            groups={groups}
             emptyHint="optional — skips to join"
           />
         </div>
@@ -498,14 +591,14 @@ function ConditionNodeCard({ node, onChange, onRemove, catalog }) {
   );
 }
 
-function NodeCard({ node, onChange, onRemove, catalog }) {
-  if (node.kind === 'system') return <SystemNodeCard node={node} onChange={onChange} onRemove={onRemove} catalog={catalog} />;
-  if (node.kind === 'task') return <TaskNodeCard node={node} onChange={onChange} onRemove={onRemove} catalog={catalog} />;
-  return <ConditionNodeCard node={node} onChange={onChange} onRemove={onRemove} catalog={catalog} />;
+function NodeCard({ node, onChange, onRemove, catalog, groups }) {
+  if (node.kind === 'system') return <SystemNodeCard node={node} onChange={onChange} onRemove={onRemove} catalog={catalog} groups={groups} />;
+  if (node.kind === 'task') return <TaskNodeCard node={node} onChange={onChange} onRemove={onRemove} catalog={catalog} groups={groups} />;
+  return <ConditionNodeCard node={node} onChange={onChange} onRemove={onRemove} catalog={catalog} groups={groups} />;
 }
 
 // Renders a sequence of node cards with an insert point before/after every node.
-function SequenceEditor({ seq, onChange, catalog, emptyHint }) {
+function SequenceEditor({ seq, onChange, catalog, emptyHint, groups = [] }) {
   const insertAt = (index, kind) => {
     const next = [...seq];
     next.splice(index, 0, makeNode(kind, catalog));
@@ -535,10 +628,106 @@ function SequenceEditor({ seq, onChange, catalog, emptyHint }) {
             onChange={(next) => updateAt(i, next)}
             onRemove={() => removeAt(i)}
             catalog={catalog}
+            groups={groups}
           />
           <InsertPoint onInsert={(kind) => insertAt(i + 1, kind)} />
         </Fragment>
       ))}
+    </div>
+  );
+}
+
+// Clear a removed group's membership from every system/task node in the seq
+// (returns a new seq; recurses into condition branches).
+function clearGroupFromSeq(seq, groupId) {
+  return seq.map((node) => {
+    if (node.kind === 'condition') {
+      return { ...node, ifTrue: clearGroupFromSeq(node.ifTrue, groupId), ifFalse: clearGroupFromSeq(node.ifFalse, groupId) };
+    }
+    return node.groupId === groupId ? { ...node, groupId: null } : node;
+  });
+}
+
+// Count how many system/task nodes belong to each group (for the panel badges).
+function memberCounts(seq, counts = {}) {
+  for (const node of seq) {
+    if (node.kind === 'condition') { memberCounts(node.ifTrue, counts); memberCounts(node.ifFalse, counts); }
+    else if (node.groupId) counts[node.groupId] = (counts[node.groupId] || 0) + 1;
+  }
+  return counts;
+}
+
+// ── TASK groups panel ─────────────────────────────────────────────────────────
+// Author TASK containers: a group is {id, name, info}. Steps are assigned to a
+// group via the per-node "Group:" dropdown in the Flow editor. A group with ≥1
+// member renders as a "TASK-<name>" box in the preview / list / orchestrator.
+function GroupsPanel({ groups, seq, onChange, onSeqChange }) {
+  const counts = memberCounts(seq);
+  const addGroup = () => onChange([...groups, { id: newId('g'), name: '', info: '' }]);
+  const updateGroup = (id, patch) => onChange(groups.map((g) => (g.id === id ? { ...g, ...patch } : g)));
+  const removeGroup = (id) => {
+    onChange(groups.filter((g) => g.id !== id));
+    onSeqChange(clearGroupFromSeq(seq, id)); // orphan the members back to ungrouped
+  };
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="flex items-center gap-2">
+        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-700 text-white"><Layers size={14} /></span>
+        <h2 className="font-bold text-slate-900">TASK groups</h2>
+        <span className="ml-auto text-[10px] font-black uppercase tracking-wide text-slate-400">collapse steps into one TASK box</span>
+      </div>
+      <p className="mt-1 text-[11px] text-slate-500">
+        Create a TASK container, then assign flow steps to it with the “Group:” dropdown on each step. Grouping is presentation only — the compiled engine steps are unchanged.
+      </p>
+      <div className="mt-3 space-y-2">
+        {groups.length === 0 && (
+          <div className="rounded-lg border border-dashed border-slate-300 px-3 py-2 text-center text-[11px] text-slate-400">
+            No groups yet — add one, then tag steps into it.
+          </div>
+        )}
+        {groups.map((g, idx) => {
+          const tint = groupTint(idx);
+          return (
+            <div key={g.id} className={`rounded-xl border-2 ${tint.ring} bg-white p-2.5`}>
+              <div className="flex items-center gap-2">
+                <span className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${tint.pill}`}>
+                  <span className={`h-1.5 w-1.5 rounded-full ${tint.dot}`} /> TASK
+                </span>
+                <span className="text-[10px] font-mono text-slate-400">{counts[g.id] || 0} step{(counts[g.id] || 0) === 1 ? '' : 's'}</span>
+                <button
+                  type="button"
+                  onClick={() => removeGroup(g.id)}
+                  className="ml-auto flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                  title="Delete group (members become ungrouped)"
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+              <input
+                type="text"
+                value={g.name}
+                onChange={(e) => updateGroup(g.id, { name: e.target.value })}
+                placeholder='TASK name — e.g. "Update Object Module"'
+                className={INPUT_CLS}
+              />
+              <input
+                type="text"
+                value={g.info}
+                onChange={(e) => updateGroup(g.id, { info: e.target.value })}
+                placeholder="What this TASK does (shown in the ⓘ popover)"
+                className={INPUT_CLS}
+              />
+            </div>
+          );
+        })}
+      </div>
+      <button
+        type="button"
+        onClick={addGroup}
+        className="mt-3 inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50"
+      >
+        <Plus size={12} /> Add TASK group
+      </button>
     </div>
   );
 }
@@ -608,6 +797,7 @@ export default function WorkflowBuilder({ workflow = null, existingWorkflows = [
   const [description, setDescription] = useState(workflow?.description || '');
   const [trigger, setTrigger] = useState(workflow?.trigger || { type: 'manual' });
   const [seq, setSeq] = useState(() => (workflow?.graph ? graphToSeq(workflow.graph) : []));
+  const [groups, setGroups] = useState(() => (workflow?.graph ? graphToGroups(workflow.graph) : []));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);       // { message, messages[] }
   const [savedInfo, setSavedInfo] = useState(null);       // { version }
@@ -625,10 +815,37 @@ export default function WorkflowBuilder({ workflow = null, existingWorkflows = [
   useEffect(() => {
     setServerSteps(null);
     setSavedInfo(null);
-  }, [seq, trigger, name, description]);
+  }, [seq, groups, trigger, name, description]);
 
   const previewSteps = useMemo(() => compilePreview(seq, catalog), [seq, catalog]);
   const displaySteps = serverSteps || previewSteps;
+  // megaGroups for the preview: map each authored group → the compiled step ids
+  // of its member nodes (same derivation the server does). Steps compiled from
+  // condition nodes never appear here. Empty groups are dropped. This lets the
+  // preview render the grouped hierarchy via WorkflowLane → MegaGroupFlow.
+  const previewMegaGroups = useMemo(() => {
+    if (!groups.length) return null;
+    const stepIdSet = new Set(displaySteps.map((s) => s.id));
+    const membersByGroup = new Map();
+    collectGroupMembers(seq, membersByGroup);
+    const mg = groups
+      .map((g) => ({
+        id: g.id,
+        name: (g.name || '').trim() || 'TASK group',
+        info: (g.info || '').trim(),
+        stepIds: (membersByGroup.get(g.id) || []).filter((id) => stepIdSet.has(id)),
+      }))
+      .filter((g) => g.stepIds.length > 0);
+    return mg.length ? mg : null;
+  }, [groups, seq, displaySteps]);
+  const previewDefinition = useMemo(() => ({
+    name: name.trim() || 'Untitled workflow',
+    description,
+    trigger,
+    builder: true,
+    steps: displaySteps,
+    ...(previewMegaGroups ? { megaGroups: previewMegaGroups } : {}),
+  }), [name, description, trigger, displaySteps, previewMegaGroups]);
 
   const docUploadClash = existingWorkflows.filter(
     (wf) => wf.kind === 'builder' && wf.id !== editingId && wf.trigger?.type === 'document_upload',
@@ -644,7 +861,7 @@ export default function WorkflowBuilder({ workflow = null, existingWorkflows = [
     }
     setSaving(true);
     try {
-      const graph = seqToGraph(seq, catalog);
+      const graph = seqToGraph(seq, catalog, groups);
       const body = await saveWorkflow({ id: editingId || undefined, name: name.trim(), description, trigger, graph });
       setEditingId(body.workflow?.id || editingId);
       setServerSteps(body.steps || null);
@@ -739,6 +956,10 @@ export default function WorkflowBuilder({ workflow = null, existingWorkflows = [
             <TriggerCard trigger={trigger} onChange={setTrigger} catalog={catalog} docUploadClash={docUploadClash} />
           </div>
 
+          <div className="mt-4">
+            <GroupsPanel groups={groups} seq={seq} onChange={setGroups} onSeqChange={setSeq} />
+          </div>
+
           <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
             <div className="mb-1 flex items-center gap-2">
               <h2 className="font-bold text-slate-900">Flow</h2>
@@ -753,7 +974,7 @@ export default function WorkflowBuilder({ workflow = null, existingWorkflows = [
                 <div className="mx-auto w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">
                   START · {triggerLabel(trigger)}
                 </div>
-                <SequenceEditor seq={seq} onChange={setSeq} catalog={catalog} emptyHint="add the first node" />
+                <SequenceEditor seq={seq} onChange={setSeq} catalog={catalog} groups={groups} emptyHint="add the first node" />
                 <div className="mx-auto mt-1 w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">END</div>
               </div>
             )}
@@ -772,6 +993,18 @@ export default function WorkflowBuilder({ workflow = null, existingWorkflows = [
             <p className="mt-0.5 text-[11px] text-slate-400">Compiled steps as the engine will run them.</p>
             {displaySteps.length === 0 ? (
               <div className="py-10 text-center text-sm text-slate-400">Add nodes to see the flowchart.</div>
+            ) : previewMegaGroups ? (
+              // Grouped: render via the shared WorkflowLane (megaGroups → MegaGroupFlow),
+              // identical to the Workflow list card + Orchestrator run card.
+              <div className="mt-3 overflow-x-auto">
+                <WorkflowLane
+                  definition={previewDefinition}
+                  tasks={[]}
+                  accent="violet"
+                  employeesById={{}}
+                  subtitle={`${triggerLabel(trigger)} · ${displaySteps.length} step${displaySteps.length === 1 ? '' : 's'} · ${previewMegaGroups.length} TASK group${previewMegaGroups.length === 1 ? '' : 's'}`}
+                />
+              </div>
             ) : (
               <div className="mt-3 overflow-x-auto">
                 <div className="mx-auto w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">

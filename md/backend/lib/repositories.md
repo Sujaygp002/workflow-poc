@@ -112,7 +112,7 @@ Single data-access module (no ORM) over Neon/Postgres via the `@neondatabase/ser
   physicianReminders: [{episode, hhah, unsignedOrderNumbers, orders}],
   cpoMinutes: [{episode, cpoMonth, hhah}] }   // hhah = {id, name, contact_info}
 ```
-Dedup keys (from `normalizers.js`): `unit_key` = `normalizeName(name)|lower(DOB)|normalizeName(MRN)`; `record_context_key` = `unit_key|normalizeName(HHAH)|normalizeName(PG)` (raw names, not DB ids).
+Dedup keys come from `normalizers.js` (`unitKey`, `recordContextKey`). For the authoritative formula definitions see [backend/lib/utils.md](./utils.md) — Data shapes section.
 
 ## Invariants & gotchas
 - **Neon returns `date` columns as JS `Date` objects.** All date math must go through `dateOnly`/`dateMs`/`daysBetween`/`parseDateOnly` (all handle Date + string). `String(dateObj).slice(0,10)` produced two real bugs (eligibility check, CPO month generation) — never reintroduce it.

@@ -63,7 +63,7 @@ Semantics: `taskKey` → implementation in [task registry](./task-registry.md); 
 - T3/T4 gating decisions (`physician_signed`, `patient_eligible`, `cpo_month_billable`, …) are stamped from `extraction_payload` inputs by their `billing.*`/`signing.*` check tasks — the run **creator** must supply those inputs (see [eligibility & billing](../../business/eligibility-billing.md)).
 - `megaTask`/`megaGroups` are pure presentation (consumed by `WorkflowDefinitionFlow.jsx`): `megaGroups` ⇒ chained boxes, `megaTask.innerStepIds` ⇒ one box + `outsideStepIds` standalone, bare `megaTask` ⇒ everything in one box. They never affect execution.
 - Trigger `type`/`intervalSeconds`/`label` are also presentation + trigger-scheduler hints; the START cap renders `label` for time triggers, else the trigger id.
-- These definitions were also copied verbatim to `backend/src/main/resources/workflows/*.json` for the Java port — keep both in sync if you change one.
+- **The Java `backend/` directory has been deleted.** System workflow definitions live **only** in `api/_lib/workflowDefinition.js` — there is no `backend/src/main/resources/workflows/*.json` to keep in sync.
 
 ## Change recipes
 
