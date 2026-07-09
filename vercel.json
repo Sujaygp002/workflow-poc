@@ -1,8 +1,8 @@
 {
   "rewrites": [
     { "source": "/worker", "destination": "/worker.html" },
-    { "source": "/worker/(.*)", "destination": "/worker.html" },
-    { "source": "/((?!api/|assets/|.*\\.\\w+$).*)", "destination": "/index.html" }
+    { "source": "/worker/:path*", "destination": "/worker.html" },
+    { "source": "/:path*", "destination": "/index.html" }
   ],
   "crons": [
     { "path": "/api/workflow-runs?action=tick", "schedule": "0 17 * * *" }
