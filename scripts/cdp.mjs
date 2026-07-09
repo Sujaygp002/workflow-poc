@@ -7,14 +7,23 @@ async function httpJson(url) {
   return res.json();
 }
 
-export async function connect({ port = 9222 } = {}) {
-  // Pick (or create) a page target.
+export async function connect({ port = 9222, newTab = false } = {}) {
+  // Pick (or create) a page target. With newTab:true always open a FRESH page
+  // target and connect to it (used by the production demo recorder to keep a
+  // long-running upload tab alive while other scenes record from the main tab).
   let targets = await httpJson(`http://localhost:${port}/json`);
-  let page = targets.find((t) => t.type === 'page');
+  let page = newTab ? null : targets.find((t) => t.type === 'page');
   if (!page) {
-    await httpJson(`http://localhost:${port}/json/new?about:blank`);
-    targets = await httpJson(`http://localhost:${port}/json`);
-    page = targets.find((t) => t.type === 'page');
+    // Newer Chrome requires PUT for /json/new (GET returns 405).
+    const res = await fetch(`http://localhost:${port}/json/new?about:blank`, { method: 'PUT' })
+      .catch(() => fetch(`http://localhost:${port}/json/new?about:blank`));
+    const created = await res.json().catch(() => null);
+    if (created?.webSocketDebuggerUrl) {
+      page = created;
+    } else {
+      targets = await httpJson(`http://localhost:${port}/json`);
+      page = targets.find((t) => t.type === 'page');
+    }
   }
   const ws = new WebSocket(page.webSocketDebuggerUrl, { maxPayload: 512 * 1024 * 1024 });
   await new Promise((resolve, reject) => {

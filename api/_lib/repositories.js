@@ -259,6 +259,11 @@ export async function deleteWorkflowRun(runId) {
   return rows.length > 0;
 }
 
+export async function deleteAllWorkflowRuns() {
+  const sql = getSql();
+  await sql`DELETE FROM workflow_runs`;
+}
+
 export async function getRunItems(runId) {
   const sql = getSql();
   return sql`
@@ -1380,7 +1385,7 @@ export async function insertAiExtraction({ itemId, documentId, model, status, in
   return rows[0];
 }
 
-export async function listPatients({ hhahId = null } = {}) {
+export async function listPatients({ hhahId = null, pgId = null } = {}) {
   const sql = getSql();
   const rows = await sql`
     SELECT
@@ -1404,6 +1409,7 @@ export async function listPatients({ hhahId = null } = {}) {
     LEFT JOIN patient_episodes e ON e.admission_id = a.id
     LEFT JOIN orders o ON o.patient_id = p.id
     WHERE (${hhahId}::uuid IS NULL OR p.agency_id = ${hhahId})
+    ${pgId ? sql`AND p.pg_id = ${pgId}` : sql``}
     GROUP BY p.id, pu.name, pu.dob, pu.mrn, pu.sex
     ORDER BY p.updated_at DESC, p.name
     LIMIT 200
@@ -2673,4 +2679,142 @@ export async function runAreaIntakeCheck({ areaId, checkDate = null, now = null,
     missing,
     notifications,
   };
+}
+
+// --- RCM table API views -------------------------------------------------
+// Two paginated read models for the RCM tables surfaced in the HHAH/PG portals.
+// listRcmPatients = Table 1 (patient demographics); listRcmBilling = Table 2
+// (billing lines from rcm_records + latest audit_records status).
+
+export async function listRcmPatients({ hhahId = null, pgId = null, page = 1, limit = 10 } = {}) {
+  const sql = getSql();
+  const offset = (page - 1) * limit;
+  const rows = await sql`
+    SELECT
+      p.id,
+      p.name AS patient_name,
+      p.mrn AS account_no,
+      p.dob,
+      p.sex,
+      p.hhah_name AS agency_name,
+      p.personal_information->>'address' AS address,
+      p.personal_information->>'city' AS city,
+      p.personal_information->>'state' AS state,
+      p.personal_information->>'zip' AS zip,
+      p.insurance_details->>'company' AS insurance_company,
+      p.insurance_details->>'policy_id' AS insurance_id,
+      h.npi AS agency_npi,
+      a.soc,
+      e.soe,
+      e.eoe,
+      e.diagnosis_codes,
+      COUNT(*) OVER() AS total_count
+    FROM patients p
+    LEFT JOIN home_health_agencies h ON h.id = p.agency_id
+    LEFT JOIN LATERAL (
+      SELECT pa.soc FROM patient_admissions pa WHERE pa.patient_id = p.id ORDER BY pa.created_at DESC LIMIT 1
+    ) a ON true
+    LEFT JOIN LATERAL (
+      SELECT pe.soe, pe.eoe, pe.diagnosis_codes FROM patient_episodes pe
+      JOIN patient_admissions pa2 ON pa2.id = pe.admission_id WHERE pa2.patient_id = p.id
+      ORDER BY pe.created_at DESC LIMIT 1
+    ) e ON true
+    WHERE 1=1
+    ${hhahId ? sql`AND p.agency_id = ${hhahId}` : sql``}
+    ${pgId ? sql`AND p.pg_id = ${pgId}` : sql``}
+    ORDER BY p.name
+    LIMIT ${limit} OFFSET ${offset}
+  `;
+
+  const total = rows.length > 0 ? Number(rows[0].total_count) : 0;
+  const patients = rows.map((r, i) => {
+    const dc = Array.isArray(r.diagnosis_codes) ? r.diagnosis_codes : [];
+    return {
+      id: r.id,
+      line: offset + i + 1,
+      patient_name: r.patient_name,
+      account_no: r.account_no,
+      dob: r.dob,
+      sex: r.sex,
+      address: r.address,
+      city: r.city,
+      state: r.state,
+      zip: r.zip,
+      insurance_company: r.insurance_company,
+      insurance_id: r.insurance_id,
+      agency_name: r.agency_name,
+      agency_npi: r.agency_npi,
+      diagnosis_1: dc[0] || '',
+      diagnosis_2: dc[1] || '',
+      diagnosis_3: dc[2] || '',
+      diagnosis_4: dc[3] || '',
+      diagnosis_5: dc[4] || '',
+      diagnosis_6: dc[5] || '',
+      soc: r.soc,
+      soe: r.soe,
+      eoe: r.eoe,
+    };
+  });
+  return { patients, total, page, limit };
+}
+
+export async function listRcmBilling({ hhahId = null, pgId = null, page = 1, limit = 10 } = {}) {
+  const sql = getSql();
+  const offset = (page - 1) * limit;
+  const rows = await sql`
+    SELECT
+      p.name AS patient_name,
+      pe.soe,
+      pe.eoe,
+      r.payload->>'dos_from' AS dos_from,
+      r.payload->>'dos_to' AS dos_to,
+      r.cpt_code,
+      r.payload->>'pos' AS pos,
+      r.payload->>'units' AS units,
+      (r.amount_cents::float / 100) AS charges,
+      r.payload->'providers'->>'billing_name' AS certification_provider,
+      r.payload->'providers'->>'billing_npi' AS billing_provider_npi,
+      r.payload->'providers'->>'supervising_name' AS supervising_provider,
+      r.payload->'providers'->>'supervising_npi' AS supervising_provider_npi,
+      r.payload->'providers'->>'rendering_name' AS rendering_provider,
+      r.payload->'providers'->>'rendering_npi' AS rendering_provider_npi,
+      jsonb_array_length(COALESCE(r.payload->'ccNotes', '[]'::jsonb)) AS comment_count,
+      a.status AS audit_status,
+      a.updated_at AS audit_date,
+      COUNT(*) OVER() AS total_count
+    FROM rcm_records r
+    JOIN patients p ON p.id = r.patient_id
+    JOIN patient_episodes pe ON pe.id = r.episode_id
+    LEFT JOIN LATERAL (
+      SELECT ar.status, ar.updated_at FROM audit_records ar
+      WHERE ar.rcm_record_id = r.id ORDER BY ar.updated_at DESC LIMIT 1
+    ) a ON true
+    WHERE 1=1
+    ${hhahId ? sql`AND r.agency_id = ${hhahId}` : sql``}
+    ${pgId ? sql`AND p.pg_id = ${pgId}` : sql``}
+    ORDER BY p.name, r.cpo_month
+    LIMIT ${limit} OFFSET ${offset}
+  `;
+  const total = rows.length > 0 ? Number(rows[0].total_count) : 0;
+  const records = rows.map(r => ({
+    patient_name: r.patient_name,
+    soe: r.soe,
+    eoe: r.eoe,
+    dos_from: r.dos_from,
+    dos_to: r.dos_to,
+    cpt_code: r.cpt_code,
+    pos: r.pos || '11',
+    units: r.units || '1',
+    charges: r.charges,
+    certification_provider: r.certification_provider,
+    billing_provider_npi: r.billing_provider_npi,
+    supervising_provider: r.supervising_provider,
+    supervising_provider_npi: r.supervising_provider_npi,
+    rendering_provider: r.rendering_provider,
+    rendering_provider_npi: r.rendering_provider_npi,
+    comment_count: r.comment_count,
+    audit_status: r.audit_status || 'Pending',
+    audit_date: r.audit_date,
+  }));
+  return { records, total, page, limit };
 }

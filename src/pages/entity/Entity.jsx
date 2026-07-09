@@ -366,7 +366,12 @@ export default function Entity() {
               : 0;
             return (
               <div key={row.id} className="p-3 text-sm">
-                <div className="font-bold text-slate-800">{row.name}</div>
+                <div className="flex items-center gap-1 font-bold text-slate-800">
+                  {row.name}
+                  {row.raw_data?.source === 'auto_upload' && (
+                    <span className="ml-1.5 rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-amber-700">Auto</span>
+                  )}
+                </div>
                 <div className="text-xs text-slate-500">NPI {row.npi || 'Missing'}</div>
                 <div className="mt-1 text-xs text-slate-400">
                   {mappedCount} mapped practitioner{mappedCount === 1 ? '' : 's'}
@@ -398,7 +403,12 @@ export default function Entity() {
             const pgNames = Array.isArray(row.history?.PG_names) ? row.history.PG_names : [];
             return (
               <div key={row.id} className="p-3 text-sm">
-                <div className="font-bold text-slate-800">{row.physician_name || 'Unnamed practitioner'}</div>
+                <div className="flex items-center gap-1 font-bold text-slate-800">
+                  {row.physician_name || 'Unnamed practitioner'}
+                  {row.raw_data?.source === 'auto_upload' && (
+                    <span className="ml-1.5 rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-amber-700">Auto</span>
+                  )}
+                </div>
                 <div className="text-xs text-slate-500">NPI {row.npi_digits || 'Missing'}</div>
                 {pgNames.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1">

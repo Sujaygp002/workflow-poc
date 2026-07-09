@@ -375,7 +375,7 @@ export function dbWorkItemToAction(item) {
   return {
     dbBacked: true,
     instanceId: item.run_id,
-    workflowName: item.workflow_id || 'wf7',
+    workflowName: item.workflow_id || '',
     launchedAt: item.run_created_at || item.created_at,
     taskInstanceId: item.id,
     actionInstanceId: item.id,
@@ -401,4 +401,22 @@ export function dbWorkItemToAction(item) {
       },
     },
   };
+}
+
+export async function fetchRcmPatients({ hhahId, pgId, page = 1, limit = 10 } = {}) {
+  const params = new URLSearchParams({ view: 'rcm', page, limit });
+  if (hhahId) params.set('hhahId', hhahId);
+  if (pgId) params.set('pgId', pgId);
+  const res = await fetch(`/api/patients?${params}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function fetchRcmBilling({ hhahId, pgId, page = 1, limit = 10 } = {}) {
+  const params = new URLSearchParams({ view: 'rcm-billing', page, limit });
+  if (hhahId) params.set('hhahId', hhahId);
+  if (pgId) params.set('pgId', pgId);
+  const res = await fetch(`/api/patients?${params}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }

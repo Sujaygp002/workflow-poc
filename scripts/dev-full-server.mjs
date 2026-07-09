@@ -105,4 +105,11 @@ const server = http.createServer(async (req, res) => {
 });
 
 const PORT = Number(process.env.SERVER_PORT || 8791);
+// Long-running handlers (bulk upload appends + engine automation inside one
+// POST) exceed node's default 300s requestTimeout, and the default 5s
+// keepAliveTimeout races pooled client sockets into hangs. Disable both for
+// this local runner (Vercel governs its own limits in production).
+server.requestTimeout = 0;
+server.headersTimeout = 0;
+server.keepAliveTimeout = 120000;
 server.listen(PORT, () => console.log(`dev-full-server listening on http://localhost:${PORT}`));

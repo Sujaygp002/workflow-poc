@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, BellRing, Building2, CheckCircle2, ExternalLink, FileArchive, FileSpreadsheet, FileText, GitBranch, Loader2, Lock, RefreshCw, Upload, UserRound } from 'lucide-react';
+import { ArrowLeft, BellRing, Building2, CheckCircle2, ExternalLink, FileArchive, FileSpreadsheet, FileText, GitBranch, LayoutDashboard, Loader2, Lock, RefreshCw, Upload, UserRound } from 'lucide-react';
 import PatientHierarchyView from '../../components/PatientHierarchyView';
+import RcmTable from '../../components/RcmTable';
 import { formatUiDate, formatUiDateTime } from '../../lib/dateFormat';
 import { clearAuthToken, externalLogin, getAuthToken, getSession, logout, setAuthToken } from '../../lib/authApi';
-import { fetchAreaIntakeStatus, fetchOrders, fetchPatientTree, fetchPatients, startBulkUploadRun } from '../../lib/workflowApi';
+import { fetchAreaIntakeStatus, fetchPatientTree, fetchPatients, startBulkUploadRun } from '../../lib/workflowApi';
 
 // Computed status: eligible = has 485 + active F2F. Billable = all orders signed.
 // Patient status is the latest episode status.
@@ -185,13 +186,12 @@ export default function HhhLogin() {
   const [unsignedZip, setUnsignedZip] = useState(null);
   const [signedZip, setSignedZip] = useState(null);
   const [patients, setPatients] = useState([]);
-  const [orders, setOrders] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [selectedPatient, setSelectedPatient] = useState(null);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [selectedTree, setSelectedTree] = useState(null);
   const [loadingPatients, setLoadingPatients] = useState(false);
-  const [viewMode, setViewMode] = useState('patients');
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -225,13 +225,11 @@ export default function HhhLogin() {
     if (!agencyId) return;
     setLoadingPatients(true);
     try {
-      const [nextPatients, nextOrders, areas] = await Promise.all([
+      const [nextPatients, areas] = await Promise.all([
         fetchPatients({ hhahId: agencyId }),
-        fetchOrders({ hhahId: agencyId }),
         fetchAreaIntakeStatus().catch(() => []),
       ]);
       setPatients(nextPatients);
-      setOrders(nextOrders);
       const selectedArea = (areas || []).find((area) => (
         (area.hhahs || []).some((hhah) => hhah.hhah_id === agencyId)
       ));
@@ -294,7 +292,6 @@ export default function HhhLogin() {
   async function openPatient(patient) {
     setSelectedPatient(patient);
     setSelectedOrder(null);
-    setViewMode('patients');
     setSelectedTree(null);
     try {
       setSelectedTree(await fetchPatientTree(patient.id));
@@ -336,7 +333,6 @@ export default function HhhLogin() {
     logout('hhah').catch(() => {});
     setUser(null);
     setPatients([]);
-    setOrders([]);
     setNotifications([]);
     setSelectedPatient(null);
     setSelectedOrder(null);
@@ -358,6 +354,13 @@ export default function HhhLogin() {
     episodes: acc.episodes + Number(patient.episode_count || 0),
     orders: acc.orders + Number(patient.order_count || 0),
   }), { admissions: 0, episodes: 0, orders: 0 });
+
+  const TABS = [
+    { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { key: 'upload', label: 'Bulk Upload', icon: Upload },
+    { key: 'patients', label: 'Patients', icon: UserRound },
+    { key: 'rcm', label: 'RCM Table', icon: FileText },
+  ];
 
   return (
     <div className="min-h-screen bg-slate-100">
@@ -381,183 +384,180 @@ export default function HhhLogin() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-6 py-6 space-y-5">
-        <NotificationBanner notifications={notifications} />
-        <div className="grid md:grid-cols-4 gap-3">
-          <Metric label="Patients" value={patients.length} />
-          <Metric label="Admissions" value={totals.admissions} />
-          <Metric label="Episodes" value={totals.episodes} />
-          <Metric label="Orders" value={orders.length || totals.orders} />
+      <div className="border-b border-slate-200 bg-white">
+        <div className="max-w-7xl mx-auto px-6">
+          <nav className="flex gap-1">
+            {TABS.map(({ key, label, icon: Icon }) => (
+              <button key={key} onClick={() => setActiveTab(key)}
+                className={`flex items-center gap-1.5 border-b-2 px-4 py-3 text-sm font-semibold transition-colors ${activeTab === key ? 'border-violet-600 text-violet-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                <Icon size={15} /> {label}
+              </button>
+            ))}
+          </nav>
         </div>
+      </div>
 
-        <section className="rounded-2xl border border-slate-200 bg-white p-5">
-          <div>
-            <h2 className="text-lg font-bold text-slate-900">Bulk Upload</h2>
-            <p className="text-sm text-slate-500 mt-1">Upload one Excel workbook plus two order PDF ZIPs — unsigned (to be signed) and signed. Each PDF filename is its order number; an order number appears in only one ZIP.</p>
-            {preload && (
-              <p className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700 border border-emerald-200">
-                <CheckCircle2 size={13} /> Preloaded for this agency — just click Start Upload
-              </p>
-            )}
-          </div>
-          <form onSubmit={uploadBatch} className="mt-4 grid lg:grid-cols-[1fr_1fr_1fr_auto] gap-3 items-end">
-            <label className="block">
-              <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Patient + order Excel</span>
-              <div className="mt-1 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                <FileSpreadsheet size={18} className="text-emerald-600" />
-                <input type="file" accept=".xlsx" onChange={(event) => setWorkbook(event.target.files?.[0] || null)} className="w-full text-sm" />
-              </div>
-              {workbook && <div className="mt-1 truncate text-[11px] font-semibold text-emerald-700">✓ {workbook.name}</div>}
-            </label>
-            <label className="block">
-              <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Unsigned order PDFs ZIP</span>
-              <div className="mt-1 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                <FileArchive size={18} className="text-amber-600" />
-                <input type="file" accept=".zip" onChange={(event) => setUnsignedZip(event.target.files?.[0] || null)} className="w-full text-sm" />
-              </div>
-              {unsignedZip && <div className="mt-1 truncate text-[11px] font-semibold text-amber-700">✓ {unsignedZip.name}</div>}
-            </label>
-            <label className="block">
-              <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Signed order PDFs ZIP</span>
-              <div className="mt-1 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                <FileArchive size={18} className="text-emerald-600" />
-                <input type="file" accept=".zip" onChange={(event) => setSignedZip(event.target.files?.[0] || null)} className="w-full text-sm" />
-              </div>
-              {signedZip && <div className="mt-1 truncate text-[11px] font-semibold text-emerald-700">✓ {signedZip.name}</div>}
-            </label>
-            <button disabled={uploading} className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-sky-700 disabled:opacity-60">
-              {uploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-              {uploading ? 'Uploading' : 'Start Upload'}
-            </button>
-          </form>
-          {message && <div className="mt-3 flex items-center gap-2 text-sm text-emerald-700"><CheckCircle2 size={15} /> {message}</div>}
-          {error && <div className="mt-3 text-sm text-rose-600">{error}</div>}
-        </section>
+      <main className="max-w-7xl mx-auto px-6 py-6 space-y-5">
+        {activeTab === 'dashboard' && (
+          <section>
+            <NotificationBanner notifications={notifications} />
+            <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-8 text-center">
+              <LayoutDashboard size={40} className="mx-auto mb-3 text-slate-300" />
+              <h2 className="text-xl font-bold text-slate-700">Dashboard</h2>
+              <p className="mt-1 text-sm text-slate-400">Analytics and insights coming soon.</p>
+            </div>
+            <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <Metric label="Patients" value={patients.length} />
+              <Metric label="Admissions" value={totals.admissions} />
+              <Metric label="Episodes" value={totals.episodes} />
+              <Metric label="Orders" value={totals.orders} />
+            </div>
+          </section>
+        )}
 
-        <section className="grid lg:grid-cols-[360px_1fr] gap-5">
-          <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
-            <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
-              <div>
-                <h2 className="font-bold text-slate-900">{viewMode === 'patients' ? 'View Patients' : 'View Orders'}</h2>
-                <p className="text-xs text-slate-500">{viewMode === 'patients' ? 'Open a patient to inspect admissions, episodes, and orders.' : 'Open an order to inspect patient and reference links.'}</p>
-              </div>
-              <button onClick={refreshPatients} className="p-2 rounded-lg text-slate-400 hover:bg-slate-50 hover:text-slate-700">
-                <RefreshCw size={16} className={loadingPatients ? 'animate-spin' : ''} />
-              </button>
+        {activeTab === 'upload' && (
+          <section className="rounded-2xl border border-slate-200 bg-white p-5">
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">Bulk Upload</h2>
+              <p className="text-sm text-slate-500 mt-1">Upload one Excel workbook plus two order PDF ZIPs — unsigned (to be signed) and signed. Each PDF filename is its order number; an order number appears in only one ZIP.</p>
+              {preload && (
+                <p className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700 border border-emerald-200">
+                  <CheckCircle2 size={13} /> Preloaded for this agency — just click Start Upload
+                </p>
+              )}
             </div>
-            <div className="px-3 py-2 border-b border-slate-100 flex gap-1 bg-slate-50">
-              <button onClick={() => setViewMode('patients')} className={`flex-1 rounded-lg px-3 py-1.5 text-sm font-semibold ${viewMode === 'patients' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}>
-                Patients
-              </button>
-              <button onClick={() => setViewMode('orders')} className={`flex-1 rounded-lg px-3 py-1.5 text-sm font-semibold ${viewMode === 'orders' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}>
-                Orders
-              </button>
-            </div>
-            <div className="max-h-[640px] overflow-y-auto p-3 space-y-2">
-              {viewMode === 'patients' && patients.length === 0 ? (
-                <div className="py-12 text-center text-sm text-slate-400">
-                  <GitBranch size={30} className="mx-auto mb-2 opacity-40" />
-                  No patients yet.
+            <form onSubmit={uploadBatch} className="mt-4 grid lg:grid-cols-[1fr_1fr_1fr_auto] gap-3 items-end">
+              <label className="block">
+                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Patient + order Excel</span>
+                <div className="mt-1 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                  <FileSpreadsheet size={18} className="text-emerald-600" />
+                  <input type="file" accept=".xlsx" onChange={(event) => setWorkbook(event.target.files?.[0] || null)} className="w-full text-sm" />
                 </div>
-              ) : viewMode === 'patients' ? patients.map((patient) => (
-                <button
-                  key={patient.id}
-                  onClick={() => openPatient(patient)}
-                  className={`w-full text-left rounded-xl border p-3 transition-colors ${selectedPatient?.id === patient.id ? 'border-sky-300 bg-sky-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="font-bold text-slate-800">{patient.name}</div>
-                  </div>
-                  <div className="text-xs text-slate-500 mt-0.5">DOB {formatUiDate(patient.dob)} | MRN {patient.mrn || 'Missing'}</div>
-                  <div className="mt-2">
-                    <EligibilityChips status={patient.latest_episode_status} />
-                  </div>
-                  <div className="flex gap-2 mt-2 text-[11px] text-slate-500">
-                    <span>{patient.admission_count} adm</span>
-                    <span>{patient.episode_count} ep</span>
-                    <span>{patient.order_count} orders</span>
-                    <span className="ml-auto font-bold text-sky-700">Open patient</span>
-                  </div>
-                </button>
-              )) : orders.length === 0 ? (
-                <div className="py-12 text-center text-sm text-slate-400">
-                  <GitBranch size={30} className="mx-auto mb-2 opacity-40" />
-                  No orders yet.
+                {workbook && <div className="mt-1 truncate text-[11px] font-semibold text-emerald-700">✓ {workbook.name}</div>}
+              </label>
+              <label className="block">
+                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Unsigned order PDFs ZIP</span>
+                <div className="mt-1 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                  <FileArchive size={18} className="text-amber-600" />
+                  <input type="file" accept=".zip" onChange={(event) => setUnsignedZip(event.target.files?.[0] || null)} className="w-full text-sm" />
                 </div>
-              ) : orders.map((order) => (
-                <button
-                  key={order.id}
-                  onClick={() => {
-                    setSelectedOrder(order);
-                    setSelectedPatient(null);
-                    setSelectedTree(null);
-                  }}
-                  className={`w-full text-left rounded-xl border p-3 transition-colors ${selectedOrder?.id === order.id ? 'border-violet-300 bg-violet-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
-                >
-                  <div className="font-bold text-slate-800">{order.order_number}</div>
-                  <div className="text-xs text-slate-500 mt-0.5">{order.patient_name || 'No patient'} | {order.order_type || 'No type'}</div>
-                  <div className="mt-2">
-                    <EligibilityChips status={order.episode_status} />
-                  </div>
-                  <div className="flex gap-2 mt-2 text-[11px] text-slate-500">
-                    <span>{formatUiDate(order.order_date)}</span>
-                    <span className="ml-auto font-bold text-violet-700">Open order</span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
+                {unsignedZip && <div className="mt-1 truncate text-[11px] font-semibold text-amber-700">✓ {unsignedZip.name}</div>}
+              </label>
+              <label className="block">
+                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Signed order PDFs ZIP</span>
+                <div className="mt-1 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                  <FileArchive size={18} className="text-emerald-600" />
+                  <input type="file" accept=".zip" onChange={(event) => setSignedZip(event.target.files?.[0] || null)} className="w-full text-sm" />
+                </div>
+                {signedZip && <div className="mt-1 truncate text-[11px] font-semibold text-emerald-700">✓ {signedZip.name}</div>}
+              </label>
+              <button disabled={uploading} className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-sky-700 disabled:opacity-60">
+                {uploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+                {uploading ? 'Uploading' : 'Start Upload'}
+              </button>
+            </form>
+            {message && <div className="mt-3 flex items-center gap-2 text-sm text-emerald-700"><CheckCircle2 size={15} /> {message}</div>}
+            {error && <div className="mt-3 text-sm text-rose-600">{error}</div>}
+          </section>
+        )}
 
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 min-h-[520px]">
-            {selectedOrder ? (
-              <div className="space-y-4">
-                <button onClick={() => setSelectedOrder(null)} className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800">
-                  <ArrowLeft size={15} /> Back to order list
-                </button>
-                <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
-                  <div className="text-xs font-bold uppercase tracking-wide text-violet-700">Order</div>
-                  <h2 className="text-2xl font-bold text-slate-900 mt-1">{selectedOrder.order_number}</h2>
-                  <p className="text-sm text-slate-600 mt-1">{selectedOrder.order_type || 'No type'} | {formatUiDate(selectedOrder.order_date)}</p>
-                  <div className="mt-3">
-                    <EligibilityChips status={selectedOrder.episode_status} />
-                  </div>
-                </div>
-                <div className="grid md:grid-cols-2 gap-3 text-sm">
-                  <div className="rounded-xl border border-slate-200 p-3">
-                    <div className="text-xs font-bold uppercase tracking-wide text-slate-400 mb-2">Patient</div>
-                    <div className="font-bold text-slate-800">{selectedOrder.patient_name || 'No patient linked'}</div>
-                    <div className="text-slate-500 text-xs mt-1">MRN {selectedOrder.patient_mrn || 'Missing'}</div>
-                  </div>
-                  <div className="rounded-xl border border-slate-200 p-3">
-                    <div className="text-xs font-bold uppercase tracking-wide text-slate-400 mb-2">References</div>
-                    <div className="text-slate-700">PG: {selectedOrder.pg_name || 'Missing'}</div>
-                    <div className="text-slate-700">HHAH: {selectedOrder.agency_name || 'Missing'}</div>
-                    <div className="text-slate-700">NPI: {selectedOrder.billing_provider_npi || 'Missing'}</div>
-                  </div>
-                </div>
-                <OrderPdfViewer order={selectedOrder} />
-              </div>
-            ) : !selectedPatient ? (
-              <div className="h-full min-h-[460px] flex items-center justify-center text-center text-slate-400">
+        {activeTab === 'patients' && (
+          <section className="grid lg:grid-cols-[360px_1fr] gap-5">
+            <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+              <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
                 <div>
-                  <GitBranch size={42} className="mx-auto mb-3 opacity-40" />
-                  <p className="font-medium">Select a patient or order to open details.</p>
+                  <h2 className="font-bold text-slate-900">View Patients</h2>
+                  <p className="text-xs text-slate-500">Open a patient to inspect admissions, episodes, and orders.</p>
                 </div>
-              </div>
-            ) : !selectedTree ? (
-              <div className="h-full min-h-[460px] flex items-center justify-center text-slate-400">
-                <Loader2 size={24} className="animate-spin" />
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <button onClick={() => { setSelectedPatient(null); setSelectedTree(null); }} className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800">
-                  <ArrowLeft size={15} /> Back to patient list
+                <button onClick={refreshPatients} className="p-2 rounded-lg text-slate-400 hover:bg-slate-50 hover:text-slate-700">
+                  <RefreshCw size={16} className={loadingPatients ? 'animate-spin' : ''} />
                 </button>
-                <PatientHierarchyView tree={selectedTree} />
               </div>
-            )}
-          </div>
-        </section>
+              <div className="max-h-[640px] overflow-y-auto p-3 space-y-2">
+                {patients.length === 0 ? (
+                  <div className="py-12 text-center text-sm text-slate-400">
+                    <GitBranch size={30} className="mx-auto mb-2 opacity-40" />
+                    No patients yet.
+                  </div>
+                ) : patients.map((patient) => (
+                  <button
+                    key={patient.id}
+                    onClick={() => openPatient(patient)}
+                    className={`w-full text-left rounded-xl border p-3 transition-colors ${selectedPatient?.id === patient.id ? 'border-sky-300 bg-sky-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="font-bold text-slate-800">{patient.name}</div>
+                    </div>
+                    <div className="text-xs text-slate-500 mt-0.5">DOB {formatUiDate(patient.dob)} | MRN {patient.mrn || 'Missing'}</div>
+                    <div className="mt-2">
+                      <EligibilityChips status={patient.latest_episode_status} />
+                    </div>
+                    <div className="flex gap-2 mt-2 text-[11px] text-slate-500">
+                      <span>{patient.admission_count} adm</span>
+                      <span>{patient.episode_count} ep</span>
+                      <span>{patient.order_count} orders</span>
+                      <span className="ml-auto font-bold text-sky-700">Open patient</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 min-h-[520px]">
+              {selectedOrder ? (
+                <div className="space-y-4">
+                  <button onClick={() => setSelectedOrder(null)} className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800">
+                    <ArrowLeft size={15} /> Back to patient list
+                  </button>
+                  <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
+                    <div className="text-xs font-bold uppercase tracking-wide text-violet-700">Order</div>
+                    <h2 className="text-2xl font-bold text-slate-900 mt-1">{selectedOrder.order_number}</h2>
+                    <p className="text-sm text-slate-600 mt-1">{selectedOrder.order_type || 'No type'} | {formatUiDate(selectedOrder.order_date)}</p>
+                    <div className="mt-3">
+                      <EligibilityChips status={selectedOrder.episode_status} />
+                    </div>
+                  </div>
+                  <div className="grid md:grid-cols-2 gap-3 text-sm">
+                    <div className="rounded-xl border border-slate-200 p-3">
+                      <div className="text-xs font-bold uppercase tracking-wide text-slate-400 mb-2">Patient</div>
+                      <div className="font-bold text-slate-800">{selectedOrder.patient_name || 'No patient linked'}</div>
+                      <div className="text-slate-500 text-xs mt-1">MRN {selectedOrder.patient_mrn || 'Missing'}</div>
+                    </div>
+                    <div className="rounded-xl border border-slate-200 p-3">
+                      <div className="text-xs font-bold uppercase tracking-wide text-slate-400 mb-2">References</div>
+                      <div className="text-slate-700">PG: {selectedOrder.pg_name || 'Missing'}</div>
+                      <div className="text-slate-700">HHAH: {selectedOrder.agency_name || 'Missing'}</div>
+                      <div className="text-slate-700">NPI: {selectedOrder.billing_provider_npi || 'Missing'}</div>
+                    </div>
+                  </div>
+                  <OrderPdfViewer order={selectedOrder} />
+                </div>
+              ) : !selectedPatient ? (
+                <div className="h-full min-h-[460px] flex items-center justify-center text-center text-slate-400">
+                  <div>
+                    <GitBranch size={42} className="mx-auto mb-3 opacity-40" />
+                    <p className="font-medium">Select a patient to open details.</p>
+                  </div>
+                </div>
+              ) : !selectedTree ? (
+                <div className="h-full min-h-[460px] flex items-center justify-center text-slate-400">
+                  <Loader2 size={24} className="animate-spin" />
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <button onClick={() => { setSelectedPatient(null); setSelectedTree(null); }} className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800">
+                    <ArrowLeft size={15} /> Back to patient list
+                  </button>
+                  <PatientHierarchyView tree={selectedTree} />
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        {activeTab === 'rcm' && (
+          <RcmTable hhahId={agencyId} />
+        )}
       </main>
     </div>
   );

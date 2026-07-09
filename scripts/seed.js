@@ -1,11 +1,9 @@
 import { getSql, jsonParam } from '../api/_lib/db.js';
-import { WORKFLOW_DEFINITIONS } from '../api/_lib/workflowDefinition.js';
 import {
   createHhahFromPayload,
   findHhahByName,
   linkHhahToArea,
   upsertStatisticalArea,
-  upsertWorkflowDefinition,
 } from '../api/_lib/repositories.js';
 import { normalizeName, normalizeNpi, recordContextKey, unitKey } from '../api/_lib/normalizers.js';
 
@@ -563,14 +561,9 @@ async function seedDemoPatientHierarchy() {
 }
 
 async function main() {
-  // WORKFLOW_DEFINITIONS is currently empty (no system workflows remain); the
-  // loop stays as the seam for any future system definition.
-  for (const definition of WORKFLOW_DEFINITIONS) {
-    await upsertWorkflowDefinition(definition, 1);
-  }
   await seedReferenceData();
   await seedDemoPatientHierarchy();
-  console.log('seeded workflow definitions, reference records, and demo patient hierarchy');
+  console.log('seeded reference records and demo patient hierarchy');
 }
 
 main().catch((error) => {

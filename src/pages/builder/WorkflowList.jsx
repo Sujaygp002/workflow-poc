@@ -24,21 +24,9 @@ import {
 } from '../../lib/workflowApi';
 import {
   triggerLabel,
-  TriggerChainConnector,
   WorkflowLane,
 } from '../../components/WorkflowDefinitionFlow';
 import WorkflowBuilder from './WorkflowBuilder';
-
-// Trigger number and colour for each system workflow id in the chain.
-// Empty since the last system workflow (wf-area-onboarding) was removed.
-const TRIGGER_META = {};
-
-const TRIGGER_COLOR = {
-  violet:  { badge: 'bg-violet-100 text-violet-700 border-violet-200', ring: 'border-violet-200' },
-  sky:     { badge: 'bg-sky-100 text-sky-700 border-sky-200',          ring: 'border-sky-200' },
-  emerald: { badge: 'bg-emerald-100 text-emerald-700 border-emerald-200', ring: 'border-emerald-200' },
-  amber:   { badge: 'bg-amber-100 text-amber-700 border-amber-200',    ring: 'border-amber-200' },
-};
 
 function FlowBody({ wf, accent = 'slate' }) {
   // One titled, cohesive workflow lane (START · trigger → steps → END). tasks=[]
@@ -65,21 +53,14 @@ function FlowToggle({ showFlow, onToggle }) {
 function SystemWorkflowCard({ wf }) {
   const [showFlow, setShowFlow] = useState(true);
   const steps = wf.steps || [];
-  const meta = TRIGGER_META[wf.id];
-  const col = meta ? TRIGGER_COLOR[meta.color] : null;
 
   return (
-    <div className={`bg-white rounded-xl border shadow-sm overflow-hidden ${col?.ring || 'border-slate-200'}`}>
+    <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
       <div className="p-4">
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              {meta && (
-                <span className={`text-[10px] font-black uppercase tracking-wide border rounded-full px-2 py-0.5 ${col.badge}`}>
-                  Trigger {meta.num}
-                </span>
-              )}
-              <span className="font-semibold text-slate-800">{wf.name}</span>
+                      <span className="font-semibold text-slate-800">{wf.name}</span>
               <span className="font-mono text-[11px] text-slate-400">{wf.id}</span>
               <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 font-medium">
                 System · read-only
@@ -99,6 +80,15 @@ function SystemWorkflowCard({ wf }) {
       {showFlow && <FlowBody wf={wf} />}
     </div>
   );
+}
+
+function fmtDate(dateStr) {
+  if (!dateStr) return null;
+  try {
+    return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(dateStr));
+  } catch {
+    return null;
+  }
 }
 
 // ── Builder workflow card: kind badge + Edit / Run / Delete ──────────────────
@@ -156,6 +146,9 @@ function BuilderWorkflowCard({ wf, onEdit, onDeleted }) {
             <div className="flex items-center gap-2 mt-2 flex-wrap">
               <span className="text-xs text-slate-400">{steps.length} steps</span>
               <span className="text-[11px] font-mono text-slate-400">trigger: {triggerLabel(wf.trigger)}</span>
+              {fmtDate(wf.updatedAt) && (
+                <span className="text-[11px] text-slate-400">· updated {fmtDate(wf.updatedAt)}</span>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
@@ -191,15 +184,6 @@ function BuilderWorkflowCard({ wf, onEdit, onDeleted }) {
   );
 }
 
-// Chain order for the system section. No system workflows remain (wf7,
-// wf-signing, wf-billing-monitor, and wf-area-onboarding were all removed);
-// the daily intake pipeline is a builder workflow in "Your workflows". Any
-// stray system definition still renders via `extras` below.
-const CHAIN_ORDER = [];
-const INDEPENDENT_ORDER = [];
-const CHAIN_CONNECTOR = {};
-// Workflows that begin a new standalone chain (shown with a section divider, not a connector).
-const STANDALONE_HEADER = {};
 
 export default function WorkflowList() {
   const [workflows, setWorkflows] = useState([]);
@@ -215,6 +199,7 @@ export default function WorkflowList() {
       setWorkflows(rows.map((row) => ({
         ...dbWorkflowToWorkflow(row),
         kind: row.kind || (row.definition?.builder ? 'builder' : 'system'),
+        updatedAt: row.updated_at || row.created_at || null,
       })));
       setDbError(null);
     } catch (error) {
@@ -237,12 +222,16 @@ export default function WorkflowList() {
     );
   }
 
-  const builders = workflows.filter((wf) => wf.kind === 'builder');
-  const systemById = Object.fromEntries(workflows.filter((wf) => wf.kind !== 'builder').map((wf) => [wf.id, wf]));
-  const chained = CHAIN_ORDER.map((id) => systemById[id]).filter(Boolean);
-  const independent = INDEPENDENT_ORDER.map((id) => systemById[id]).filter(Boolean);
-  const visibleWorkflowIds = new Set([...CHAIN_ORDER, ...INDEPENDENT_ORDER]);
-  const extras = workflows.filter((wf) => wf.kind !== 'builder' && !visibleWorkflowIds.has(wf.id));
+  const builders = workflows
+    .filter((wf) => wf.kind === 'builder')
+    .sort((a, b) => {
+      const ta = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+      const tb = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+      return tb - ta; // newest first
+    });
+  const chained = [];
+  const independent = [];
+  const extras = workflows.filter((wf) => wf.kind !== 'builder');
 
   // Owner request: warn when >1 active builder workflow shares document_upload —
   // a single HHAH upload starts a run of EACH of them.
@@ -321,20 +310,6 @@ export default function WorkflowList() {
 
           {chained.map((wf) => (
             <div key={wf.id}>
-              {STANDALONE_HEADER[wf.id] && (
-                <div className="mt-8 mb-3 flex items-center gap-2">
-                  <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-black uppercase tracking-wide text-sky-700">
-                    Trigger {STANDALONE_HEADER[wf.id].triggerNum} · {STANDALONE_HEADER[wf.id].label}
-                  </span>
-                  <span className="text-[11px] text-slate-400">{STANDALONE_HEADER[wf.id].note}</span>
-                </div>
-              )}
-              {CHAIN_CONNECTOR[wf.id] && (
-                <TriggerChainConnector
-                  triggerNum={CHAIN_CONNECTOR[wf.id].triggerNum}
-                  label={CHAIN_CONNECTOR[wf.id].label}
-                />
-              )}
               <SystemWorkflowCard wf={wf} />
             </div>
           ))}

@@ -134,6 +134,10 @@ function SimTimeControl() {
     try {
       setState(await simulateBusinessTime(op));
       setError(null);
+      // After advancing the day, auto-fire the daily workflow tick
+      if (op === '+1d') {
+        try { await tickTimeTriggers(); } catch { /* non-fatal */ }
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -167,13 +171,6 @@ function SimTimeControl() {
           +1 day
         </button>
         <button
-          onClick={() => apply('+1m')}
-          disabled={busy}
-          className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-        >
-          +1 month
-        </button>
-        <button
           onClick={() => apply('reset')}
           disabled={busy || !simulated}
           title="Reset to real time"
@@ -191,6 +188,7 @@ export default function Orchestrator() {
   const [runs, setRuns] = useState([]);
   const [dbError, setDbError] = useState(null);
   const [filter, setFilter] = useState('all');
+  const [showActiveOnly, setShowActiveOnly] = useState(false);
   const [live, setLive] = useState(true);
   const [lastSync, setLastSync] = useState(null);
   const [tickError, setTickError] = useState(null);
@@ -223,6 +221,17 @@ export default function Orchestrator() {
     setRuns((prev) => prev.filter((r) => r.id !== run.id));
     try {
       await deleteWorkflowRun(run.id);
+    } catch (err) {
+      setDbError(err.message);
+    }
+    await refresh();
+  }
+
+  async function deleteAllRuns() {
+    if (!window.confirm('Delete ALL workflow runs? This cannot be undone.')) return;
+    setRuns([]);
+    try {
+      await fetch('/api/workflow-runs', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ all: true }) });
     } catch (err) {
       setDbError(err.message);
     }
@@ -268,11 +277,15 @@ export default function Orchestrator() {
   const sortDesc = (a, b) => new Date(b.created_at) - new Date(a.created_at);
   const sortedRuns = [...runs].sort(sortDesc);
 
-  const filterRun = (r) => (
-    filter === 'running' ? r.status === 'running'
-    : filter === 'completed' ? r.status === 'completed'
-    : true
-  );
+  // Derive the active definition id from the newest run's workflow_id.
+  const activeDefId = sortedRuns.length > 0 ? sortedRuns[0].workflow_id : null;
+
+  const filterRun = (r) => {
+    if (filter === 'running' && r.status !== 'running') return false;
+    if (filter === 'completed' && r.status !== 'completed') return false;
+    if (showActiveOnly && activeDefId && r.workflow_id !== activeDefId) return false;
+    return true;
+  };
 
   const allFiltered = sortedRuns.filter(filterRun);
 
@@ -333,7 +346,7 @@ export default function Orchestrator() {
       )}
       <Legend />
 
-      <div className="mb-4 flex gap-2">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
         {[['all', 'All'], ['running', 'Running'], ['completed', 'Completed']].map(([v, l]) => (
           <button
             key={v}
@@ -343,6 +356,21 @@ export default function Orchestrator() {
             {l}
           </button>
         ))}
+        <button
+          onClick={() => setShowActiveOnly((v) => !v)}
+          className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${showActiveOnly ? 'border-sky-600 bg-sky-600 text-white' : 'border-slate-200 text-slate-500 hover:border-sky-300'}`}
+        >
+          Active definition only
+        </button>
+        <div className="ml-auto">
+          <button
+            onClick={deleteAllRuns}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-600 hover:bg-rose-100"
+          >
+            <Trash2 size={12} />
+            Clear all runs
+          </button>
+        </div>
       </div>
 
       {!loaded ? (

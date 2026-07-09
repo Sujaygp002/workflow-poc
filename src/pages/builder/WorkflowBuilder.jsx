@@ -18,6 +18,7 @@ import {
   ChevronUp,
   Cog,
   GitFork,
+  Info,
   Layers,
   Loader2,
   Plus,
@@ -381,6 +382,7 @@ function SystemNodeCard({ node, onChange, onRemove, catalog, groups = [] }) {
       ringOverride={gIdx >= 0 ? groupTint(gIdx).ring : undefined}
       groupControl={groups.length ? <GroupControl node={node} groups={groups} onChange={onChange} /> : undefined}
     >
+      <div className="mb-2 text-[10px] text-slate-500">Runs automatically</div>
       <label className="block">
         <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Action</span>
         <select
@@ -485,6 +487,7 @@ function TaskNodeCard({ node, onChange, onRemove, catalog, groups = [] }) {
       ringOverride={gIdx >= 0 ? groupTint(gIdx).ring : undefined}
       groupControl={groups.length ? <GroupControl node={node} groups={groups} onChange={onChange} /> : undefined}
     >
+      <div className="mb-2 text-[10px] text-rose-500">Worker must complete</div>
       <label className="block">
         <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Task name <span className="text-rose-500">*</span></span>
         <input
@@ -544,9 +547,9 @@ function TaskNodeCard({ node, onChange, onRemove, catalog, groups = [] }) {
 function ConditionNodeCard({ node, onChange, onRemove, catalog, groups = [] }) {
   const conditions = catalog?.conditions || [];
   const selected = conditions.find((c) => c.key === node.conditionKey);
-  const negation = conditions.find((c) => c.key === selected?.negation);
   return (
     <NodeShell tone="amber" badge="IF" title="Condition" onRemove={onRemove}>
+      <div className="mb-2 text-[10px] text-amber-600">Branches the flow</div>
       <label className="block">
         <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500">If …</span>
         <select
@@ -560,8 +563,8 @@ function ConditionNodeCard({ node, onChange, onRemove, catalog, groups = [] }) {
       {selected?.description && <div className="mt-1 text-[10px] text-slate-500">{selected.description}</div>}
       <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
         <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-2">
-          <div className="text-center text-[10px] font-black uppercase tracking-wide text-emerald-600">
-            TRUE · {selected?.label || node.conditionKey}
+          <div className="text-center text-[11px] font-black tracking-wide text-emerald-700">
+            ✓ If condition is TRUE →
           </div>
           <SequenceEditor
             seq={node.ifTrue}
@@ -571,9 +574,9 @@ function ConditionNodeCard({ node, onChange, onRemove, catalog, groups = [] }) {
             emptyHint="add at least one node"
           />
         </div>
-        <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-2">
-          <div className="text-center text-[10px] font-black uppercase tracking-wide text-slate-500">
-            FALSE · {negation?.label || `not ${selected?.label || node.conditionKey}`}
+        <div className="rounded-xl border border-rose-200 bg-rose-50/40 p-2">
+          <div className="text-center text-[11px] font-black tracking-wide text-rose-600">
+            ✗ If condition is FALSE →
           </div>
           <SequenceEditor
             seq={node.ifFalse}
@@ -786,6 +789,33 @@ function TriggerCard({ trigger, onChange, catalog, docUploadClash }) {
   );
 }
 
+// ── Builder Tips collapsible info box ─────────────────────────────────────────
+function BuilderTips() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-xl"
+      >
+        <Info size={14} className="shrink-0 text-slate-400" />
+        <span>Builder Guide</span>
+        {open ? <ChevronUp size={13} className="ml-auto" /> : <ChevronDown size={13} className="ml-auto" />}
+      </button>
+      {open && (
+        <ul className="space-y-1.5 px-4 pb-3 pt-1 text-[11px] text-slate-600">
+          <li>• System nodes run automatically in sequence — no worker needed.</li>
+          <li>• Human task nodes pause and wait for a worker to complete one or more actions.</li>
+          <li>• Condition nodes branch the flow: add steps for both the TRUE and FALSE paths.</li>
+          <li>• Groups (TASK-name) collapse multiple steps into one visual block in the flowchart.</li>
+          <li>• Save compiles and validates the workflow before storing — errors appear inline.</li>
+        </ul>
+      )}
+    </div>
+  );
+}
+
 // ── main page ─────────────────────────────────────────────────────────────────
 // Props: workflow (mapped definition row for edit mode; null = new),
 // existingWorkflows (for the duplicate document_upload warning), onDone().
@@ -884,6 +914,13 @@ export default function WorkflowBuilder({ workflow = null, existingWorkflows = [
           <ArrowLeft size={14} /> Workflows
         </button>
         <div>
+          {workflow && (
+            <div className="mb-0.5 flex items-center gap-1.5 text-[11px] text-slate-400">
+              <span>Workflows</span>
+              <span>/</span>
+              <span className="font-semibold text-slate-600">Editing: {workflow.name || editingId}</span>
+            </div>
+          )}
           <h1 className="text-2xl font-bold text-slate-800">{workflow ? 'Edit workflow' : 'New workflow'}</h1>
           <p className="mt-0.5 text-sm text-slate-500">
             {editingId ? <span className="font-mono text-[11px]">{editingId}</span> : 'Pick a trigger, then add system actions, tasks and conditions.'}
@@ -954,6 +991,10 @@ export default function WorkflowBuilder({ workflow = null, existingWorkflows = [
 
           <div className="mt-4">
             <TriggerCard trigger={trigger} onChange={setTrigger} catalog={catalog} docUploadClash={docUploadClash} />
+          </div>
+
+          <div className="mt-4">
+            <BuilderTips />
           </div>
 
           <div className="mt-4">

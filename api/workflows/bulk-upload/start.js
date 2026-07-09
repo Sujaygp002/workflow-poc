@@ -6,11 +6,15 @@ import { parseWorkflowWorkbook } from '../../_lib/excelParser.js';
 import { handleError, methodNotAllowed, readJson, sendJson } from '../../_lib/http.js';
 import {
   countWorkflowItems,
+  createPgFromPayload,
+  createPractitionerFromPayload,
   createTaskRunsForItem,
   createWorkflowItem,
   createWorkflowRun,
   ensureSystemDefinitions,
   findHhahByName,
+  findPgByName,
+  findPractitionerByNpi,
   findStatisticalAreaByName,
   findWorkflowRunBySourceLabel,
   getHhahById,
@@ -19,6 +23,7 @@ import {
   insertUploadedDocument,
   listActiveBuilderWorkflowsByTrigger,
   listTaskRunsForRun,
+  mapPgToPractitioner,
   resolveOpenAgencyAskTaskForRun,
 } from '../../_lib/repositories.js';
 import { runWorkflowAutomation } from '../../_lib/workflowEngine.js';
@@ -108,6 +113,109 @@ function stampSessionAgency(referencePayload, areaContext) {
       },
     },
   };
+}
+
+// Auto-create PGs and practitioners referenced by the upload rows so that
+// patient/order writes can resolve real PG ids (and the Coverage Map / Entity
+// pages show them) even when the agency never onboarded them explicitly.
+//
+// Best-effort: every step is wrapped so a failure NEVER blocks the upload.
+// - PG key: referencePayload.PG.name (from the workbook "pg name" column).
+// - Practitioner key: referencePayload.practitioner.NPI (from the order row NPI).
+// Created rows are tagged raw_data.source='auto_upload', onboarded:false so the
+// UI can distinguish auto-created (non-onboarded) entities. Resolved PG ids are
+// stamped back onto each row's referencePayload.PG.id for the item writers.
+async function autoUpsertPgsAndPractitioners(rows) {
+  const stats = { pgCreated: 0, pgFound: 0, pgSkipped: 0, practCreated: 0, practFound: 0, practSkipped: 0, mapped: 0 };
+  if (!Array.isArray(rows) || !rows.length) return stats;
+
+  const digitsOnly = (v) => String(v ?? '').replace(/\D/g, '');
+  const pgIdByName = new Map();       // normalized-ish key (raw name) -> pg id
+  const practIdByNpi = new Map();     // npi digits -> practitioner id
+
+  // 1) Resolve/create every unique PG name.
+  for (const row of rows) {
+    const pgName = (row?.referencePayload?.PG?.name || '').trim();
+    if (!pgName) { stats.pgSkipped += 1; continue; }
+    if (pgIdByName.has(pgName)) continue;
+    try {
+      let pg = await findPgByName(pgName);
+      if (pg) {
+        stats.pgFound += 1;
+      } else {
+        const pgNpi = row.referencePayload.PG.NPI || row.referencePayload.PG.npi || '';
+        pg = await createPgFromPayload({
+          PG: {
+            name: pgName,
+            NPI: pgNpi || '',
+            raw_data: { source: 'auto_upload', onboarded: false },
+            contact_info: { physician_ids: [] },
+          },
+        });
+        stats.pgCreated += 1;
+      }
+      if (pg?.id) pgIdByName.set(pgName, pg.id);
+    } catch (err) {
+      console.error('[autoUpsert] PG upsert failed for', pgName, err?.message || err);
+    }
+  }
+
+  // 2) Resolve/create every unique practitioner NPI (order-row NPI).
+  for (const row of rows) {
+    const pract = row?.referencePayload?.practitioner || {};
+    const npi = digitsOnly(pract.NPI || pract.npi);
+    if (!npi) { stats.practSkipped += 1; continue; }
+    if (practIdByNpi.has(npi)) continue;
+    try {
+      let existing = await findPractitionerByNpi(npi);
+      if (existing) {
+        stats.practFound += 1;
+      } else {
+        const practitionerName = (pract.physician_name || pract.name || '').trim();
+        existing = await createPractitionerFromPayload({
+          practitioner: {
+            physician_name: practitionerName || 'Unknown',
+            NPI: npi,
+            raw_data: { source: 'auto_upload', onboarded: false },
+            history: { PG_names: [] },
+          },
+        });
+        stats.practCreated += 1;
+      }
+      if (existing?.id) practIdByNpi.set(npi, existing.id);
+    } catch (err) {
+      console.error('[autoUpsert] practitioner upsert failed for npi', npi, err?.message || err);
+    }
+  }
+
+  // 3) Auto-map PG <-> practitioner when a row carries both. mapPgToPractitioner
+  //    is idempotent (dedupes physician_ids / PG_names), so re-mapping is safe.
+  const mappedPairs = new Set();
+  for (const row of rows) {
+    const pgName = (row?.referencePayload?.PG?.name || '').trim();
+    const npi = digitsOnly(row?.referencePayload?.practitioner?.NPI || row?.referencePayload?.practitioner?.npi);
+    const pgId = pgName ? pgIdByName.get(pgName) : null;
+    const practitionerId = npi ? practIdByNpi.get(npi) : null;
+    if (!pgId || !practitionerId) continue;
+    const pairKey = `${pgId}|${practitionerId}`;
+    if (mappedPairs.has(pairKey)) continue;
+    mappedPairs.add(pairKey);
+    try {
+      await mapPgToPractitioner({ pgId, practitionerId });
+      stats.mapped += 1;
+    } catch (err) {
+      console.error('[autoUpsert] mapPgToPractitioner failed for', pairKey, err?.message || err);
+    }
+  }
+
+  // 4) Stamp the resolved PG id back onto each row so the item writers use it.
+  for (const row of rows) {
+    const pgName = (row?.referencePayload?.PG?.name || '').trim();
+    const pgId = pgName ? pgIdByName.get(pgName) : null;
+    if (pgId && row.referencePayload?.PG) row.referencePayload.PG.id = pgId;
+  }
+
+  return stats;
 }
 
 async function pdfsFromZip(zipFile, signed = false) {
@@ -340,6 +448,16 @@ async function startFromJson(req, hhahUser) {
 // Common flow for multipart + JSON: register documents once per (agency, day)
 // then append the parsed rows to each active daily workflow's run.
 async function runDailyAppend({ workflows, parsed, areaContext, pdfs, zipPdfs }) {
+  // Best-effort auto-creation of the PGs + practitioners the rows reference, and
+  // stamp resolved PG ids back onto parsed.joined BEFORE items are created.
+  // Never throws — auto-creation must not block the upload.
+  try {
+    const stats = await autoUpsertPgsAndPractitioners(parsed.joined);
+    console.log('[autoUpsert] pgs/practitioners:', JSON.stringify(stats));
+  } catch (err) {
+    console.error('[autoUpsert] skipped — auto-creation failed:', err?.message || err);
+  }
+
   const results = [];
   for (const workflow of workflows) {
     // Register documents against THIS workflow's daily run so

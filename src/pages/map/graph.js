@@ -232,6 +232,7 @@ export function buildGraph({ patients = [], orders = [], reference = {} } = {}) 
   const pgs = pgsRef.map((pg) => {
     const nm = clean(pg.name);
     const agencyIds = edges.filter((e) => key(e.pg) === key(nm)).map((e) => e.hhahId);
+    const isAutoCreated = pg.raw_data?.source === 'auto_upload' || pg.raw_data?.onboarded === false;
     return {
       id: `pg::${key(nm)}`,
       name: nm,
@@ -239,6 +240,7 @@ export function buildGraph({ patients = [], orders = [], reference = {} } = {}) 
       practitionerCount: (practitionerNamesByPg[nm] || []).length,
       // agency ids (edge.hhahId) this PG is connected to (for click-to-connect lines)
       agencyIds: [...new Set(agencyIds)],
+      onboarded: isAutoCreated ? false : true,
     };
   });
 

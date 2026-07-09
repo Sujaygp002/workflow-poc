@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Building2, CheckCircle2, ClipboardSignature, ExternalLink, LayoutDashboard, Loader2, Lock, RefreshCw, Stethoscope, UserRound } from 'lucide-react';
+import { Building2, CheckCircle2, ClipboardSignature, ExternalLink, FileText, LayoutDashboard, Loader2, Lock, RefreshCw, Stethoscope, UserRound } from 'lucide-react';
 import { formatUiDate } from '../../lib/dateFormat';
 import { clearAuthToken, externalLogin, getAuthToken, getSession, logout, setAuthToken } from '../../lib/authApi';
 import { bulkSignPgOrders, fetchPgUnsignedOrders } from '../../lib/workflowApi';
+import RcmTable from '../../components/RcmTable';
 
 function todayYmd() {
   return new Date().toISOString().slice(0, 10);
@@ -75,26 +76,6 @@ function LoginPanel({ onLogin }) {
   );
 }
 
-// PG admin view: dashboard only, coming soon.
-function ComingSoonDashboard({ pgName }) {
-  return (
-    <section className="space-y-4">
-      <div>
-        <h2 className="text-2xl font-bold text-slate-900">{pgName || 'Physician Group'}</h2>
-        <p className="mt-1 text-sm text-slate-500">Admin dashboard</p>
-      </div>
-      <div className="rounded-2xl border border-slate-200 bg-white p-10 min-h-[420px] flex items-center justify-center text-center">
-        <div>
-          <LayoutDashboard size={42} className="mx-auto mb-3 text-slate-300" />
-          <h3 className="text-2xl font-bold text-slate-900">Dashboard</h3>
-          <p className="mt-2 text-sm text-slate-500">Coming soon</p>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-// PG practitioner view: the existing Bulk Sign flow scoped to the session's PG.
 function BulkSign({ user }) {
   const pgId = user?.pgId || '';
   const [orders, setOrders] = useState([]);
@@ -246,6 +227,7 @@ function BulkSign({ user }) {
 export default function PgLogin() {
   const [user, setUser] = useState(null);
   const [checkingSession, setCheckingSession] = useState(() => !!getAuthToken('pg'));
+  const [activeTab, setActiveTab] = useState('dashboard');
 
   // Restore an existing PG session (bearer token in sessionStorage) on mount.
   useEffect(() => {
@@ -284,7 +266,14 @@ export default function PgLogin() {
 
   if (!user) return <LoginPanel onLogin={setUser} />;
 
-  const isPractitioner = user.role === 'practitioner';
+  const pgId = user?.pgId || '';
+
+  const tabs = [
+    { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { key: 'sign', label: 'Bulk Sign', icon: ClipboardSignature },
+    { key: 'patients', label: 'Patients', icon: UserRound },
+    { key: 'rcm', label: 'RCM Table', icon: FileText },
+  ];
 
   return (
     <div className="min-h-screen bg-slate-100">
@@ -297,10 +286,10 @@ export default function PgLogin() {
             <div>
               <h1 className="font-bold text-slate-900">PG Portal</h1>
               <p className="text-xs text-slate-500">
-                {user.pgName || 'Physician group'} · {isPractitioner ? 'Physician signing bucket' : 'Admin'}
+                {user.pgName || 'Physician group'} · {user.role === 'practitioner' ? 'Physician signing bucket' : 'Admin'}
               </p>
             </div>
-            {isPractitioner && (
+            {user.role === 'practitioner' && (
               <span className="ml-2 inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">
                 <Stethoscope size={13} />
                 {user.displayName || user.username}{user.npi ? ` · NPI ${user.npi}` : ''}
@@ -315,8 +304,37 @@ export default function PgLogin() {
           </button>
         </div>
       </header>
+
+      <div className="border-b border-slate-200 bg-white">
+        <div className="max-w-7xl mx-auto px-6">
+          <nav className="flex gap-1">
+            {tabs.map(({ key, label, icon: Icon }) => (
+              <button key={key} onClick={() => setActiveTab(key)}
+                className={`flex items-center gap-1.5 border-b-2 px-4 py-3 text-sm font-semibold transition-colors ${activeTab === key ? 'border-violet-600 text-violet-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                <Icon size={15} /> {label}
+              </button>
+            ))}
+          </nav>
+        </div>
+      </div>
+
       <main className="mx-auto max-w-7xl px-6 py-6">
-        {isPractitioner ? <BulkSign user={user} /> : <ComingSoonDashboard pgName={user.pgName} />}
+        {activeTab === 'dashboard' && (
+          <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center">
+            <LayoutDashboard size={40} className="mx-auto mb-3 text-slate-300" />
+            <h2 className="text-xl font-bold text-slate-700">Dashboard</h2>
+            <p className="mt-1 text-sm text-slate-400">Analytics and insights coming soon.</p>
+          </div>
+        )}
+        {activeTab === 'sign' && <BulkSign user={user} />}
+        {activeTab === 'patients' && (
+          <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center">
+            <UserRound size={40} className="mx-auto mb-3 text-slate-300" />
+            <h2 className="text-xl font-bold text-slate-700">Patients</h2>
+            <p className="mt-1 text-sm text-slate-400">Patient view for your physician group coming soon.</p>
+          </div>
+        )}
+        {activeTab === 'rcm' && <RcmTable pgId={pgId} />}
       </main>
     </div>
   );

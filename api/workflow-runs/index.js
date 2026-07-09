@@ -4,6 +4,7 @@ import {
   createTaskRunsForItem,
   createWorkflowItem,
   createWorkflowRun,
+  deleteAllWorkflowRuns,
   findNewestRunForWorkflow,
   findWorkflowRunBySourceLabel,
   getActiveWorkflow,
@@ -270,6 +271,15 @@ export default async function handler(req, res) {
       return sendJson(res, 200, { runs: withTasks });
     }
 
+    if (req.method === 'DELETE') {
+      const body = await readJson(req);
+      if (body?.all === true) {
+        await deleteAllWorkflowRuns();
+        return sendJson(res, 200, { deleted: true });
+      }
+      return sendJson(res, 400, { error: 'Missing all:true in body.' });
+    }
+
     if (req.method === 'POST') {
       const body = await readJson(req);
       switch (body.action) {
@@ -286,7 +296,7 @@ export default async function handler(req, res) {
       }
     }
 
-    return methodNotAllowed(res, ['GET', 'POST']);
+    return methodNotAllowed(res, ['GET', 'POST', 'DELETE']);
   } catch (error) {
     return handleError(res, error);
   }

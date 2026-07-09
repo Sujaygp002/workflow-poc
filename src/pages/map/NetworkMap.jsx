@@ -300,7 +300,7 @@ function createEngine(nodesG, linksG, viewG, polyG, { onBanner }) {
       }
     });
     nodes.forEach((n) => { if (n.hidden) { n.el.g.style.display = 'none'; return; } n.el.g.style.display = '';
-      const r = n.r, c = COLORS[n.kind];
+      const r = n.r, c = (n.ref?.onboarded === false || n.onboarded === false) ? '#F59E0B' : (COLORS[n.kind] || '#94A3B8');
       // appear: 0→1 spring-in scale for freshly spawned balls
       const sc = 0.6 + 0.4 * (n.appear ?? 1);
       n.el.g.setAttribute('transform', `translate(${n.rx.toFixed(1)},${n.ry.toFixed(1)}) scale(${sc.toFixed(3)})`);
@@ -424,6 +424,24 @@ function createEngine(nodesG, linksG, viewG, polyG, { onBanner }) {
     // idle = no agency is expanded → safe to rebuild from a fresh poll without
     // yanking the user out of a drill-down.
     isIdle: () => !nodes.some((n) => n.kind === 'hhah' && n.open),
+    // reset: collapse all open nodes back to just the persistent hhah/pg base layer,
+    // clear all spawned children and links, then re-render. Called before a forced reload.
+    reset() {
+      // Remove all non-persistent (spawned) nodes and their DOM elements.
+      [...nodes].forEach((n) => {
+        if (!isPersistent(n)) { n.el.g.remove(); delete byId[n.id]; }
+      });
+      nodes = nodes.filter(isPersistent);
+      // Clear all non-base links and their DOM elements.
+      links = links.filter((l) => {
+        if (l.kind !== 'base') { l.el?.remove(); return false; }
+        return true;
+      });
+      // Collapse all persistent nodes.
+      nodes.forEach((n) => { n.open = false; });
+      activeAgency = null;
+      layout();
+    },
   };
 }
 
@@ -437,14 +455,14 @@ export default function NetworkMap() {
   const [suggest, setSuggest] = useState([]);
   const graphRef = useRef({ hhahs: [], edges: [], practitionersByPg: {} });
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (force = false) => {
     try {
       const [patients, orders, reference] = await Promise.all([fetchPatients(), fetchOrders(), fetchReferenceData()]);
       const g = buildGraph({ patients, orders, reference });
       graphRef.current = g;
       // rebuild only when idle (no cluster open) so a live poll never yanks the user
-      // out of an open drill-down.
-      if (engineRef.current?.isIdle?.()) engineRef.current.setData(g);
+      // out of an open drill-down. force=true bypasses the idle check (used by Reset).
+      if (force || engineRef.current?.isIdle?.()) engineRef.current.setData(g);
       setStamp(new Date().toLocaleTimeString());
       setErr('');
     } catch (e) { setErr(e.message || 'Failed to load'); }
@@ -506,7 +524,7 @@ export default function NetworkMap() {
           {live ? <Play size={12} className="text-emerald-500" /> : <Pause size={12} />}
           {live ? `Live · ${stamp}` : 'Paused'}
         </button>
-        <button onClick={load} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50">
+        <button onClick={() => { engineRef.current?.reset?.(); load(true); }} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50">
           <RefreshCw size={14} /> Reset
         </button>
       </div>
@@ -530,6 +548,7 @@ export default function NetworkMap() {
         {[['agency', COLORS.hhah], ['physician group', COLORS.pg], ['practitioner', COLORS.prac], ['patients', COLORS.edge], ['adm', COLORS.adm], ['current/past adm', COLORS.admBucket], ['epi', COLORS.epi], ['current/past epi', COLORS.epBucket], ['orders', COLORS.order], ['signed', COLORS.osigned], ['unsigned', COLORS.ounsigned], ['485', COLORS.o485], ['f2f', COLORS.of2f], ['other', COLORS.oother]].map(([l, c]) => (
           <span key={l} className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full" style={{ background: c }} />{l}</span>
         ))}
+        <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full" style={{ background: '#F59E0B' }} />auto-created</span>
       </div>
     </div>
   );
