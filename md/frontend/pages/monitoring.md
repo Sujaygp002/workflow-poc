@@ -3,8 +3,8 @@
 **Read this when:** changing how workflow runs render (trigger grouping, run cards, stats, live polling), the client-side Trigger 4 billing-monitor loop, the Coverage Map drilldown levels/colors/counts, or the HHAH→PG graph aggregation.
 
 ## What it does
-- **`/orchestrator`** (`Orchestrator.jsx`) — live view of all DB workflow runs as flowcharts. Polls `fetchWorkflowRuns()` + `fetchAreaIntakeStatus()` every 2.5s, groups runs by trigger (wf-area-onboarding → other), renders each as a `RunCard` (flowchart + object sidebar), and **drives builder time triggers itself**: the 10-second `tick()` interval calls `tickTimeTriggers()` (fires `time_interval` + `daily_time` builder workflows). This means builder `daily_time` workflows advance while the Orchestrator tab is open — the Vercel cron (`0 17 * * *` on `GET /api/workflow-runs?action=tick`) covers the server-only path. **`runBillingMonitor()` has been removed** from the poll (2026-07-09); wf7/wf-signing/wf-billing-monitor run groups are also gone.
-- **`/map`** (`NetworkMap.jsx` + `graph.js`) — interactive SVG force graph: HHAH agency balls → patient-count edge ball per (HHAH, PG) → PG balls; edge drills down Admissions → Current/Past admission → Episodes → Current/Past episode → Orders → signed/unsigned + 485/F2F/other leaves. `graph.js` builds the whole model client-side by joining the existing patients/orders/reference feeds — no map-specific endpoint.
+- **`/orchestrator`** (`Orchestrator.jsx`) — live view of all DB workflow runs as flowcharts. Polls `fetchWorkflowRuns()` + `fetchAreaIntakeStatus()` every 2.5s, groups runs by trigger (wf-area-onboarding → other), renders each as a `RunCard` (flowchart + object sidebar), and **drives builder time triggers itself**: the 10-second `tick()` interval calls `tickTimeTriggers()` (fires `time_interval` + `daily_time` builder workflows). This means builder `daily_time` workflows advance while the Orchestrator tab is open — the Vercel cron (`0 17 * * *` on `GET /api/workflow-runs?action=tick`) covers the server-only path. **`runBillingMonitor()` has been removed** from the poll (2026-07-09); wf7/wf-signing/wf-billing-monitor run groups are also gone. The page header includes a **`SimTimeControl`** widget for demo time-travel (see §SimTimeControl below).
+- **`/map`** (`NetworkMap.jsx` + `graph.js` + `msa.js`) — interactive SVG force graph with an **MSA polygon backdrop**: HHAH agency balls + PG balls are seeded deterministically **inside** the Taunton–Bristol County, MA region silhouette (`msa.js`). Edge drills down Admissions → Current/Past admission → Episodes → Current/Past episode → Orders → signed/unsigned + 485/F2F/other leaves. `graph.js` builds the whole model client-side by joining the existing patients/orders/reference feeds — no map-specific endpoint.
 
 ## Key functions / exports
 | name | signature (params -> return) | behavior in one line | called by |
@@ -40,6 +40,34 @@ Graph model (from `buildGraph`):
   practitionersByPg: { [pgName]: count } }
 ```
 Engine node: `{ id, kind, label, x, y, rx, ry, appear, r, open, hidden, ref, count?, stats?, age?, breakdown?, statLabel?, el: {g, core, ring, inner, close, badge, label...} }`. Node `kind`s + drill order: `hhah` → `edge` (patient count) → `adm` → `admBucket` (Current/Past, `age:'new'|'old'`) → `epi` → `epBucket` → `order` → leaves `osigned|ounsigned|o485|of2f|oother`. Colors/radii per kind in `COLORS`/`RAD` (NetworkMap.jsx).
+
+## SimTimeControl widget (Milestone D)
+
+**`SimTimeControl`** renders in the Orchestrator page header. It shows the current "business date"
+(real or simulated) and provides three ops: `+1 Day`, `+1 Month`, `Reset to real time`. When
+simulated, the header badge turns violet with the offset summary (`+Nd`).
+
+| Item | Detail |
+|------|--------|
+| Server module | `api/_lib/clock.js` — `businessNow()` / `businessToday()` / `businessNowPartsInTz()` — the single "now" source for business-meaningful date math; uses a ~5s in-process cache to avoid a DB hit on every call |
+| Persistence | `app_settings.sim_offset_ms` (jsonb key/value row) — migration 005 (`db/migrations/005_app_settings.sql`); additive + idempotent |
+| GET state | `GET /api/workflow-runs?action=simTime` → `getSimTimeState()` → `{ businessNow, simulated, offsetDays }` |
+| Set op | `POST { action:'simulateTime', op:'+1d'|'+1m'|'reset' }` → `applySimTimeOp(op)` in `clock.js` |
+| Client fn | `simulateBusinessTime(op)` in `src/lib/workflowApi.js` |
+| What it moves | Daily-tick fire time + day bucket, CPO month derivation, eligibility/F2F windows, area-intake "today" |
+| What it does NOT move | Wall-clock timestamps (`created_at`, session expiry, audit change-log stamps, blob paths) |
+
+## MSA Coverage Map
+
+**Source:** `src/pages/map/msa.js` (polygon + geometry helpers), `src/pages/map/NetworkMap.jsx` (engine + chrome), `src/pages/map/graph.js` (data join)
+
+The Coverage Map now draws a **stylized MSA polygon backdrop** (Taunton–Bristol County, MA — the live test agencies' actual geography) behind the force-graph. Key points:
+
+- `MSA.ring` — closed polygon coordinates in the SVG 960×600 view box. Not survey-accurate; a recognizable region silhouette.
+- `seedInside(count)` — deterministically places N points on two soft rings inside the polygon via a centroid-pulled spiral, checking `pointInsideMsa` for each; no `Math.random` so layout is stable across live re-polls.
+- Agency + PG balls are given `fx`/`fy` (fixed force-sim positions) seeded inside the polygon so the repulsion layout never pushes them off the map backdrop.
+- `polyG` `<g>` group renders the polygon fill + stroke **behind** links and nodes (drawn once per full rebuild, not per `render()` tick).
+- `msaPathD()` generates the SVG `d` attribute from the ring; `msaCentroid()` + `msaBounds()` are used by `seedInside`.
 
 ## Invariants & gotchas
 - **Builder time triggers run from this page's browser tab**: the 10s `tick()` interval fires `tickTimeTriggers()` (time_interval + daily_time builder workflows) while Orchestrator is open, `live` is true, and the tab is visible. `tickTimeTriggers` is fire-and-forget (`.catch(()=>{})`). Closing the tab stops it. The Vercel cron covers daily_time triggers server-side even when the tab is closed. **`runBillingMonitor` is no longer called** from the poll — `wf-billing-monitor` has been deleted.

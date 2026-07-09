@@ -467,10 +467,15 @@ export function pgBillableMinutes(episode, cpoMonthLabel) {
  * PatientStatus = 'Active' when the latest episode's EOE is on/after today (UTC),
  * else 'Inactive'. No episodes / unparsable EOE ⇒ 'Inactive'.
  *
+ * SIM: `todayMs` is an optional business-clock override (epoch-ms at UTC
+ * midnight). Callers that time-travel (Milestone D) thread businessTodayMsUtc();
+ * omitting it keeps the byte-for-byte real-clock behaviour (DateTime.UtcNow.Date).
+ *
  * @param {Array<{eoe?}>} episodes
+ * @param {number} [todayMs] business "today" epoch-ms (UTC midnight)
  * @returns {'Active'|'Inactive'}
  */
-export function derivePatientStatus(episodes) {
+export function derivePatientStatus(episodes, todayMs = todayMsUtc()) {
   if (!Array.isArray(episodes) || episodes.length === 0) return 'Inactive';
   let latestMs = null;
   for (const ep of episodes) {
@@ -479,7 +484,7 @@ export function derivePatientStatus(episodes) {
     if (latestMs === null || ms > latestMs) latestMs = ms;
   }
   if (latestMs === null) return 'Inactive';
-  return latestMs >= todayMsUtc() ? 'Active' : 'Inactive';
+  return latestMs >= todayMs ? 'Active' : 'Inactive';
 }
 
 /**

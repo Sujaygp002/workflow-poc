@@ -26,6 +26,7 @@
 // workflow item's HHAH so taskRegistry can call it once per workflow item.
 
 import { getSql } from '../db.js';
+import { businessTodayMsUtc } from '../clock.js';
 import { computeEpisodeAssessment, isOrderSigned } from '../repositories.js';
 import {
   carryForwardEpisodeDiagnoses,
@@ -283,6 +284,10 @@ export async function generateRcm({ item }) {
   const records = [];
   let skipped = 0;
 
+  // SIM: patient Active/Inactive keys off "today" — anchor it on the business
+  // clock so a time-travel demo can flip a patient Inactive as episodes age out.
+  const todayMs = await businessTodayMsUtc();
+
   for (const row of rows) {
     const cpoMonthLabel = formatCpoMonth(row.cpo_month);
     if (!cpoMonthLabel) {
@@ -356,7 +361,7 @@ export async function generateRcm({ item }) {
     // ── R2 patient/filter status + single-sourced completeness verdict ──
     // patient_status from ALL of this patient's episodes (latest EOE >= today).
     const patientEpisodes = episodesByPatient.get(row.patient_id) || [];
-    const patientStatus = derivePatientStatus(patientEpisodes);
+    const patientStatus = derivePatientStatus(patientEpisodes, todayMs);
     // filter_status tier Billable > Pgbillable > Eligible > null, Active-gated.
     // POC has no separate PG-billable signal at this seam, so it mirrors the
     // 30-min CPO capture on this month (eligible episode + minutes >= 30).

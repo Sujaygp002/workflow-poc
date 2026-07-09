@@ -2,25 +2,33 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { Network, Search, Plus, Minus, Maximize, RefreshCw, Pause, Play } from 'lucide-react';
 import { fetchPatients, fetchOrders, fetchReferenceData } from '../../lib/workflowApi';
 import { buildGraph, edgesForHhah, fmtCount } from './graph';
+import { MSA, msaPathD, seedInside } from './msa';
 
 const VW = 960, VH = 600;
 const SVGNS = 'http://www.w3.org/2000/svg';
 const COLORS = {
-  hhah: '#38D9C4', pg: '#9C8CFF', edge: '#FFB454',
+  hhah: '#38D9C4', pg: '#9C8CFF', prac: '#6366F1', edge: '#FFB454',
   adm: '#FFD27A', admBucket: '#FFC25A', epi: '#7BE0B0', epBucket: '#5FD39E', order: '#F26D7D',
   // order leaves — color-coded by status (signature) and by document type
   osigned: '#34C77B', ounsigned: '#F5A524', o485: '#5B8DEF', of2f: '#A879F0', oother: '#94A3B8',
 };
 const RAD = {
-  hhah: 24, pg: 16, edge: 24, adm: 22, admBucket: 20, epi: 22, epBucket: 20, order: 22,
+  hhah: 24, pg: 18, prac: 13, edge: 24, adm: 22, admBucket: 20, epi: 22, epBucket: 20, order: 22,
   osigned: 18, ounsigned: 18, o485: 18, of2f: 18, oother: 18,
 };
 
 // Imperative force-graph engine bound to one <g> element. Kept in a ref so React
 // re-renders (chrome) don't tear down the simulation. Mirrors the verified prototype.
-function createEngine(nodesG, linksG, viewG, { onBanner }) {
-  let nodes = [], links = [], byId = {}, hover = null, drag = null, zoomMul = 1, graph = { hhahs: [], edges: [], practitionersByPg: {} };
+function createEngine(nodesG, linksG, viewG, polyG, { onBanner }) {
+  let nodes = [], links = [], byId = {}, hover = null, drag = null, zoomMul = 1, activeAgency = null;
+  let graph = { hhahs: [], pgs: [], edges: [], practitionersByPg: {} };
   const fmt = fmtCount;
+
+  // Persistent PG balls carry a stable id (`pgball:<key>`); resolve one by display name.
+  function pgNodeFor(pgName) {
+    const pg = (graph.pgs || []).find((p) => p.name.toLowerCase() === String(pgName || '').toLowerCase());
+    return pg ? byId[`pgball:${pg.id}`] : null;
+  }
 
   function addNode(o) {
     const n = Object.assign({ r: RAD[o.kind] || 10, open: false }, o);
@@ -112,18 +120,27 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
     animate();
   }
 
+  // Persistent top-level balls (agencies + PGs live permanently inside the polygon)
+  // and the `base` agency↔PG coverage lines are never torn down by a collapse.
+  const isPersistent = (n) => n && (n.kind === 'hhah' || n.kind === 'pg');
   function removeSubtree(id) {
-    const kids = links.filter((l) => l.a === id).map((l) => l.b);
+    if (isPersistent(byId[id])) return; // never remove a persistent agency/PG node
+    // only follow spawned (non-base) child links so a collapse can't reach a PG ball
+    const kids = links.filter((l) => l.a === id && l.kind !== 'base').map((l) => l.b);
     kids.forEach(removeSubtree);
-    links = links.filter((l) => { if (l.a === id || l.b === id) { l.el?.remove(); return false; } return true; });
+    links = links.filter((l) => {
+      if ((l.a === id || l.b === id) && l.kind !== 'base') { l.el?.remove(); return false; }
+      return true;
+    });
     const n = byId[id]; if (n) { n.el.g.remove(); delete byId[id]; nodes = nodes.filter((x) => x !== n); }
   }
 
   function onClick(n) { if (n.open) collapse(n); else expand(n); }
   function collapse(n) {
-    links.filter((l) => l.a === n.id).map((l) => l.b).forEach(removeSubtree);
+    links.filter((l) => l.a === n.id && l.kind !== 'base').map((l) => l.b).forEach(removeSubtree);
     n.open = false;
-    if (n.kind === 'hhah') { nodes.forEach((x) => { if (x.kind === 'hhah') x.hidden = false; }); zoomMul = 1; onBanner('Click an agency to open its physician groups · click it again to close'); }
+    if (n.kind === 'hhah') { activeAgency = null; onBanner('Click an agency to trace its physician groups · click a group for its practitioners'); }
+    if (n.kind === 'pg') { onBanner('Click a physician group to show its practitioners'); }
     layout();
   }
   function spawn(parent, items, idFn, kind, labelFn, extraFn) {
@@ -140,21 +157,37 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
   }
   function expand(n) {
     if (n.kind === 'hhah') {
+      // Agencies + PGs are persistent balls living inside the MSA polygon. Opening an
+      // agency traces a patient-count "edge" ball onto each agency→PG line (which then
+      // drills adm→epi→order, unchanged) and highlights those connection lines.
       n.open = true;
-      nodes.forEach((x) => { if (x.kind === 'hhah') x.hidden = x.id !== n.id; });
-      n.fx = null; n.fy = null;
+      activeAgency = n.id;
       const edges = edgesForHhah(graph, n.ref.id);
-      const N = Math.max(edges.length, 1), base = Math.random() * 6.28;
-      edges.forEach((e, i) => {
-        const ang = base + (i / N) * 6.28;
-        const pgId = `pg:${n.id}:${e.pg}`;
-        if (!byId[pgId]) addNode({ id: pgId, kind: 'pg', label: e.pg, x: n.x + Math.cos(ang) * 210, y: n.y + Math.sin(ang) * 210, ref: { name: e.pg }, practitioners: graph.practitionersByPg[e.pg] || 0 });
+      edges.forEach((e) => {
+        const pgNode = pgNodeFor(e.pg);
         const edgeId = `edge:${n.id}:${e.pg}`;
-        if (!byId[edgeId]) addNode({ id: edgeId, kind: 'edge', label: '', x: n.x + Math.cos(ang) * 110, y: n.y + Math.sin(ang) * 110, ref: { stats: e } });
+        const anchorX = pgNode ? (n.x + pgNode.x) / 2 : n.x + 90;
+        const anchorY = pgNode ? (n.y + pgNode.y) / 2 : n.y + 90;
+        if (!byId[edgeId]) addNode({ id: edgeId, kind: 'edge', label: '', x: anchorX, y: anchorY, ref: { stats: e } });
         if (!links.some((l) => l.a === n.id && l.b === edgeId)) addLink(n.id, edgeId, 'edge');
-        if (!links.some((l) => l.a === edgeId && l.b === pgId)) addLink(edgeId, pgId, 'edge');
+        if (pgNode && !links.some((l) => l.a === edgeId && l.b === pgNode.id)) addLink(edgeId, pgNode.id, 'edge');
       });
-      onBanner('Click the patient count, then admissions, then episodes, then orders');
+      onBanner('Click the patient count, then admissions, then episodes, then orders · click a group for its practitioners');
+    } else if (n.kind === 'pg') {
+      // PG → its practitioner balls.
+      n.open = true;
+      const pracs = n.ref.practitioners || [];
+      const N = Math.max(pracs.length, 1), base = Math.random() * 6.28;
+      pracs.forEach((name, i) => {
+        const ang = base + (i / N) * 6.28;
+        const pid = `prac:${n.id}:${i}`;
+        if (!byId[pid]) {
+          const child = addNode({ id: pid, kind: 'prac', label: name, x: n.x + Math.cos(ang) * 90, y: n.y + Math.sin(ang) * 90, ref: { name } });
+          child.rx = n.rx ?? n.x; child.ry = n.ry ?? n.y;
+        }
+        if (!links.some((l) => l.a === n.id && l.b === pid)) addLink(n.id, pid, 'pg');
+      });
+      onBanner(pracs.length ? 'Practitioners in this physician group' : 'This physician group has no mapped practitioners');
     } else if (n.kind === 'edge') {
       // patient-count → single Admissions ball (mirrors patient page: Patient → Admission)
       n.open = true; const s = n.ref.stats;
@@ -252,7 +285,19 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
       const ax = a.rx, ay = a.ry, bx = b.rx, by = b.ry;
       const sel = hover && (hover.id === a.id || hover.id === b.id); const mx = (ax + bx) / 2, my = (ay + by) / 2 - 10;
       l.el.setAttribute('d', `M${ax.toFixed(1)},${ay.toFixed(1)} Q${mx.toFixed(1)},${my.toFixed(1)} ${bx.toFixed(1)},${by.toFixed(1)}`);
-      l.el.setAttribute('stroke', l.kind === 'pg' ? '#9C8CFF' : '#7892c0'); l.el.setAttribute('stroke-width', sel ? 2 : 1); l.el.setAttribute('opacity', sel ? 0.85 : 0.22);
+      if (l.kind === 'base') {
+        // agency ↔ PG coverage line: bright + solid when its agency is open, faint dotted otherwise
+        const lit = sel || l.a === activeAgency;
+        l.el.setAttribute('stroke', lit ? '#38D9C4' : '#94A3B8');
+        l.el.setAttribute('stroke-width', lit ? 2.4 : 1);
+        l.el.setAttribute('stroke-dasharray', lit ? 'none' : '3 5');
+        l.el.setAttribute('opacity', lit ? 0.85 : 0.28);
+      } else {
+        l.el.setAttribute('stroke-dasharray', 'none');
+        l.el.setAttribute('stroke', l.kind === 'pg' ? '#9C8CFF' : '#7892c0');
+        l.el.setAttribute('stroke-width', sel ? 2 : 1);
+        l.el.setAttribute('opacity', sel ? 0.85 : 0.22);
+      }
     });
     nodes.forEach((n) => { if (n.hidden) { n.el.g.style.display = 'none'; return; } n.el.g.style.display = '';
       const r = n.r, c = COLORS[n.kind];
@@ -262,7 +307,9 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
       n.el.g.style.opacity = (0.25 + 0.75 * (n.appear ?? 1)).toFixed(2);
       n.el.glow.setAttribute('r', (r * 2.1).toFixed(1)); n.el.glow.setAttribute('fill', c); n.el.glow.setAttribute('opacity', '0.12');
       n.el.core.setAttribute('r', r.toFixed(1));
-      const expandable = ['hhah', 'edge', 'adm', 'admBucket', 'epi', 'epBucket'].includes(n.kind) || (n.kind === 'order' && n.breakdown);
+      const expandable = ['hhah', 'edge', 'adm', 'admBucket', 'epi', 'epBucket'].includes(n.kind)
+        || (n.kind === 'order' && n.breakdown)
+        || (n.kind === 'pg' && (n.ref?.practitioners?.length || 0) > 0);
       n.el.ring.setAttribute('r', (r + 3).toFixed(1)); n.el.ring.style.display = expandable && !n.open ? '' : 'none';
       if (n.open) { n.el.close.style.display = ''; n.el.close.textContent = '×'; n.el.close.setAttribute('x', (r * 0.72).toFixed(1)); n.el.close.setAttribute('y', (-r * 0.62).toFixed(1)); n.el.close.setAttribute('font-size', '14'); n.el.close.setAttribute('fill', '#0B1220'); } else n.el.close.style.display = 'none';
       while (n.el.inner.firstChild) n.el.inner.removeChild(n.el.inner.firstChild);
@@ -284,7 +331,7 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
         n.el.label.setAttribute('font-size', '8.5');
         n.el.label.setAttribute('fill', '#0f172a');
       } else {
-        const named = ['hhah', 'pg'].includes(n.kind), showLabel = named || (hover && hover.id === n.id);
+        const named = ['hhah', 'pg', 'prac'].includes(n.kind), showLabel = named || (hover && hover.id === n.id);
         if (showLabel) { const lbl = named ? n.label : (n.label || (cd ? cd.label.toLowerCase() : '')); n.el.label.textContent = lbl.length > 22 ? `${lbl.slice(0, 21)}…` : lbl; n.el.label.setAttribute('y', (r + 14).toFixed(1)); n.el.label.setAttribute('font-size', '11'); } else n.el.label.textContent = '';
       }
     });
@@ -309,12 +356,62 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
   function animate() { if (!raf) raf = requestAnimationFrame(tick); }
   function stop() { if (raf) cancelAnimationFrame(raf); raf = 0; }
 
-  // (re)build top-level HHAH balls from graph data, preserving open clusters when possible
+  // Draw the MSA polygon backdrop once per rebuild (behind links + nodes).
+  function drawPolygon() {
+    if (!polyG) return;
+    polyG.innerHTML = '';
+    const fill = document.createElementNS(SVGNS, 'path');
+    fill.setAttribute('d', msaPathD());
+    fill.setAttribute('fill', '#EEF2FF');
+    fill.setAttribute('stroke', '#C7D2FE');
+    fill.setAttribute('stroke-width', '2');
+    fill.setAttribute('stroke-dasharray', '6 5');
+    fill.setAttribute('opacity', '0.9');
+    const label = document.createElementNS(SVGNS, 'text');
+    label.setAttribute('x', String(MSA.ring[0][0] + 6));
+    label.setAttribute('y', String(MSA.ring[0][1] - 8));
+    label.setAttribute('fill', '#818CF8');
+    label.setAttribute('font-size', '13');
+    label.setAttribute('font-weight', '800');
+    label.style.fontFamily = "'Inter',sans-serif";
+    label.style.letterSpacing = '0.02em';
+    label.textContent = `${MSA.name}`;
+    polyG.append(fill, label);
+  }
+
+  // (re)build top-level agency + PG balls from graph data, seeded INSIDE the polygon.
   function setData(g) {
     graph = g;
-    nodes = []; links = []; byId = {}; nodesG.innerHTML = ''; linksG.innerHTML = ''; zoomMul = 1;
-    const N = Math.max(g.hhahs.length, 1);
-    g.hhahs.forEach((h, i) => { const ang = (i / N) * 6.28; addNode({ id: `hhah:${h.id}`, kind: 'hhah', label: h.name, x: 480 + Math.cos(ang) * 250, y: 300 + Math.sin(ang) * 170, ref: h }); });
+    nodes = []; links = []; byId = {}; activeAgency = null;
+    nodesG.innerHTML = ''; linksG.innerHTML = ''; zoomMul = 1;
+    drawPolygon();
+
+    // Agencies + PGs both live inside the polygon. Seed deterministic interior
+    // positions (two interleaved passes so agencies + PGs don't overlap), pin them
+    // (fx/fy) so the force sim never pushes them off the map.
+    const agencySeeds = seedInside(g.hhahs.length, { radius: 0.66, phase: 0.2 });
+    const pgSeeds = seedInside((g.pgs || []).length, { radius: 0.34, phase: Math.PI / 3 });
+
+    g.hhahs.forEach((h, i) => {
+      const [x, y] = agencySeeds[i] || [VW / 2, VH / 2];
+      const node = addNode({ id: `hhah:${h.id}`, kind: 'hhah', label: h.name, x, y, ref: h });
+      node.fx = x; node.fy = y;
+    });
+    (g.pgs || []).forEach((pg, i) => {
+      const [x, y] = pgSeeds[i] || [VW / 2, VH / 2];
+      const node = addNode({ id: `pgball:${pg.id}`, kind: 'pg', label: pg.name, x, y, ref: pg, practitioners: pg.practitionerCount || 0 });
+      node.fx = x; node.fy = y;
+    });
+
+    // Faint base connection lines agency ↔ PG (always visible so the coverage reads
+    // as a network; they highlight when the agency is opened).
+    (g.edges || []).forEach((e) => {
+      const hh = byId[`hhah:${e.hhahId}`];
+      const pgNode = pgNodeFor(e.pg);
+      if (hh && pgNode && !links.some((l) => l.a === hh.id && l.b === pgNode.id && l.kind === 'base')) {
+        addLink(hh.id, pgNode.id, 'base');
+      }
+    });
     layout();
   }
 
@@ -331,8 +428,8 @@ function createEngine(nodesG, linksG, viewG, { onBanner }) {
 }
 
 export default function NetworkMap() {
-  const nodesRef = useRef(null), linksRef = useRef(null), viewRef = useRef(null), engineRef = useRef(null);
-  const [banner, setBanner] = useState('Click an agency to open its physician groups · click it again to close');
+  const nodesRef = useRef(null), linksRef = useRef(null), viewRef = useRef(null), polyRef = useRef(null), engineRef = useRef(null);
+  const [banner, setBanner] = useState('Click an agency to trace its physician groups · click a group for its practitioners');
   const [live, setLive] = useState(true);
   const [stamp, setStamp] = useState('');
   const [err, setErr] = useState('');
@@ -355,7 +452,7 @@ export default function NetworkMap() {
 
   // init engine once
   useEffect(() => {
-    engineRef.current = createEngine(nodesRef.current, linksRef.current, viewRef.current, { onBanner: setBanner });
+    engineRef.current = createEngine(nodesRef.current, linksRef.current, viewRef.current, polyRef.current, { onBanner: setBanner });
     load();
     return () => engineRef.current?.stop?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -418,7 +515,7 @@ export default function NetworkMap() {
       {err && <div className="absolute left-1/2 top-[92px] z-10 -translate-x-1/2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1 text-[12px] text-rose-700">{err}</div>}
 
       <svg viewBox={`0 0 ${VW} ${VH}`} preserveAspectRatio="xMidYMid meet" className="absolute inset-0 h-full w-full">
-        <g ref={viewRef}><g ref={linksRef} /><g ref={nodesRef} /></g>
+        <g ref={viewRef}><g ref={polyRef} /><g ref={linksRef} /><g ref={nodesRef} /></g>
       </svg>
 
       {/* zoom controls */}
@@ -430,7 +527,7 @@ export default function NetworkMap() {
 
       {/* legend */}
       <div className="absolute bottom-4 left-6 z-20 flex flex-wrap gap-3 rounded-xl border border-slate-200 bg-white/90 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-500 shadow-sm">
-        {[['agency', COLORS.hhah], ['patients', COLORS.edge], ['physician group', COLORS.pg], ['adm', COLORS.adm], ['current/past adm', COLORS.admBucket], ['epi', COLORS.epi], ['current/past epi', COLORS.epBucket], ['orders', COLORS.order], ['signed', COLORS.osigned], ['unsigned', COLORS.ounsigned], ['485', COLORS.o485], ['f2f', COLORS.of2f], ['other', COLORS.oother]].map(([l, c]) => (
+        {[['agency', COLORS.hhah], ['physician group', COLORS.pg], ['practitioner', COLORS.prac], ['patients', COLORS.edge], ['adm', COLORS.adm], ['current/past adm', COLORS.admBucket], ['epi', COLORS.epi], ['current/past epi', COLORS.epBucket], ['orders', COLORS.order], ['signed', COLORS.osigned], ['unsigned', COLORS.ounsigned], ['485', COLORS.o485], ['f2f', COLORS.of2f], ['other', COLORS.oother]].map(([l, c]) => (
           <span key={l} className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full" style={{ background: c }} />{l}</span>
         ))}
       </div>

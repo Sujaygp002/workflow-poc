@@ -253,7 +253,7 @@ async function applyFixes(payload, findings, extraction) {
  *   extraction_payload).
  * @returns {Promise<{ ok: boolean, cycles: number, fixed: number, remaining: number }>}
  */
-export async function reworkAudits({ item }) {
+export async function reworkAudits({ item, maxCycles = MAX_CYCLES }) {
   const sql = getSql();
   const agencyId = item?.reference_payload?.HHAH?.id || null;
   const extraction = item?.extraction_payload || null;
@@ -262,11 +262,14 @@ export async function reworkAudits({ item }) {
     return { ok: false, cycles: 0, fixed: 0, remaining: 0, error: 'No agency id on workflow item' };
   }
 
+  // Milestone B lets the audit-cycle caller widen the bound (<=5) or narrow it to a
+  // single re-audit pass; default preserves the original 3-cycle behaviour.
+  const boundedCycles = Math.max(1, Number.isFinite(Number(maxCycles)) ? Number(maxCycles) : MAX_CYCLES);
   let totalFixed = 0;
   let cycles = 0;
   let remaining = 0;
 
-  for (let cycle = 0; cycle < MAX_CYCLES; cycle += 1) {
+  for (let cycle = 0; cycle < boundedCycles; cycle += 1) {
     cycles = cycle + 1;
 
     // Pull rework audits joined to their rcm_records payloads.

@@ -25,3 +25,14 @@ export const SMTP_SECURE = process.env.SMTP_SECURE === 'true';
 export const SMTP_USER = process.env.SMTP_USER || 'invovationmailer2026@gmail.com';
 export const SMTP_PASS = process.env.SMTP_PASS || 'dnhjnqyfcufgzqqn';
 export const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER || 'no-reply@hhh-intake.local';
+
+// Twilio for outbound agency SMS / calls. ENV-ONLY — NO hardcoded fallbacks (this
+// is a NEW credential; the repo is public, so a leaked live token is unacceptable).
+// When any of SID / token / from-number is unset, the twilio module degrades
+// gracefully to { sent:false, skipped:true, reason:'twilio_not_configured' } and
+// never throws. TWILIO_TO_OVERRIDE (optional) redirects every outbound to one test
+// number for safe demoing.
+export const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || '';
+export const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || '';
+export const TWILIO_FROM_NUMBER = process.env.TWILIO_FROM_NUMBER || '';
+export const TWILIO_TO_OVERRIDE = process.env.TWILIO_TO_OVERRIDE || '';

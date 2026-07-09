@@ -15,7 +15,7 @@ export function taskActions(task) {
 }
 
 // TASK container (definition megaGroup) the task's step belongs to, so the
-// worker portal can read "TASK-Update Object Module › Review record".
+// worker portal can read "TASK-Update / Create Patient Model › Review record".
 function taskGroupName(task) {
   const groups = Array.isArray(task.workflow_mega_groups) ? task.workflow_mega_groups : [];
   const group = groups.find((g) => Array.isArray(g?.stepIds) && g.stepIds.includes(task.step_id));

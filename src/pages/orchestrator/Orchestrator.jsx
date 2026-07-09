@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { Activity, RefreshCw, Trash2, Clock } from 'lucide-react';
+import { Activity, RefreshCw, Trash2, Clock, CalendarClock, RotateCcw } from 'lucide-react';
 import {
   deleteWorkflowRun,
+  fetchBusinessTime,
   fetchWorkflowRuns,
+  simulateBusinessTime,
   tickTimeTriggers,
 } from '../../lib/workflowApi';
 import {
@@ -106,6 +108,85 @@ function Legend() {
   );
 }
 
+// Simulated business-time control (Milestone D). Shows the current simulated
+// business date and lets a demo advance it (+1 day / +1 month) or reset to real
+// time. The business clock drives the daily-tick fire time + day bucket, CPO /
+// eligibility "today" reads, so +1 month rolls a June CPO bucket into July.
+function SimTimeControl() {
+  const [state, setState] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function load() {
+    try {
+      setState(await fetchBusinessTime());
+      setError(null);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  useEffect(() => { load(); }, []);
+
+  async function apply(op) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      setState(await simulateBusinessTime(op));
+      setError(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const businessDate = state?.businessNow ? new Date(state.businessNow) : null;
+  const label = businessDate
+    ? businessDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+    : '—';
+  const simulated = !!state?.simulated;
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
+      <span className={`flex items-center gap-1.5 text-sm font-semibold ${simulated ? 'text-violet-700' : 'text-slate-600'}`}>
+        <CalendarClock size={15} />
+        Business date: {label}
+      </span>
+      {simulated && (
+        <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-violet-700">
+          simulated {state.offsetDays >= 0 ? '+' : ''}{state.offsetDays}d
+        </span>
+      )}
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => apply('+1d')}
+          disabled={busy}
+          className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+        >
+          +1 day
+        </button>
+        <button
+          onClick={() => apply('+1m')}
+          disabled={busy}
+          className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+        >
+          +1 month
+        </button>
+        <button
+          onClick={() => apply('reset')}
+          disabled={busy || !simulated}
+          title="Reset to real time"
+          className="flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-500 hover:bg-slate-50 disabled:opacity-40"
+        >
+          <RotateCcw size={12} /> Reset
+        </button>
+      </div>
+      {error && <span className="text-[11px] text-rose-600">{error}</span>}
+    </div>
+  );
+}
+
 export default function Orchestrator() {
   const [runs, setRuns] = useState([]);
   const [dbError, setDbError] = useState(null);
@@ -202,7 +283,8 @@ export default function Orchestrator() {
           <h1 className="text-2xl font-bold text-slate-800">Orchestrator</h1>
           <p className="mt-1 text-sm text-slate-500">Live workflow runs rendered as flowcharts — system, AI and human tasks with decision branches.</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <SimTimeControl />
           <button
             onClick={() => setLive((v) => !v)}
             className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${live ? 'border-green-300 bg-green-50 text-green-700' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}

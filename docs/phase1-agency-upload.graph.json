@@ -1,6 +1,6 @@
 {
   "name": "Agency Bulk Upload — Daily Intake",
-  "description": "Daily agency intake. Fires once per day per onboarded agency at 12:00 America/Chicago. If the agency has NOT uploaded today, one human task reaches out (call / sms / email) and the branch ends. If it HAS uploaded, the object model is updated end to end: AI extraction (regex + Gemini) with a human fallback on extraction failure, patient resolve (create vs update), admission date-gap fill then resolve, episode date-gap fill then resolve, order create vs skip-duplicate, and a final human review that settles the item. No RCM / AI-service / audit / rework steps (phase 2).",
+  "description": "Daily agency intake. Fires once per day per onboarded agency at 12:00 America/Chicago. If the agency has NOT uploaded today, one human task reaches out (call / sms via twilio + a real email) and the branch ends. If it HAS uploaded, the object model is built end to end: AI extraction (regex + Gemini) with a human fallback (which also confirms an ambiguous order PDF), patient resolve (create vs update), admission date-gap fill then resolve, episode date-gap fill then resolve, order create vs skip-duplicate, and a record review. AFTER review, post-model billing gates run: episode-eligibility -> make billable/claimable; not eligible -> document / patient-data / signature gates each routing an async remediation human task that the next daily run re-evaluates. AFTER make billable/claimable, the CCN + audit/submit tail runs: CCN generation (Gemini-dead -> human 'Create CCN manually') -> one bounded audit/rework/re-audit cycle (passRate >= 98%?) -> below 98% routes a human 'Resolve audit failures' then a re-audit -> a human 'Submit claim' gate (confirm-only; records submitted_at + amounts; no external call).",
   "trigger": { "type": "daily_time", "hour": 12, "minute": 0, "tz": "America/Chicago" },
   "graph": {
     "entry": "n1",
@@ -8,14 +8,29 @@
       {
         "id": "g-contact",
         "name": "Contact Agency to Upload Documents",
-        "info": "Agency has not uploaded today — reach out (call / SMS placeholders + a real email). This branch ends the item.",
+        "info": "Agency has not uploaded today — reach out (call / SMS via twilio + a real email). This branch ends the item.",
         "nodeIds": ["t1"]
       },
       {
         "id": "g-update",
-        "name": "Update Object Module",
-        "info": "Agency uploaded — build the object model end to end: AI extraction (regex + Gemini) with a human fallback, patient resolve (update vs create), admission date-gap fill then resolve, episode date-gap fill then resolve, order create vs skip-duplicate, then a final human review that settles the item.",
+        "name": "Update / Create Patient Model",
+        "info": "Agency uploaded — build the object model end to end: AI extraction (regex + Gemini) with a human fallback that also confirms an ambiguous order PDF, patient resolve (update vs create), admission date-gap fill then resolve, episode date-gap fill then resolve, order create vs skip-duplicate, then a record review.",
         "nodeIds": ["n2", "t2", "n3", "n4", "t3", "n5", "t4", "n6", "n7", "n8", "t5"]
+      },
+      {
+        "id": "g-gates",
+        "name": "Post-Model Billing Gates",
+        "info": "After the record review, re-derive the episode's state from the real DB rows: eligible -> make billable/claimable; not eligible -> check 485+F2F documents, patient data completeness, and physician signature, each routing an async remediation task the next daily run re-evaluates. (make_billable_claimable appears on both the eligible arm and the signature-pass arm — the DAG cannot converge two branch-walks on one node, and the step is idempotent.)",
+        "nodeIds": ["n9", "n10a", "n11", "t6", "n12", "t7", "n13", "n10b", "t8"]
+      },
+      {
+        "id": "g-ccn-audit",
+        "name": "CCN, Audit & Submit Claim",
+        "info": "After make billable/claimable: CCN generation for the item's billable months (Gemini-dead -> human 'Create CCN manually'), then ONE bounded audit -> rework -> re-audit cycle (passRate >= 98%?); below 98% routes a human 'Resolve audit failures' then a re-audit; then a human 'Submit claim' gate (confirm-only, records submitted_at + amounts, NO external call). The tail is instantiated on BOTH make_billable arms (eligible arm 'a' + signature-pass arm 'b') — idempotent twins, because the frozen DAG cannot converge two branch-walks on a single node; every tail step is agency-scoped and idempotent.",
+        "nodeIds": [
+          "n14a", "t9a", "n15a", "t10a", "n16a", "t11a",
+          "n14b", "t9b", "n15b", "t10b", "n16b", "t11b"
+        ]
       }
     ],
     "nodes": [
@@ -40,8 +55,8 @@
         "id": "t1",
         "kind": "task",
         "name": "Contact agency to upload the documents",
-        "description": "Agency has not uploaded today. Reach out (call / sms are coming-soon placeholders; email is a real send). Branch ends here.",
-        "assigneeEmployeeId": "REPLACE_EMPLOYEE_ID",
+        "description": "Agency has not uploaded today. Reach out (call / sms route through twilio; email is a real send). Branch ends here.",
+        "assigneeEmployeeId": "b8f2826d-ade5-4384-bdfd-610a486c39a0",
         "actions": [
           { "id": "a_call", "actionKey": "call_agency", "label": "Call agency" },
           { "id": "a_sms", "actionKey": "sms_agency", "label": "Text agency" },
@@ -52,14 +67,14 @@
         "id": "n2",
         "kind": "system",
         "name": "AI extract (regex + Gemini)",
-        "description": "Cost-tiered extraction: regex tier then Gemini for any still-missing fields. Merges into the item payloads; stamps ai_extraction_success / ai_extraction_fail.",
+        "description": "Cost-tiered extraction: regex tier then Gemini for any still-missing fields. Multi-signal PDF<->order match (filename -> order-number-in-text -> patient+date). Ambiguous match stamps pdf_match_ambiguous and routes the fill task. Stamps ai_extraction_success / ai_extraction_fail.",
         "actionKey": "ai_extract_with_patterns",
         "next": "c2"
       },
       {
         "id": "c2",
         "kind": "condition",
-        "name": "AI extraction failed?",
+        "name": "AI extraction failed or PDF ambiguous?",
         "conditionKey": "ai_extraction_fail",
         "ifTrue": "t2",
         "join": "c3"
@@ -68,10 +83,11 @@
         "id": "t2",
         "kind": "task",
         "name": "Manually fill missing data",
-        "description": "Extraction could not fill enough fields — a coordinator fills the missing patient/order values before the object-model writes.",
-        "assigneeEmployeeId": "REPLACE_EMPLOYEE_ID",
+        "description": "Extraction could not fill enough fields, or the order PDF could not be confidently matched — a coordinator fills the missing patient/order values and, when the PDF is ambiguous, confirms which document belongs to this order.",
+        "assigneeEmployeeId": "b8f2826d-ade5-4384-bdfd-610a486c39a0",
         "actions": [
-          { "id": "a_fill", "actionKey": "fill_missing_fields", "label": "Fill missing fields" }
+          { "id": "a_fill", "actionKey": "fill_missing_fields", "label": "Fill missing fields" },
+          { "id": "a_confirm_pdf", "actionKey": "confirm_order_document", "label": "Confirm order document" }
         ]
       },
       {
@@ -110,7 +126,7 @@
         "kind": "task",
         "name": "Enter admission dates",
         "description": "SOC (and EOC) are missing — a coordinator enters them so the admission row is written with real dates.",
-        "assigneeEmployeeId": "REPLACE_EMPLOYEE_ID",
+        "assigneeEmployeeId": "b8f2826d-ade5-4384-bdfd-610a486c39a0",
         "actions": [
           { "id": "a_adm_dates", "actionKey": "enter_admission_dates", "label": "Enter admission dates (SOC/EOC)" }
         ]
@@ -136,7 +152,7 @@
         "kind": "task",
         "name": "Enter episode dates",
         "description": "SOE/EOE are missing — a coordinator enters them so the episode row is written with real dates.",
-        "assigneeEmployeeId": "REPLACE_EMPLOYEE_ID",
+        "assigneeEmployeeId": "b8f2826d-ade5-4384-bdfd-610a486c39a0",
         "actions": [
           { "id": "a_ep_dates", "actionKey": "enter_episode_dates", "label": "Enter episode dates (SOE/EOE)" }
         ]
@@ -176,11 +192,272 @@
         "id": "t5",
         "kind": "task",
         "name": "Review record",
-        "description": "Coordinator reviews the assembled patient/admission/episode/order and confirms the checklist. Completing this settles the item.",
-        "assigneeEmployeeId": "REPLACE_EMPLOYEE_ID",
+        "description": "Coordinator reviews the assembled patient/admission/episode/order and confirms the checklist. Completing this settles the record review; the post-model billing gates run next.",
+        "assigneeEmployeeId": "b8f2826d-ade5-4384-bdfd-610a486c39a0",
         "actions": [
           { "id": "a_review", "actionKey": "review_record", "label": "Review record" },
           { "id": "a_confirm", "actionKey": "confirm_checklist", "label": "Confirm checklist" }
+        ],
+        "next": "n9"
+      },
+      {
+        "id": "n9",
+        "kind": "system",
+        "name": "Check episode eligibility",
+        "description": "Re-derive the episode's eligibility from the real DB rows (signed 485 + valid F2F window). Stamps episode_eligible / episode_not_eligible.",
+        "actionKey": "check_episode_eligibility",
+        "next": "c7"
+      },
+      {
+        "id": "c7",
+        "kind": "condition",
+        "name": "Episode eligible?",
+        "conditionKey": "episode_eligible",
+        "ifTrue": "n10a",
+        "ifFalse": "n11",
+        "join": null
+      },
+      {
+        "id": "n10a",
+        "kind": "system",
+        "name": "Make billable / claimable",
+        "description": "Episode is eligible — flip the patient's latest-episode status toward billable/claimable (denormalized). Stamps billable_claimable. Continues into the CCN + audit/submit tail (arm a).",
+        "actionKey": "make_billable_claimable",
+        "next": "n14a"
+      },
+      {
+        "id": "n11",
+        "kind": "system",
+        "name": "Check 485 + F2F documents exist",
+        "description": "Not eligible — check whether both a 485 and an F2F document are present. Stamps documents_exist / documents_missing.",
+        "actionKey": "check_documents_exist",
+        "next": "c8"
+      },
+      {
+        "id": "c8",
+        "kind": "condition",
+        "name": "Documents missing?",
+        "conditionKey": "documents_missing",
+        "ifTrue": "t6",
+        "ifFalse": "n12",
+        "join": null
+      },
+      {
+        "id": "t6",
+        "kind": "task",
+        "name": "Get missing documents",
+        "description": "A 485 or F2F document is missing — contact the agency, run the RPA placeholder, or confirm manually in the EHR. Async: the next daily run re-evaluates this gate and auto-resolves this task once the documents are present.",
+        "assigneeEmployeeId": "b8f2826d-ade5-4384-bdfd-610a486c39a0",
+        "actions": [
+          { "id": "a_getdocs", "actionKey": "get_missing_documents", "label": "Get missing documents" }
+        ]
+      },
+      {
+        "id": "n12",
+        "kind": "system",
+        "name": "Check patient data complete",
+        "description": "Documents present — sweep the required patient demographics. Stamps patient_data_complete / patient_data_incomplete.",
+        "actionKey": "check_patient_data_complete",
+        "next": "c9"
+      },
+      {
+        "id": "c9",
+        "kind": "condition",
+        "name": "Patient data incomplete?",
+        "conditionKey": "patient_data_incomplete",
+        "ifTrue": "t7",
+        "ifFalse": "n13",
+        "join": null
+      },
+      {
+        "id": "t7",
+        "kind": "task",
+        "name": "Get and fill patient data",
+        "description": "Required patient demographics are missing — a coordinator fills them. Async: the next daily run re-evaluates this gate and auto-resolves this task once the data is complete.",
+        "assigneeEmployeeId": "b8f2826d-ade5-4384-bdfd-610a486c39a0",
+        "actions": [
+          { "id": "a_filldata", "actionKey": "fill_missing_fields", "label": "Fill patient data" }
+        ]
+      },
+      {
+        "id": "n13",
+        "kind": "system",
+        "name": "Check physician signature exists",
+        "description": "Data complete — check whether every episode order is physician-signed. Stamps signature_exists / signature_missing.",
+        "actionKey": "check_signature_exists",
+        "next": "c10"
+      },
+      {
+        "id": "c10",
+        "kind": "condition",
+        "name": "Signature exists?",
+        "conditionKey": "signature_exists",
+        "ifTrue": "n10b",
+        "ifFalse": "t8",
+        "join": null
+      },
+      {
+        "id": "n10b",
+        "kind": "system",
+        "name": "Make billable / claimable",
+        "description": "Documents + data + signature all present — flip the patient's latest-episode status toward billable/claimable (denormalized). Stamps billable_claimable. Idempotent twin of n10a for the signature-pass path. Continues into the CCN + audit/submit tail (arm b).",
+        "actionKey": "make_billable_claimable",
+        "next": "n14b"
+      },
+      {
+        "id": "t8",
+        "kind": "task",
+        "name": "Send for signature to Physician",
+        "description": "An episode order is unsigned — mark it 'sent to physician portal' (records SentToPhysician; HUMAN action, no auto-send) and verify / bulk-sign at /pg-login. Async: the next daily run re-evaluates this gate and auto-resolves this task once signed.",
+        "assigneeEmployeeId": "b8f2826d-ade5-4384-bdfd-610a486c39a0",
+        "actions": [
+          { "id": "a_sendsig", "actionKey": "send_for_signature", "label": "Send for signature to physician" }
+        ]
+      },
+
+      {
+        "id": "n14a",
+        "kind": "system",
+        "name": "Run CCN service",
+        "description": "Generate CCN clinical notes for the item's billable CPO months. Gemini-dead => stamps ccn_failed. (Arm a — eligible path.)",
+        "actionKey": "run_ccn_service",
+        "next": "c11a"
+      },
+      {
+        "id": "c11a",
+        "kind": "condition",
+        "name": "CCN failed?",
+        "conditionKey": "ccn_failed",
+        "ifTrue": "t9a",
+        "join": "n15a"
+      },
+      {
+        "id": "t9a",
+        "kind": "task",
+        "name": "Create CCN manually",
+        "description": "CCN generation failed (e.g. Gemini unavailable) — a coordinator writes / confirms the clinical notes manually, then the audit cycle runs. Async: the next daily run re-evaluates and auto-resolves this task once notes are present.",
+        "assigneeEmployeeId": "b8f2826d-ade5-4384-bdfd-610a486c39a0",
+        "actions": [
+          { "id": "a_ccn", "actionKey": "create_ccn_manually", "label": "Create CCN manually" }
+        ]
+      },
+      {
+        "id": "n15a",
+        "kind": "system",
+        "name": "Run audit cycle",
+        "description": "ONE bounded audit -> rework -> re-audit cycle (<= 5 cycles) over the agency's RCM records; computes passRate and stamps audit_pass_98 (>= 0.98). (Arm a.)",
+        "actionKey": "run_audit_cycle",
+        "next": "c12a"
+      },
+      {
+        "id": "c12a",
+        "kind": "condition",
+        "name": "Audit pass rate >= 98%?",
+        "conditionKey": "audit_pass_98",
+        "ifTrue": "t11a",
+        "ifFalse": "t10a",
+        "join": "t11a"
+      },
+      {
+        "id": "t10a",
+        "kind": "task",
+        "name": "Resolve audit failures",
+        "description": "The audit cycle left passRate below 98% — a coordinator confirms / fixes the flagged RCM records, then a re-audit runs. Async: the next daily run re-evaluates and auto-resolves this task once the audit passes.",
+        "assigneeEmployeeId": "b8f2826d-ade5-4384-bdfd-610a486c39a0",
+        "actions": [
+          { "id": "a_resolve_audit", "actionKey": "resolve_audit_failures", "label": "Resolve audit failures" }
+        ],
+        "next": "n16a"
+      },
+      {
+        "id": "n16a",
+        "kind": "system",
+        "name": "Re-audit",
+        "description": "One more bounded audit/rework cycle after the human resolution; re-stamps audit_pass_98. (Arm a.)",
+        "actionKey": "re_audit",
+        "next": "t11a"
+      },
+      {
+        "id": "t11a",
+        "kind": "task",
+        "name": "Submit claim",
+        "description": "HUMAN GATE — confirm the claim is reviewed and ready. Records submitted_at + the summed claim amount and flips the agency's RCM records to submitted. NO external call. (Arm a — end of the eligible path.)",
+        "assigneeEmployeeId": "b8f2826d-ade5-4384-bdfd-610a486c39a0",
+        "actions": [
+          { "id": "a_submit", "actionKey": "submit_claim", "label": "Submit claim" }
+        ]
+      },
+
+      {
+        "id": "n14b",
+        "kind": "system",
+        "name": "Run CCN service",
+        "description": "Generate CCN clinical notes for the item's billable CPO months. Gemini-dead => stamps ccn_failed. (Arm b — signature-pass path, idempotent twin of n14a.)",
+        "actionKey": "run_ccn_service",
+        "next": "c11b"
+      },
+      {
+        "id": "c11b",
+        "kind": "condition",
+        "name": "CCN failed?",
+        "conditionKey": "ccn_failed",
+        "ifTrue": "t9b",
+        "join": "n15b"
+      },
+      {
+        "id": "t9b",
+        "kind": "task",
+        "name": "Create CCN manually",
+        "description": "CCN generation failed (e.g. Gemini unavailable) — a coordinator writes / confirms the clinical notes manually, then the audit cycle runs. Async: the next daily run re-evaluates and auto-resolves this task once notes are present. (Arm b.)",
+        "assigneeEmployeeId": "b8f2826d-ade5-4384-bdfd-610a486c39a0",
+        "actions": [
+          { "id": "a_ccn", "actionKey": "create_ccn_manually", "label": "Create CCN manually" }
+        ]
+      },
+      {
+        "id": "n15b",
+        "kind": "system",
+        "name": "Run audit cycle",
+        "description": "ONE bounded audit -> rework -> re-audit cycle (<= 5 cycles) over the agency's RCM records; computes passRate and stamps audit_pass_98 (>= 0.98). (Arm b.)",
+        "actionKey": "run_audit_cycle",
+        "next": "c12b"
+      },
+      {
+        "id": "c12b",
+        "kind": "condition",
+        "name": "Audit pass rate >= 98%?",
+        "conditionKey": "audit_pass_98",
+        "ifTrue": "t11b",
+        "ifFalse": "t10b",
+        "join": "t11b"
+      },
+      {
+        "id": "t10b",
+        "kind": "task",
+        "name": "Resolve audit failures",
+        "description": "The audit cycle left passRate below 98% — a coordinator confirms / fixes the flagged RCM records, then a re-audit runs. Async: the next daily run re-evaluates and auto-resolves this task once the audit passes. (Arm b.)",
+        "assigneeEmployeeId": "b8f2826d-ade5-4384-bdfd-610a486c39a0",
+        "actions": [
+          { "id": "a_resolve_audit", "actionKey": "resolve_audit_failures", "label": "Resolve audit failures" }
+        ],
+        "next": "n16b"
+      },
+      {
+        "id": "n16b",
+        "kind": "system",
+        "name": "Re-audit",
+        "description": "One more bounded audit/rework cycle after the human resolution; re-stamps audit_pass_98. (Arm b.)",
+        "actionKey": "re_audit",
+        "next": "t11b"
+      },
+      {
+        "id": "t11b",
+        "kind": "task",
+        "name": "Submit claim",
+        "description": "HUMAN GATE — confirm the claim is reviewed and ready. Records submitted_at + the summed claim amount and flips the agency's RCM records to submitted. NO external call. (Arm b — end of the signature-pass path.)",
+        "assigneeEmployeeId": "b8f2826d-ade5-4384-bdfd-610a486c39a0",
+        "actions": [
+          { "id": "a_submit", "actionKey": "submit_claim", "label": "Submit claim" }
         ]
       }
     ]

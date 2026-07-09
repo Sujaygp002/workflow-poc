@@ -43,27 +43,52 @@ Checklist completion request (`POST /api/work-items/[taskRunId]/complete`):
 // failure → 400 { error:'Action validation failed', actionErrors:{ a1:'A valid recipient email is required' } }
 ```
 
-## Live daily workflow (phase 1)
+## Live daily workflow
 
-**NEW ACTIVE PHASE-1 DEF: `cc-1783522521545` (kind=builder, ACTIVE version 2).** "Agency Bulk
-Upload — Daily Intake (Phase 1)" — fires at 12:00 America/Chicago, one item per active agency.
-Compiled to 13 engine steps + 6 condition nodes (19 graph nodes):
+**ACTIVE DEF: `cc-1783522521545` (kind=builder, ACTIVE version 7).** "Agency Bulk Upload —
+Daily Intake" — fires at 12:00 America/Chicago, one item per active agency.
+Compiled to **34 engine steps, 4 megaGroups**:
 
 ```
-check_agency_upload
-  → agency_not_uploaded ◇ TRUE  → "Contact agency to upload" (human task, branch ends)
-                          FALSE → ai_extract_with_patterns
-                                    → ai_extraction_fail ◇ TRUE  → fill_missing_fields (human)
-                                                           FALSE → patient_exists ◇ TRUE  → update_patient
-                                                                                   FALSE → create_patient
-                                                                   → admission_dates_missing ◇ → enter_admission_dates / admission.resolve
-                                                                   → episode_dates_missing   ◇ → enter_episode_dates / episode.resolve
-                                                                   → order_exists ◇ TRUE  → skip_duplicate_order
-                                                                                   FALSE → create_order
-                                                                   → review_record (human)
+TASK-Contact Agency to Upload Documents
+  check_agency_upload
+    → agency_not_uploaded ◇ TRUE → "Contact agency to upload" (call/sms/email, human task, branch ends)
+
+TASK-Update / Create Patient Model
+    → ai_extract_with_patterns
+        → ai_extraction_fail ◇ TRUE  → fill_missing_fields (human, confirm_order_document if ambiguous)
+                               FALSE → patient_exists ◇ TRUE  → update_patient
+                                                       FALSE → create_patient
+                               → admission_dates_missing ◇ → enter_admission_dates / admission.resolve
+                               → episode_dates_missing   ◇ → enter_episode_dates  / episode.resolve
+                               → order_exists ◇ TRUE  → skip_duplicate_order
+                                               FALSE → create_order
+                               → review_record (human)
+
+TASK-Post-Model Billing Gates
+    → check_episode_eligibility
+        → episode_eligible? ◇ TRUE  → make_billable_claimable (n10a, eligible arm)
+                              FALSE → check_documents_exist
+                                        → documents_missing? ◇ TRUE → "Get missing documents" (human, async gate)
+                                      → check_patient_data_complete
+                                          → patient_data_incomplete? ◇ TRUE → "Get and fill patient data" (human, async gate)
+                                        → check_signature_exists
+                                            → signature_exists? ◇ FALSE → "Send for signature to Physician" (human gate, NO auto-send)
+                                              TRUE → make_billable_claimable (n10b, signature arm)
+
+TASK-CCN, Audit & Submit Claim   [instantiated twice: suffix a (eligible arm) / suffix b (signature arm)]
+    → run_ccn_service
+        → ccn_failed? ◇ TRUE → "Create CCN manually" (human, async gate: notes present in cpo_months)
+                       FALSE → (continue)
+    → run_audit_cycle  [auditRcm → reworkAudits ≤5 cycles → auditRcm; vacuous pass when 0 records]
+        → audit_pass_98? ◇ FALSE → "Resolve audit failures" (human, async gate: re-audit passes ≥98%)
+                                     → re_audit (1 cycle)
+                           TRUE  → (continue)
+    → "Submit claim" (human, confirm-only — stamps submitted_at + claim_amount_cents on item;
+                       NO transmission to payer/clearinghouse)
 ```
 
-All 5 human tasks assigned to DEMO-RCM employee `b8f2826d-ade5-4384-bdfd-610a486c39a0`.
+All human tasks assigned to DEMO-RCM employee `b8f2826d-ade5-4384-bdfd-610a486c39a0`.
 Graph spec: `docs/phase1-agency-upload.graph.json`. Screenshots: `docs/phase1-agency-upload-ui.png`,
 `docs/phase1-agency-upload-orchestrator.png`.
 

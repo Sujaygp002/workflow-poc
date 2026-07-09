@@ -195,7 +195,7 @@ async function registerRunDocuments({ runId, hhahId, pdfs, zipPdfs }) {
 async function ensureDailyRun(workflow) {
   const trigger = workflow.definition?.trigger || {};
   const tz = trigger.tz || 'America/Chicago';
-  const { dayBucket } = nowPartsInTz(tz);
+  const { dayBucket } = await nowPartsInTz(tz);
   const sourceLabel = dailySourceLabel(workflow.id, dayBucket);
 
   let run = await findWorkflowRunBySourceLabel(workflow.id, sourceLabel);

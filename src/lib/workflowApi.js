@@ -222,6 +222,27 @@ export async function tickTimeTriggers() {
   return body;
 }
 
+// ── Simulated business time (Milestone D) ───────────────────────────────────
+// Read the current simulated-business-clock state (offset + business date).
+export async function fetchBusinessTime() {
+  const res = await fetch('/api/workflow-runs?action=simTime');
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Unable to load business time');
+  return body;
+}
+
+// Advance / reset the simulated business clock. op: '+1d' | '+1m' | 'reset'.
+export async function simulateBusinessTime(op) {
+  const res = await fetch('/api/workflow-runs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'simulateTime', op }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Unable to simulate business time');
+  return body;
+}
+
 // ── Worker buckets (bearer-scoped) ──────────────────────────────────────────
 export async function fetchMyBuckets() {
   const res = await fetch('/api/work-items', { headers: authHeaders('worker') });

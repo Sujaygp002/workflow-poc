@@ -39,8 +39,8 @@ the deployed app.
 
 > **Removed (2026-07-09):** T2 `wf7` (intake pipeline), T3 `wf-signing` (signing follow-up), and T4 `wf-billing-monitor` (eligibility/CPO monitor) have been deleted from both `workflowDefinition.js` and the live Neon DB. The phase-1 builder workflow below replaces them for agency intake.
 
-**Active builder workflow (phase 1):**
-- **Agency Bulk Upload — Daily Intake (Phase 1)** `cc-1783522521545` — `daily_time` trigger (12:00 America/Chicago); ONE run per day shared across all agencies; items appended per agency on upload (`reconcileDailyRunForUpload`) and for non-uploading agencies at noon tick (`dailyTimeTickHandler`); chain: `check_agency_upload` → [not uploaded: human outreach (call/sms/email)] → [uploaded: `ai_extract_with_patterns` → fill → `patient.resolve` update/create → dates → `admission.resolve` → `episode.resolve` → order create/skip → `review_record`]. Saved as `kind='builder'` (active version 5, id `cc-1783522521545`). Graph: `docs/phase1-agency-upload.graph.json`.
+**Active builder workflow:**
+- **Agency Bulk Upload — Daily Intake** `cc-1783522521545` — `daily_time` trigger (12:00 America/Chicago); ONE run per day shared across all agencies; items appended per agency on upload (`reconcileDailyRunForUpload`) and for non-uploading agencies at noon tick (`dailyTimeTickHandler`); **34 steps, 4 megaGroups**: TASK-Contact Agency to Upload Documents (call/sms/email outreach) → TASK-Update / Create Patient Model (AI extraction → fill → patient/admission/episode/order resolve → review) → TASK-Post-Model Billing Gates (eligibility check → make_billable_claimable or remediation gates) → TASK-CCN, Audit & Submit Claim (CCN generation → bounded audit cycle → human Submit claim gate). Saved as `kind='builder'` (active version 7, id `cc-1783522521545`). Graph: `docs/phase1-agency-upload.graph.json`.
 
 ---
 
@@ -269,6 +269,8 @@ eligibility and CPO month generation. Never string-slice a date.
 - **12-function cap:** `api/` is at exactly 12 serverless files (Vercel Hobby). New capability =
   a POST `action` on an existing handler, never a new file.
 - **`tick` has two callers:** (a) the Orchestrator 10s poll calls `tickTimeTriggers()` (POST `{action:'tick'}`) so `time_interval` and `daily_time` builder workflows fire while the tab is open; (b) a Vercel cron (`GET /api/workflow-runs?action=tick`, schedule `0 17 * * *`) covers the server-only path daily. `runBillingMonitor` is no longer called from the poll — it has been removed entirely.
+- **Business clock / time-travel simulator (Milestone D):** `api/_lib/clock.js` is the single "now" source for all business-meaningful date math (daily-tick fire time, day bucket, CPO month derivation, eligibility/F2F windows, area-intake "today"). It reads a signed millisecond offset from `app_settings.sim_offset_ms` (migration 005 — additive/idempotent, no patient data). The **SimTimeControl** widget in the Orchestrator header lets demos advance +1 day / +1 month or reset. Wall-clock timestamps (`created_at`, sessions, blobs) are never affected. Server ops: `GET /api/workflow-runs?action=simTime` (read state) and `POST { action:'simulateTime', op }` (+1d / +1m / reset).
+- **MSA map polygon:** `src/pages/map/msa.js` defines a stylized Taunton–Bristol County, MA polygon in the SVG view box. Agency and PG balls are seeded deterministically inside the polygon via `seedInside()` — no `Math.random`, stable across live re-polls. The polygon is a recognizable silhouette, NOT a survey boundary.
 - **wf7 stepId quirks:** step ids are intentionally non-contiguous (`wf7-s22`/`s23` retired;
   `s30`–`s32` added later). **Never renumber ids** — they're referenced everywhere.
 - **`order_status` misspelling:** the jsonb key `SignedByPhyscianDate` is misspelled in data —

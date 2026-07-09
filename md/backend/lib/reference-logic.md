@@ -29,9 +29,10 @@ reference bundle. All LLM calls go through `api/_lib/gemini.js` (Gemini, keyed b
 | `agencyCheck.js` | `checkUploadedToday` | `({item, tz?}) -> {uploaded, agencyId, dayBucket, count, error?}` | Queries `uploaded_documents` for the item's `reference_payload.HHAH.id` + `extraction_payload.dayBucket` (YYYY-MM-DD) | `agency.checkUploadedToday` |
 | `extraction.js` | `extractWithPatterns` | `({item}) -> {ok, patch:{patient,order,references}, tier, fieldsExtracted}` | Tier 1: ~60 regex extractors over existing payload text; Tier 2: Gemini for fields regex missed; mirrors the 3-tier pipeline of `NewPdfExtractionService.cs` | `ai.extractWithPatterns` |
 | `aiService.js` | `runAiService` | `({item}) -> {ok, failed:bool, ccNotes:[], minutesDistributed:int}` | Generates CC notes (hybrid "nopii + 6para" Gemini prompt) + distributes CPO minutes; returns `failed:true` if any episode falls short of 30 min after distribution | `ai.runService` |
+| `aiService.js` | `runCcnService` (internal) | delegates to `runAiService`; derives `ccnFailed = hadWork && generatedNotes === 0` — the exact Gemini-dead state; a run with NO billable months is NOT a failure (`ccn_ok`) | `ccn.runService` via `taskRegistry.js` |
 | `rcm.js` | `generateRcm` | `({item}) -> {ok, rcmRecords:[], upserted:int}` | CPT decision tree (G0179/G0180/G0181/G0182) over eligible episodes + CPO months; upserts `rcm_records` (UNIQUE `episode_id,cpo_month,cpt_code`) | `rcm.generate` |
 | `audit.js` | `auditRcm` | `({item}) -> {ok, passed:[], failed:[{rcmRecordId, findings:[]}]}` | Rules R1–R4 over every `rcm_record` for the item's agency; writes/updates `audit_records`; findings are structured `{rule,code,field,message,fixable}` | `ai.audit` |
-| `rework.js` | `reworkAudits` | `({item}) -> {ok, cycles:int, remaining:int}` | Consumes `rework`-status `audit_records`, applies fixable fixes to `rcm_records`, appends `change_log` entries, re-audits (up to 3 cycles) until failures = 0 or < 10% | `ai.rework` |
+| `rework.js` | `reworkAudits` | `({item, maxCycles?=3}) -> {ok, cycles:int, remaining:int}` | Consumes `rework`-status `audit_records`, applies fixable fixes to `rcm_records`, appends `change_log` entries, re-audits up to `maxCycles` (default 3 preserves old behaviour; `run_audit_cycle` passes 5, `re_audit` passes 1) until failures = 0 or < 10% | `ai.rework` (via `runAuditCycle` helper in `taskRegistry.js`) |
 
 ### businessRules.js — pure utility library (no taskKey; imported by rcm.js + aiService.js)
 
@@ -119,8 +120,16 @@ item.extraction_payload.dayBucket  // 'YYYY-MM-DD' set by tickHandler at item cr
 - **`audit.js` scope is agency-wide**: it audits ALL `rcm_records` for the item's agency (not just
   those created in this run). An earlier revision also scoped by `cpo_month = dayBucket` but that
   was too narrow — see the module header comment.
-- **`rework.js` loop cap is 3 cycles** (not the .NET 20-cycle max). The 10% threshold logic from
-  the reference is preserved: if remaining failures / total < 10%, the loop stops early.
+- **`rework.js` loop cap is controlled by `maxCycles`** (default 3, not the .NET 20-cycle max).
+  The 10% threshold logic from the reference is preserved: if remaining failures / total < 10%,
+  the loop stops early. The `runAuditCycle` helper in `taskRegistry.js` orchestrates
+  `auditRcm → reworkAudits → auditRcm` as ONE bounded unit, passing `maxCycles:5` for the full
+  cycle and `maxCycles:1` for the `re_audit` tail step. This helper lives in `taskRegistry.js`
+  (not a referenceLogic module) to avoid the `audit.js ↔ rework.js` circular import — it is the
+  single place that imports both.
+- **CCN verdict (`ccnFailed`)**: `hadWork && generatedNotes === 0` — only the exact Gemini-dead
+  state (every billable CPO month lands in failures, 0 notes generated). A run with NO billable
+  months produces `ccn_ok` so the audit cycle proceeds immediately.
 - **No external API keys**: all LLM prompts go through `api/_lib/gemini.js`. Do not add Azure
   OpenAI endpoints or keys — that is HANDOFF landmine #1.
 

@@ -1,4 +1,10 @@
 import { getSql, jsonParam } from './db.js';
+import { businessNow, businessToday } from './clock.js';
+import { isPatientDataComplete } from './referenceLogic/businessRules.js';
+// Milestone B auto-resolver gates. audit.js / rework.js only import db.js (no
+// back-import of repositories), so importing them here is cycle-free.
+import { auditRcm } from './referenceLogic/audit.js';
+import { reworkAudits } from './referenceLogic/rework.js';
 import { WORKFLOW_DEFINITIONS as SYSTEM_WORKFLOW_DEFINITIONS } from './workflowDefinition.js';
 import {
   blankToNull,
@@ -1751,16 +1757,21 @@ export async function listOrders({ hhahId = null } = {}) {
   }));
 }
 
-function todayYmd() {
-  return new Date().toISOString().slice(0, 10);
+// SIM: the physician send/sign dates are business-meaningful (they anchor the
+// 48h signature window + billable status), so they follow the business clock —
+// business "today" in the trigger tz, not raw wall clock. Callers may still pass
+// an explicit date (e.g. a PDF-extracted signed date), which wins.
+async function todayYmd() {
+  return businessToday();
 }
 
-export async function markOrderSentToPhysician(orderId, date = todayYmd()) {
+export async function markOrderSentToPhysician(orderId, date = null) {
+  const stampDate = date || (await todayYmd());
   const sql = getSql();
   const rows = await sql`
     UPDATE orders
     SET order_status = order_status || ${await jsonParam({
-      SentToPhysicianDate: date,
+      SentToPhysicianDate: stampDate,
       SendToPhysician_Status: true,
     })}::jsonb,
         updated_at = now()
@@ -1770,12 +1781,13 @@ export async function markOrderSentToPhysician(orderId, date = todayYmd()) {
   return rows[0] || null;
 }
 
-export async function markOrderSignedByPhysician(orderId, date = todayYmd()) {
+export async function markOrderSignedByPhysician(orderId, date = null) {
+  const stampDate = date || (await todayYmd());
   const sql = getSql();
   const rows = await sql`
     UPDATE orders
     SET order_status = order_status || ${await jsonParam({
-      SignedByPhyscianDate: date,
+      SignedByPhyscianDate: stampDate,
       SignedByPhysician_Status: true,
     })}::jsonb,
         updated_at = now()
@@ -1783,7 +1795,7 @@ export async function markOrderSignedByPhysician(orderId, date = todayYmd()) {
     RETURNING *
   `;
   // Clear any Trigger-3 overdue reminder task now that this order is signed.
-  await resolveOverdueSigningTasksForOrders([orderId], date);
+  await resolveOverdueSigningTasksForOrders([orderId], stampDate);
   return rows[0] || null;
 }
 
@@ -1824,6 +1836,134 @@ export async function resolveOverdueSigningTasksForOrders(orderIds = [], date = 
   }
   for (const runId of runIds) await updateRunStatus(runId);
   return { resolved: rows.map((row) => row.id) };
+}
+
+// ── Post-model billing gates (Milestone A) ───────────────────────────────────
+// Load the REAL episode + its orders for an item so the gate system steps re-derive
+// eligibility/documents/signature from the DB rows (not the item payload). The
+// item's episode id is stamped on extraction_payload.patientBundle.episodeId by
+// episode.resolve; falls back to matching by admission + SOE/EOE. Returns null
+// when no episode is resolvable (a patient-only / order-skipped row).
+export async function loadEpisodeGateContext(item) {
+  const bundle = item?.extraction_payload?.patientBundle || {};
+  const sql = getSql();
+  let episodeId = bundle.episodeId || null;
+  if (!episodeId && bundle.admissionId) {
+    const found = await findEpisode(
+      bundle.admissionId,
+      item?.patient_payload?.admission_details?.SOE,
+      item?.patient_payload?.admission_details?.EOE,
+    );
+    episodeId = found?.id || null;
+  }
+  if (!episodeId) return null;
+
+  const episodeRows = await sql`SELECT * FROM patient_episodes WHERE id = ${episodeId} LIMIT 1`;
+  const episode = episodeRows[0];
+  if (!episode) return null;
+
+  // Episode orders + admission orders (F2F is admission-level in the eligibility rule).
+  const episodeOrders = await sql`SELECT * FROM orders WHERE episode_id = ${episodeId}`;
+  const admissionOrders = episode.admission_id
+    ? await sql`SELECT * FROM orders WHERE admission_id = ${episode.admission_id}`
+    : episodeOrders;
+
+  const assessment = computeEpisodeAssessment(episode, episodeOrders, admissionOrders);
+  return { episode, episodeOrders, admissionOrders, assessment, patientId: bundle.patientId || episode.patient_id || null };
+}
+
+// gate: 485 (episode-level) + F2F (admission-level) presence — independent of
+// signature/window (that is the eligibility gate). Documents "exist" when both a
+// 485 and an F2F document are attached.
+export function gateDocumentsExist(ctx) {
+  if (!ctx) return { documentsExist: false, has485: false, hasF2f: false };
+  const docType = (o) => String(o.document_type || o.order_type || '').toLowerCase();
+  const has485 = ctx.episodeOrders.some((o) => docType(o).includes('485'));
+  const hasF2f = ctx.admissionOrders.some((o) => docType(o).includes('f2f') || docType(o).includes('face'));
+  return { documentsExist: has485 && hasF2f, has485, hasF2f };
+}
+
+// gate: every episode order is physician-signed.
+export function gateSignatureExists(ctx) {
+  if (!ctx || !ctx.episodeOrders.length) return { signatureExists: false, unsignedOrderNumbers: [] };
+  const unsigned = ctx.episodeOrders.filter((o) => !isOrderSigned(o)).map((o) => o.order_number).filter(Boolean);
+  return { signatureExists: unsigned.length === 0, unsignedOrderNumbers: unsigned };
+}
+
+// gate: required patient demographics present (businessRules.isPatientDataComplete),
+// evaluated against the persisted patient row when resolvable, else the item payload.
+export async function gatePatientDataComplete(item, ctx) {
+  const sql = getSql();
+  const patientId = ctx?.patientId || item?.extraction_payload?.patientBundle?.patientId || null;
+  let patient = null;
+  if (patientId) {
+    const rows = await sql`
+      SELECT p.*, COALESCE(pu.name, p.name) AS name, COALESCE(pu.dob, p.dob) AS dob,
+             COALESCE(pu.mrn, p.mrn) AS mrn, COALESCE(pu.sex, p.sex) AS sex
+      FROM patients p LEFT JOIN patient_units pu ON pu.id = p.unit_id
+      WHERE p.id = ${patientId} LIMIT 1`;
+    patient = rows[0] || null;
+  }
+  const subject = patient
+    ? {
+        name: patient.name,
+        DOB: patient.dob,
+        sex: patient.sex,
+        personal_information: patient.raw_data?.personal_information || {},
+        address: patient.raw_data?.personal_information?.address || {},
+      }
+    : {
+        name: item?.patient_payload?.patient_info?.name,
+        DOB: item?.patient_payload?.patient_info?.DOB,
+        sex: item?.patient_payload?.patient_info?.sex,
+        address: item?.patient_payload?.personal_information?.address || {},
+      };
+  return { patientDataComplete: isPatientDataComplete(subject) };
+}
+
+// gate: flip the item's patient toward billable/claimable. Episode eligibility /
+// billability are COMPUTED from order signatures + document presence (not stored
+// per-episode — patient_episodes has no status column), so this reuses the same
+// denormalized flip site the billing monitor uses: recompute the patient's LATEST
+// episode assessment and persist it to patients.latest_episode_status(_reason).
+// Idempotent — re-running on an already-billable patient re-writes the same value.
+// Returns the resulting assessment status for this item's episode.
+export async function makeEpisodeBillableClaimable(item) {
+  const ctx = await loadEpisodeGateContext(item);
+  if (!ctx) return { flipped: false, status: 'none', reason: 'no_episode' };
+  const status = ctx.assessment.billable ? 'billable' : ctx.assessment.eligible ? 'eligible' : 'started';
+  if (ctx.patientId) await recomputeLatestEpisodeStatus(ctx.patientId);
+  return { flipped: true, status, billable: ctx.assessment.billable, claimable: ctx.assessment.billable, episodeId: ctx.episode.id };
+}
+
+// Recompute + persist patients.latest_episode_status from the patient's latest
+// episode (by SOE). Mirrors the billing monitor's denormalization loop.
+export async function recomputeLatestEpisodeStatus(patientId) {
+  if (!patientId) return null;
+  const sql = getSql();
+  const latest = (await sql`
+    SELECT e.*
+    FROM patient_episodes e
+    JOIN patient_admissions a ON a.id = e.admission_id
+    WHERE a.patient_id = ${patientId}
+    ORDER BY e.soe DESC NULLS LAST, e.created_at DESC
+    LIMIT 1
+  `)[0];
+  if (!latest) return null;
+  const episodeOrders = await sql`SELECT * FROM orders WHERE episode_id = ${latest.id}`;
+  const admissionOrders = latest.admission_id
+    ? await sql`SELECT * FROM orders WHERE admission_id = ${latest.admission_id}`
+    : episodeOrders;
+  const assessment = computeEpisodeAssessment(latest, episodeOrders, admissionOrders);
+  const rows = await sql`
+    UPDATE patients
+    SET latest_episode_status = ${assessment.status || 'none'},
+        latest_episode_status_reason = ${await jsonParam(assessment.reason || {})}::jsonb,
+        updated_at = now()
+    WHERE id = ${patientId}
+    RETURNING id, latest_episode_status, latest_episode_status_reason
+  `;
+  return rows[0] || null;
 }
 
 // R1 daily-reconcile helper (modeled on resolveOverdueSigningTasksForOrders):
@@ -1871,6 +2011,151 @@ export async function resolveOpenAgencyAskTaskForRun(runId, agencyId) {
   }
   for (const rid of runIds) await updateRunStatus(rid);
   return { resolved: rows.map((row) => row.id) };
+}
+
+// Generalized gate-remediation auto-resolver (Milestone A ASYNC RULE). The
+// post-model remediation human tasks (Get missing documents / Get and fill patient
+// data / Send for signature) are branch terminals — they never block the run's
+// completion semantics and are re-evaluated fresh on the NEXT daily run. This
+// resolver (called from the daily tick) completes any still-ACTIVE remediation
+// task from a PRIOR day whose gate now passes, mirroring the contact-task pattern
+// (resolveOpenAgencyAskTaskForRun). Keyed on the task's gate CONDITION (the stable
+// branch identifier — the compiler assigns opaque node ids). Idempotent — the
+// status='active' clause matches zero rows on a second pass.
+// Milestone B gate reads for the auto-resolver.
+// CCN gate: the agency's episodes now carry generated/manual CC notes on
+// cpo_months.reason.ccNotes. Cheap DB read (no re-generation). While Gemini is
+// dead here this stays false, so the 'Create CCN manually' task honestly remains
+// open until notes are actually present — which is the correct behaviour.
+async function ccnNowPresent(item) {
+  const agencyId = item?.reference_payload?.HHAH?.id || item?.hhah_id || null;
+  if (!agencyId) return false;
+  const sql = getSql();
+  const rows = await sql`
+    SELECT 1
+    FROM cpo_months cm
+    JOIN patient_episodes e ON e.id = cm.episode_id
+    JOIN patient_admissions a ON a.id = e.admission_id
+    JOIN patients p ON p.id = a.patient_id
+    WHERE p.agency_id = ${agencyId}
+      AND jsonb_array_length(COALESCE(cm.reason->'ccNotes', '[]'::jsonb)) > 0
+    LIMIT 1`;
+  return rows.length > 0;
+}
+
+// Audit gate: re-run the bounded audit -> rework -> re-audit cycle over the
+// agency's rcm_records and check passRate >= 0.98. Uses audit.js/rework.js only
+// (cycle-free). Vacuous pass when there are no records.
+const AUDIT_PASS_THRESHOLD = 0.98;
+async function auditNowPasses(item) {
+  const initial = await auditRcm({ item });
+  if (initial.ok === false) return false;
+  await reworkAudits({ item, maxCycles: 5 });
+  const final = await auditRcm({ item });
+  const passed = (final.passed || []).length;
+  const failed = (final.failed || []).length;
+  const total = passed + failed;
+  const passRate = total === 0 ? 1 : passed / total;
+  return passRate >= AUDIT_PASS_THRESHOLD;
+}
+
+const GATE_REMEDIATIONS = [
+  { condition: 'documents_missing', gate: async (item) => (gateDocumentsExist(await loadEpisodeGateContext(item))).documentsExist, reason: 'documents_now_present' },
+  { condition: 'patient_data_incomplete', gate: async (item) => (await gatePatientDataComplete(item, await loadEpisodeGateContext(item))).patientDataComplete, reason: 'patient_data_now_complete' },
+  { condition: 'signature_missing', gate: async (item) => (gateSignatureExists(await loadEpisodeGateContext(item))).signatureExists, reason: 'signature_now_present' },
+  // Milestone B remediation tasks (branch terminals, same async pattern).
+  { condition: 'ccn_failed', gate: ccnNowPresent, reason: 'ccn_now_present' },
+  { condition: 'audit_pass_below_98', gate: auditNowPasses, reason: 'audit_now_passes' },
+];
+
+export async function resolveSettledGateTasks() {
+  const sql = getSql();
+  const conditions = GATE_REMEDIATIONS.map((g) => g.condition);
+  // All active gate-remediation tasks across every run (prior-day + today).
+  const tasks = await sql`
+    SELECT t.id, t.item_id, t.run_id, t.condition
+    FROM workflow_task_runs t
+    WHERE t.task_key = 'human.performActions'
+      AND t.status = 'active'
+      AND t.condition = ANY(${conditions})
+  `;
+  const resolvedIds = [];
+  const runIds = new Set();
+  for (const task of tasks) {
+    const spec = GATE_REMEDIATIONS.find((g) => g.condition === task.condition);
+    if (!spec) continue;
+    const item = await getItem(task.item_id);
+    if (!item) continue;
+    let passes;
+    try {
+      passes = await spec.gate(item);
+    } catch {
+      passes = false;
+    }
+    if (!passes) continue;
+    await sql`
+      UPDATE workflow_task_runs
+      SET status = 'completed',
+          notes = 'Resolved by re-evaluation — the gate now passes.',
+          output = ${await jsonParam({ autoResolved: true, reason: spec.reason })}::jsonb,
+          completed_at = now(),
+          updated_at = now()
+      WHERE id = ${task.id}
+    `;
+    resolvedIds.push(task.id);
+    runIds.add(task.run_id);
+  }
+  // Settle affected items + recompute run status (same loop as the other resolvers).
+  const settledItemIds = new Set(
+    tasks.filter((t) => resolvedIds.includes(t.id)).map((t) => t.item_id),
+  );
+  for (const itemId of settledItemIds) {
+    const itemTasks = await sql`SELECT status FROM workflow_task_runs WHERE item_id = ${itemId}`;
+    const live = itemTasks.filter((task) => task.status !== 'skipped');
+    const allDone = live.length > 0 && live.every((task) => task.status === 'completed');
+    await sql`
+      UPDATE workflow_items SET status = ${allDone ? 'completed' : 'running'}, updated_at = now()
+      WHERE id = ${itemId}
+    `;
+  }
+  for (const rid of runIds) await updateRunStatus(rid);
+  return { resolved: resolvedIds };
+}
+
+// Milestone B — Submit claim (HUMAN GATE). Confirm-only: sum the agency's
+// rcm_records charges, flip them to status='submitted', and stamp the submission
+// summary onto the item's decisions. NOTHING is sent to any external payer /
+// clearinghouse — this records the human decision to submit. Idempotent: re-running
+// re-sums the same rows and re-stamps the same (or an updated) summary.
+export async function recordClaimSubmission(item) {
+  const sql = getSql();
+  const agencyId = item?.reference_payload?.HHAH?.id || item?.hhah_id || null;
+  const submittedAt = new Date().toISOString();
+  if (!agencyId) {
+    return { submittedAt, amountCents: 0, recordCount: 0 };
+  }
+  const rows = await sql`
+    UPDATE rcm_records
+    SET status = 'submitted'
+    WHERE agency_id = ${agencyId}
+    RETURNING amount_cents
+  `;
+  const amountCents = rows.reduce((sum, r) => sum + (Number(r.amount_cents) || 0), 0);
+  const summary = { submittedAt, amountCents, recordCount: rows.length };
+  if (item?.id) {
+    const current = await getItem(item.id);
+    if (current) {
+      await updateItem(item.id, {
+        decisions: {
+          ...(current.decisions || {}),
+          claim_submitted: true,
+          claim_submitted_at: submittedAt,
+          claim_amount_cents: amountCents,
+        },
+      });
+    }
+  }
+  return summary;
 }
 
 export async function listPgUnsignedOrders(pgId = null) {
@@ -2239,7 +2524,9 @@ export async function findStatisticalAreaByName(name, areaType) {
 
 export async function listAreaIntakeStatus({ checkDate = null } = {}) {
   const sql = getSql();
-  const dateExpr = checkDate || new Date().toISOString().slice(0, 10);
+  // SIM: "today" for the area-intake check follows the business clock so a
+  // time-travel demo evaluates the correct day's uploads.
+  const dateExpr = checkDate || (await businessToday());
   const areas = await sql`
     SELECT id, name, area_type, state, metadata, created_at, updated_at
     FROM statistical_areas
@@ -2305,7 +2592,9 @@ export async function listAreaIntakeStatus({ checkDate = null } = {}) {
 
 export async function runAreaIntakeCheck({ areaId, checkDate = null, now = null, forceExpired = false }) {
   const sql = getSql();
-  const checkedAt = now ? new Date(now) : new Date();
+  // SIM: an explicit `now`/`checkDate` (caller-supplied simulation) still wins;
+  // the default anchors on the business clock rather than raw wall clock.
+  const checkedAt = now ? new Date(now) : await businessNow();
   const dateExpr = checkDate || checkedAt.toISOString().slice(0, 10);
   const members = await sql`
     SELECT sah.area_id, sah.hhah_id, sah.upload_window_hours, h.name AS hhah_name, h.contact_info

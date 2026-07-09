@@ -1,9 +1,16 @@
-# Eligibility & Billing — how episodes become eligible/billable and how Trigger 4 turns gaps into human tasks
-**Source:** `api/_lib/repositories.js` (Episode/CPO status + billing-monitor sections), `api/workflow-runs/index.js` (`runBillingMonitorHandler`), `api/_lib/workflowDefinition.js` (`WF_BILLING_MONITOR_DEFINITION`), `api/_lib/taskRegistry.js` (`billing.*` tasks), `src/pages/orchestrator/Orchestrator.jsx` (10 s poll)
-**Read this when:** changing eligibility/billability rules, CPO month logic, the billing monitor cadence/dedup/grouping, billing human tasks (emails, add-CPO), or debugging why an episode reads `started`/`eligible`/`billable` or why a billing task did/didn't appear.
+# Eligibility & Billing — how episodes become eligible/billable, CPO months, and the post-model billing pipeline
+**Source:** `api/_lib/repositories.js` (Episode/CPO status + billing-monitor sections + gate helpers), `api/_lib/taskRegistry.js` (`billing.*` legacy tasks; new post-model gate task fns), `api/_lib/referenceLogic/rcm.js` + `audit.js` + `rework.js` + `aiService.js` (CCN/RCM/audit tail), `src/pages/orchestrator/Orchestrator.jsx` (live poll)
+**Read this when:** changing eligibility/billability rules, CPO month logic, the post-model billing gates (documents/signature/data), the CCN/audit/submit-claim tail, or debugging why an episode reads `started`/`eligible`/`billable` or why a gate task did/didn't appear.
+
+> **Billing monitor removed (2026-07-09):** `wf-billing-monitor` (`WF_BILLING_MONITOR_DEFINITION`, `runBillingMonitorHandler`, `runBillingMonitorPass`) no longer runs. The Orchestrator no longer polls `runBillingMonitor`. The eligibility/CPO business-logic functions (`computeEpisodeAssessment`, `cpoMonthDatesForEpisode`, etc.) remain in `repositories.js` and are used by the builder workflow's gate steps (`loadEpisodeGateContext`, `gateDocumentsExist`, `gateSignatureExists`, `makeEpisodeBillableClaimable`). `runBillingMonitorPass` is dead code.
 
 ## What it does
-Every episode gets a computed status: **`started` → `eligible` → `billable`**. Eligible = the episode has a 485 order AND an admission-level F2F whose `order_date` falls within 180 days before the episode's EOE (signatures irrelevant). Billable = eligible AND every order attached to the episode is signed. On top of billable episodes, each calendar month spanned by SOE→EOE is a **CPO month** that becomes billable only when ≥30 CPO minutes are captured. "Trigger 4" (`wf-billing-monitor`, "Make Patients Billable") re-evaluates all of this on a loop and creates ONE workflow run per HHAH containing a human task per gap: email HHAH for missing 485/F2F, email physician/PG to sign, or add 30 CPO minutes.
+Every episode gets a computed status: **`started` → `eligible` → `billable`**. Eligible = the episode has a 485 order AND an admission-level F2F whose `order_date` falls within 180 days before the episode's EOE (signatures irrelevant). Billable = eligible AND every order attached to the episode is signed. On top of billable episodes, each calendar month spanned by SOE→EOE is a **CPO month** that becomes billable only when ≥30 CPO minutes are captured.
+
+The post-review billing pipeline now lives entirely inside the **Agency Bulk Upload — Daily Intake** builder workflow (TASK-Post-Model Billing Gates + TASK-CCN, Audit & Submit Claim), not a separate trigger run. After the `review_record` human step, the workflow:
+1. Checks episode eligibility → routes to `make_billable_claimable` directly if eligible, or through document/data/signature remediation gates if not.
+2. Once billable, runs the CCN service (Gemini CC-note generation) → audit cycle (R1–R4, ≤5 rework cycles) → human Submit-claim gate.
+Remediation tasks (Get missing documents, Get and fill patient data, Send for signature, Create CCN manually, Resolve audit failures) are async gates: the daily tick's `resolveSettledGateTasks()` auto-resolves them when their underlying condition now passes.
 
 ## Business rules → code
 | Rule | Implementation |

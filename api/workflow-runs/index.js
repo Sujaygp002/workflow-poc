@@ -14,9 +14,11 @@ import {
   listTaskRunsForRun,
   listTaskRunsForRuns,
   listWorkflowRuns,
+  resolveSettledGateTasks,
 } from '../_lib/repositories.js';
 import { runWorkflowAutomation } from '../_lib/workflowEngine.js';
 import { dailySourceLabel, nowPartsInTz } from '../_lib/dailyBucket.js';
+import { applySimTimeOp, getSimTimeState } from '../_lib/clock.js'; // SIM (Milestone D)
 import { httpError } from '../_lib/auth.js';
 
 // Manual trigger: start a run of any active workflow (builder Run button).
@@ -84,7 +86,7 @@ async function tickHandler() {
     started.push(run.id);
   }
   const daily = await dailyTimeTickHandler();
-  return { started, daily: daily.started, dailySkipped: daily.skipped };
+  return { started, daily: daily.started, dailySkipped: daily.skipped, gateResolved: daily.gateResolved };
 }
 
 // Build the set of agency ids already represented on a daily run — union of the
@@ -161,12 +163,16 @@ async function dailyTimeTickHandler() {
   const workflows = await listActiveBuilderWorkflowsByTrigger('daily_time');
   const started = [];
   const skipped = [];
+  // ASYNC RULE (Milestone A): re-evaluate prior-day post-model remediation tasks
+  // every tick — complete any whose gate now passes ('resolved by re-evaluation').
+  // Independent of whether a new run is created below.
+  const gateResolved = await resolveSettledGateTasks();
   for (const workflow of workflows) {
     const trigger = workflow.definition?.trigger || {};
     const tz = trigger.tz || 'America/Chicago';
     const targetHour = Number.isFinite(Number(trigger.hour)) ? Number(trigger.hour) : 12;
     const targetMinute = Number.isFinite(Number(trigger.minute)) ? Number(trigger.minute) : 0;
-    const { dayBucket, hour, minute } = nowPartsInTz(tz);
+    const { dayBucket, hour, minute } = await nowPartsInTz(tz);
     const beforeFireTime = hour * 60 + minute < targetHour * 60 + targetMinute;
 
     const sourceLabel = dailySourceLabel(workflow.id, dayBucket);
@@ -226,7 +232,7 @@ async function dailyTimeTickHandler() {
     await runWorkflowAutomation({ runId: run.id, definition: workflow.definition, concurrency: Math.max(1, agencies.length) });
     started.push({ runId: run.id, workflowId: workflow.id, dayBucket, agencyCount: agencies.length });
   }
-  return { started, skipped };
+  return { started, skipped, gateResolved: gateResolved.resolved };
 }
 
 function actionFromUrl(req) {
@@ -248,6 +254,10 @@ export default async function handler(req, res) {
       if (actionFromUrl(req) === 'tick') {
         return sendJson(res, 200, await tickHandler());
       }
+      // SIM (Milestone D): GET current simulated-business-time state.
+      if (actionFromUrl(req) === 'simTime') {
+        return sendJson(res, 200, await getSimTimeState());
+      }
       const runs = await listWorkflowRuns();
       const allTasks = await listTaskRunsForRuns(runs.map((run) => run.id));
       const tasksByRun = new Map();
@@ -267,6 +277,10 @@ export default async function handler(req, res) {
           return sendJson(res, 201, await startWorkflowHandler(body));
         case 'tick':
           return sendJson(res, 200, await tickHandler());
+        // SIM (Milestone D): advance / reset the simulated business clock.
+        // op '+1d' | '+1m' | 'reset'. Handler logic lives in api/_lib/clock.js.
+        case 'simulateTime':
+          return sendJson(res, 200, await applySimTimeOp(body.op));
         default:
           return sendJson(res, 400, { error: 'Unsupported workflow-runs action.' });
       }

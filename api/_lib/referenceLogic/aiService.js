@@ -651,3 +651,31 @@ export async function runAiService({ item }) {
   const ok = generatedNotes > 0 || failures.length === 0;
   return { ok, processedMonths, generatedNotes, failures };
 }
+
+/**
+ * Milestone B — CCN generation for the item's billable months, with the CCN-gate
+ * verdict shaped for the workflow.
+ *
+ * Delegates to runAiService (the CC-note generator over the agency's under-target
+ * CPO months) and derives `ccnFailed`: true when there was work to do
+ * (processedMonths / attempted months) but nothing could be generated — the exact
+ * state when Gemini is unavailable (generateCcNoteBatch throws, every month lands
+ * in `failures`). A run with NO billable months to fill is NOT a failure (nothing
+ * to generate => ccnFailed=false), so the tail proceeds straight to the audit cycle.
+ *
+ * @param {{ item: object }} args
+ * @returns {Promise<{ ok:boolean, ccnFailed:boolean, processedMonths:number,
+ *                     generatedNotes:number, failures:Array }>}
+ */
+export async function runCcnService({ item }) {
+  const result = await runAiService({ item });
+  const hadWork = (result.failures || []).length > 0 || result.processedMonths > 0;
+  const ccnFailed = hadWork && result.generatedNotes === 0;
+  return {
+    ok: result.ok,
+    ccnFailed,
+    processedMonths: result.processedMonths,
+    generatedNotes: result.generatedNotes,
+    failures: result.failures || [],
+  };
+}

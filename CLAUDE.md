@@ -117,6 +117,126 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-07-09** — **Documentation + .env.example pass: production pipeline build fully chronicled.**
+  - **CLAUDE.md**: this Change Log entry (covers Milestones A, B, C/D and the whole production
+    pipeline build from PDF extraction through CCN/audit/submit, plus sim-clock and MSA map).
+  - **docs/E2E-TEST-GUIDE.md**: new sections — §9 CCN/audit/submit gates & remediation walkthrough
+    (pass rate, human Create CCN/Resolve audit/Submit claim, gate auto-resolve), §10 time-travel
+    simulator usage (Orchestrator SimTimeControl, +1d/+1m/reset, daily-tick advance), §11 MSA map
+    section (polygon backdrop, agency/PG balls seeded inside, drilldown, live toggle). Twilio env
+    note added to §8 environment caveats (Call/SMS graceful skip, TWILIO_TO_OVERRIDE safety net,
+    E.164 format).
+  - **md/business/builder-workflows.md**: Live daily workflow block updated to reflect def v7
+    (34 steps, 4 megaGroups); group names corrected (TASK-CCN, Audit & Submit Claim added);
+    diagram extended through the full CCN→audit→submit tail.
+  - **md/business/eligibility-billing.md**: header Sources updated (billing monitor removed note
+    reinforced); "Billing monitor removed" invariant note sharpened; CCN/audit/submit described as
+    now living in the builder workflow tail not a separate trigger.
+  - **md/backend/lib/reference-logic.md**: updated `rework.js` `maxCycles` param (default 3; run
+    audit cycle passes 5, re_audit passes 1); `runAuditCycle` helper noted as living in
+    `taskRegistry.js` (not a referenceLogic module) to avoid audit↔rework circular import; CCN
+    verdict logic (`runCcnService`, `ccnFailed` derivation) added to aiService.js row.
+  - **md/frontend/pages/monitoring.md**: SimTimeControl widget documented (what it is, ops
+    +1d/+1m/reset, businessNow/businessToday in clock.js, migration 005 app_settings); MSA polygon
+    map section added (msa.js, seedInside, polygon backdrop, agency/PG seeded inside, live toggle
+    isIdle guard).
+  - **md/GLOBAL.md**: §1 active builder workflow updated to def v7 (34 steps, 4 megaGroups),
+    SimTimeControl/clock.js/migration 005 noted in §7 conventions, MSA map note in §7.
+  - **.env.example**: already correct — Twilio block already present with all four vars and the
+    TWILIO_TO_OVERRIDE safety note. No changes needed.
+
+- **2026-07-09** — **Milestone B (audit/submit): CCN service, bounded audit/rework/re-audit cycle,
+  human Submit-claim gate, tail auto-resolver; saved as def v7.**
+  - **New catalog** (`builderCatalog.js`): 3 system actions `run_ccn_service` → `ccn.runService`,
+    `run_audit_cycle` → `audit.runCycle`, `re_audit` → `audit.reAudit`; 3 human actions
+    `create_ccn_manually`, `resolve_audit_failures`, `submit_claim` (confirm-only gate; execute
+    records `submitted_at` + summed amount via `recordClaimSubmission`); 2 condition pairs
+    `ccn_failed`/`ccn_ok` + `audit_pass_98`/`audit_pass_below_98` (+ read-only passthrough in
+    `evaluateCondition`).
+  - **CCN tail appended after make_billable_claimable** (`docs/phase1-agency-upload.graph.json`,
+    new group **CCN, Audit & Submit Claim**): `run_ccn_service` → `ccn_failed?` YES → human
+    **Create CCN manually** (rejoins) ; then `run_audit_cycle` → `audit_pass_98?` NO → human
+    **Resolve audit failures** → `re_audit` ; YES/join → human **Submit claim**. Because
+    make_billable is an idempotent twin (n10a eligible arm / n10b signature-pass arm), the tail
+    is instantiated TWICE (suffix a/b) — the frozen DAG compiler flags a cycle if two branch-walks
+    converge on one node, and every tail step is agency-scoped + idempotent, so the duplication is
+    safe. Compiles to **34 steps, 4 megaGroups**.
+  - **CCN verdict** (`referenceLogic/aiService.js` new `runCcnService`): delegates to `runAiService`
+    and derives `ccnFailed = hadWork && generatedNotes === 0` — the exact Gemini-dead state
+    (every month lands in `failures`, 0 notes). A run with NO billable months is NOT a failure
+    (`ccn_ok`), so the tail proceeds straight to the audit cycle.
+  - **ONE bounded audit cycle** (`runAuditCycle` helper in `taskRegistry.js`): `auditRcm` →
+    `reworkAudits` (its inner loop now bounded by a new `maxCycles` param, default 3 preserves old
+    behaviour; run_audit_cycle passes 5, re_audit passes 1) → final `auditRcm`; passRate =
+    passed / total, vacuous pass (1) when there are 0 records. Orchestrated in taskRegistry (not a
+    referenceLogic module) to avoid the audit.js↔rework.js circular import — it is the single place
+    that imports both. `audit_pass_98 = passRate >= 0.98`.
+  - **Submit claim** (`repositories.recordClaimSubmission`): sums the agency's `rcm_records`
+    charges, flips them to `status='submitted'`, stamps `claim_submitted`/`claim_submitted_at`/
+    `claim_amount_cents` on the item. HUMAN GATE — NOTHING transmitted to any payer/clearinghouse.
+  - **ASYNC RULE extended**: `GATE_REMEDIATIONS` gains `ccn_failed` (gate = CC notes now present on
+    `cpo_months.reason.ccNotes`, cheap DB read) and `audit_pass_below_98` (gate = re-run bounded
+    audit cycle passes ≥ 98%; audit.js/rework.js import only db.js so no cycle). The tick's
+    `resolveSettledGateTasks` now also settles prior-day Create-CCN / Resolve-audit tasks whose gate
+    has since passed. Create-CCN honestly stays open while Gemini is dead (notes never appear).
+  - **DB save**: compiled + saved via the identical `compileGraph`+`upsertWorkflowDefinition` path
+    `saveWorkflow` uses — `cc-1783522521545 v7` (34 steps, 4 megaGroups) is now the SINGLE active
+    daily def; v6 deactivated (single-active daily invariant holds — exactly one active `daily_time`
+    def). Verified live (throwaway run/item created + deleted; rcm status restored, never left
+    mutated): all 3 tail task fns against the real DEMO-RCM agency (7 rcm_records → passRate 0.143 →
+    `audit_pass_below_98`), submit_claim summed $460 + flipped statuses, standalone engine run of
+    the arm-a tail sequenced n14a→(t9a skipped, ccn_ok)→n15a→(t10a active, audit<98)→n16a/t11a
+    pending (human gate blocks), evaluateCondition passthrough for all 4 keys, graph round-trips.
+    lint + build green; 12 api handlers unchanged.
+
+- **2026-07-09** — **Milestone A (core): group rename, multi-signal PDF↔order match, post-model
+  billing gates, generalized gate auto-resolver, twilio-wired call/sms; saved as def v6.**
+  - **Group rename**: the uploaded branch's TASK group `Update Object Module` →
+    **Update / Create Patient Model** (graph `groups`, compiled `megaGroups`,
+    `docs/phase1-agency-upload.graph.json`, `docs/E2E-TEST-GUIDE.md`). The two `md/`
+    occurrences are generic shape examples, not references to this def — left as-is.
+  - **Multi-signal PDF↔order matching** (`taskRegistry.matchPdfForItem`, run inside
+    `ai.extractWithPatterns`): filename match → order-number regex over the extracted PDF text
+    cross-checked to the workbook order number → patient-name + order-date heuristic → else
+    stamps `decisions.pdf_match_ambiguous` and OR's it into `ai_extraction_fail` so the fill
+    task (which gained a `confirm_order_document` action) is routed (never guesses silently).
+    `pdf_match` provenance stamped on decisions + `extraction_payload.pdfMatch`. No PDF present
+    ⇒ NOT flagged ambiguous.
+  - **Post-model billing gates** appended to the uploaded branch AFTER `Review record` (t5.next=n9):
+    `check_episode_eligibility` → `episode_eligible?` YES → `make_billable_claimable`
+    (n10a, stamps `billable_claimable`); NO → `check_documents_exist` → `documents_missing?`
+    YES → human **Get missing documents** [get_missing_documents: contact_agency / rpa
+    placeholder / manual EHR] ; NO → `check_patient_data_complete` → `patient_data_incomplete?`
+    YES → human **Get and fill patient data** [fill_missing_fields] ; NO →
+    `check_signature_exists` → `signature_exists?` NO → human **Send for signature to Physician**
+    [send_for_signature: markOrderSentToPhysician — HUMAN gate, NO auto-send, reminds /pg-login] ;
+    YES → `make_billable_claimable` (n10b). n10a/n10b are idempotent twins: the DAG compiler
+    cannot converge two branch-walks on one node (it flags a cycle), so the eligible arm and the
+    signature-pass arm each get their own make_billable step. The 5 gate system steps read the
+    REAL DB rows via new `repositories.loadEpisodeGateContext` + `gateDocumentsExist` /
+    `gateSignatureExists` / `gatePatientDataComplete` (businessRules.isPatientDataComplete) /
+    `makeEpisodeBillableClaimable` (recomputes + persists `patients.latest_episode_status` — the
+    denormalized flip site; `patient_episodes` has no status column). 8 new condition pairs +
+    passthrough in `evaluateCondition`; 5 new system actions + 3 new human actions in
+    `builderCatalog`.
+  - **ASYNC RULE**: the remediation human tasks are branch terminals (same blocked-item pattern
+    as the contact task t1 — they do not introduce new run-completion blocking). New generalized
+    `repositories.resolveSettledGateTasks()` (modeled on `resolveOpenAgencyAskTaskForRun`) runs
+    on every daily tick (`dailyTimeTickHandler`), re-evaluates each still-active gate remediation
+    task's gate against the item's current DB rows, and completes any that now pass with note
+    "Resolved by re-evaluation — the gate now passes." The next daily run re-evaluates every gate
+    fresh per item.
+  - **twilio wiring**: `call_agency`/`sms_agency` execute now call `api/_lib/twilio.js`
+    `placeCall`/`sendSms` (Milestone C) reading the agency phone from `HHAH.contact.phone`;
+    twilio is env-only + unset here so both degrade to `{sent:false,skipped:true,
+    reason:'twilio_not_configured'}` (never throws), and the outcome is surfaced on the action
+    output (`channel_sent`/`channel_skipped`/`channel_reason`) like email_agency's SMTP outcome.
+  - **DB save**: compiled + saved via the identical `compileGraph`+`upsertWorkflowDefinition`
+    path the `saveWorkflow` endpoint uses — `cc-1783522521545 v6` (22 steps, 3 megaGroups) is now
+    the SINGLE active daily def; v5 deactivated. Verified live: gate helpers + task fns + the
+    auto-resolver against a real episode (throwaway run created + deleted), all 5 PDF-match
+    branches, twilio graceful skip, graph round-trip. lint + build green; 12 api handlers.
+
 - **2026-07-09** — **Worker/Orchestrator feedback pass (F1–F6): contact-task context, honest SMTP
   outcome, TASK-group hierarchy, per-object run counts, wf-area-onboarding removal, "Phase 1"
   strip.**
@@ -135,7 +255,7 @@ Newest first. Add an entry for each change made by Claude Code.
   - **F3 — TASK container hierarchy**: `BUCKET_ITEM_SELECT` (repositories.js) selects
     `d.definition->'megaGroups'`; `api/work-items/index.js` maps the task's `step_id` into
     `group_name` on every bucket row (internal column stripped). Bucket cards + the detail
-    header read "TASK-Update Object Module › Review record" / "TASK-Contact Agency to Upload
+    header read "TASK-Update / Create Patient Model › Review record" / "TASK-Contact Agency to Upload
     Documents › …".
   - **F4 — per-object run counts on daily-run cards**: `runObjectStats` no longer keys off a
     workflow-id map — `objectsForRun()` derives the object rows from the run's task keys

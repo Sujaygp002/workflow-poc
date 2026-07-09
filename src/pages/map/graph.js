@@ -197,30 +197,57 @@ export function buildGraph({ patients = [], orders = [], reference = {} } = {}) 
   // pgCount per HHAH
   edges.forEach((e) => { const h = hhahByKey.get(key(e.hhahName)); if (h) h.pgCount += 1; });
 
-  // ---- practitioners per PG (badge) ----
+  // ---- practitioners per PG (names + count) ----
   // The PG↔practitioner link lives on physician_groups.contact_info.physician_ids[]
-  // (set by mapPgToPractitioner). Count those; fall back to practitioner.history.PG_names.
-  const practitionersByPg = {};
+  // (set by mapPgToPractitioner). Resolve those ids to practitioner names; fall back
+  // to practitioner.history.PG_names when a PG recorded no physician_ids.
+  const practitionerById = new Map();
+  practitioners.forEach((pr) => practitionerById.set(clean(pr.id), clean(pr.physician_name)));
+
+  const practitionerNamesByPg = {}; // pgName -> [names]
   pgsRef.forEach((pg) => {
+    const nm = clean(pg.name);
     const ids = pg.contact_info?.physician_ids;
-    practitionersByPg[clean(pg.name)] = Array.isArray(ids) ? ids.length : 0;
+    const names = Array.isArray(ids)
+      ? ids.map((id) => practitionerById.get(clean(id))).filter(Boolean)
+      : [];
+    practitionerNamesByPg[nm] = names;
   });
   // fallback / supplement: practitioners that name this PG in their history
   practitioners.forEach((pr) => {
-    const names = pr.history?.PG_names || pr.history?.pg_names || [];
-    (Array.isArray(names) ? names : []).forEach((entry) => {
+    const hist = pr.history?.PG_names || pr.history?.pg_names || [];
+    (Array.isArray(hist) ? hist : []).forEach((entry) => {
       const nm = clean(entry?.name || entry);
-      if (nm && practitionersByPg[nm] === 0) {
-        // only use the fallback when the PG had no physician_ids recorded
-        practitionersByPg[nm] = (practitionersByPg[nm] || 0) + 1;
-      }
+      if (!nm) return;
+      const list = practitionerNamesByPg[nm];
+      // only use the fallback when the PG had no physician_ids-resolved names
+      if (list && list.length === 0) list.push(clean(pr.physician_name));
     });
+  });
+
+  const practitionersByPg = {};
+  Object.entries(practitionerNamesByPg).forEach(([nm, names]) => { practitionersByPg[nm] = names.length; });
+
+  // ---- PG nodes: every reference PG becomes a top-level ball inside the MSA ----
+  const pgs = pgsRef.map((pg) => {
+    const nm = clean(pg.name);
+    const agencyIds = edges.filter((e) => key(e.pg) === key(nm)).map((e) => e.hhahId);
+    return {
+      id: `pg::${key(nm)}`,
+      name: nm,
+      practitioners: practitionerNamesByPg[nm] || [],
+      practitionerCount: (practitionerNamesByPg[nm] || []).length,
+      // agency ids (edge.hhahId) this PG is connected to (for click-to-connect lines)
+      agencyIds: [...new Set(agencyIds)],
+    };
   });
 
   return {
     hhahs: [...hhahByKey.values()].sort((a, b) => b.pgCount - a.pgCount || a.name.localeCompare(b.name)),
+    pgs,
     edges,
     practitionersByPg,
+    practitionerNamesByPg,
   };
 }
 

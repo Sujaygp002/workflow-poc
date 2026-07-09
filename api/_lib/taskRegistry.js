@@ -4,8 +4,13 @@ import {
   findOrderById,
   findPatient,
   findPatientUnit,
+  gateDocumentsExist,
+  gatePatientDataComplete,
+  gateSignatureExists,
   insertAiExtraction,
   isOrderSigned,
+  loadEpisodeGateContext,
+  makeEpisodeBillableClaimable,
   markOrderSignedByPhysician,
   markOrderSentToPhysician,
   updateItem,
@@ -21,9 +26,10 @@ import { GEMINI_MODEL } from './config.js';
 import { sendEmail } from './mailer.js';
 import { runHumanActions } from './builderCatalog.js';
 import { cleanString, hasValue, normalizeNpi, safeJson } from './normalizers.js';
+import { businessToday } from './clock.js';
 import { checkUploadedToday } from './referenceLogic/agencyCheck.js';
 import { extractWithPatterns } from './referenceLogic/extraction.js';
-import { runAiService } from './referenceLogic/aiService.js';
+import { runAiService, runCcnService } from './referenceLogic/aiService.js';
 import { generateRcm } from './referenceLogic/rcm.js';
 import { auditRcm } from './referenceLogic/audit.js';
 import { reworkAudits } from './referenceLogic/rework.js';
@@ -129,6 +135,50 @@ function findPdfForOrder(item, context) {
   return context?.pdfsByOrderNumber?.[orderNumber]
     || (context?.pdfs || []).find((pdf) => orderPdfKey(pdf.fileName) === orderNumber)
     || null;
+}
+
+// Multi-signal PDF ↔ order matching (Milestone A). Decides how confidently the
+// attached PDF belongs to THIS workbook row, in priority order:
+//   1. filename  — the attached pdf.fileName's order number equals the workbook
+//                  order number (the upload's default filename match).
+//   2. order_number_text — an order-number token found in the extracted PDF text
+//                  cross-checks to the workbook order number.
+//   3. patient_date — the patient name AND order date both appear in the PDF text
+//                  (heuristic used only when there is no order-number signal).
+// No confident signal (and a PDF is present) → 'ambiguous' → the caller stamps
+// decisions.pdf_match_ambiguous and routes the human 'Confirm order document'
+// action. When no PDF is attached at all we do NOT flag ambiguity (many rows
+// legitimately carry no order document).
+function matchPdfForItem(item, pdfText) {
+  const workbookOrderNo = orderPdfKey(item.order_payload?.order_info?.order_number);
+  const pdf = item.extraction_payload?.pdf || {};
+  const hasPdf = hasValue(pdf.blobUrl) || hasValue(pdfText);
+  if (!hasPdf) return { match: 'none', ambiguous: false };
+
+  // 1. filename match (the bulk-upload default): the attached file's name key
+  // equals the workbook order number.
+  const fileKey = orderPdfKey(pdf.fileName);
+  if (workbookOrderNo && fileKey && fileKey === workbookOrderNo) {
+    return { match: 'filename', ambiguous: false };
+  }
+
+  const text = String(pdfText || '');
+  if (text) {
+    // 2. order-number token in the PDF text cross-checked to the workbook order no.
+    if (workbookOrderNo) {
+      const re = new RegExp(`\\b${workbookOrderNo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      if (re.test(text)) return { match: 'order_number_text', ambiguous: false };
+    }
+    // 3. patient-name + order-date heuristic (no order-number signal available).
+    const name = cleanString(item.patient_payload?.patient_info?.name);
+    const orderDate = cleanString(item.order_payload?.order_info?.order_date);
+    const nameHit = name && text.toLowerCase().includes(name.toLowerCase());
+    const dateHit = orderDate && text.includes(orderDate);
+    if (nameHit && dateHit) return { match: 'patient_date', ambiguous: false };
+  }
+
+  // A PDF is attached but no signal confirms it belongs to this row → ambiguous.
+  return { match: 'ambiguous', ambiguous: true };
 }
 
 async function checkAllReferences(item) {
@@ -294,6 +344,31 @@ async function runOrderWrite(item, retry) {
   }
 }
 
+// Milestone B — the audit-cycle pass target: audit_pass_98 = passRate >= 0.98.
+const AUDIT_PASS_THRESHOLD = 0.98;
+
+// Milestone B — ONE bounded audit -> rework -> re-audit cycle. Orchestrated here
+// (not inside a referenceLogic module) so the audit.js <-> rework.js circular
+// import is avoided — this is the single place that imports both. auditRcm writes
+// one audit_records row per rcm_record; reworkAudits fixes fixable findings and
+// re-audits internally (its own bounded inner loop, now bounded by `maxCycles`);
+// a final auditRcm computes the definitive passRate over the agency's records.
+// A run with zero RCM records is a vacuous pass (passRate 1) — nothing to audit
+// should not stall the tail.
+async function runAuditCycle(item, maxCycles) {
+  const initial = await auditRcm({ item });
+  if (initial.ok === false) {
+    return { passRate: 0, passed: 0, failed: 0, total: 0, cycles: 0, fixed: 0, error: initial.error || 'audit_failed' };
+  }
+  const rework = await reworkAudits({ item, maxCycles });
+  const final = await auditRcm({ item });
+  const passed = (final.passed || []).length;
+  const failed = (final.failed || []).length;
+  const total = passed + failed;
+  const passRate = total === 0 ? 1 : passed / total;
+  return { passRate, passed, failed, total, cycles: rework.cycles || 0, fixed: rework.fixed || 0, error: null };
+}
+
 export async function evaluateCondition(condition, item) {
   if (!condition) return true;
   const known = item.decisions || {};
@@ -365,6 +440,36 @@ export async function evaluateCondition(condition, item) {
     'ai_service_ok',
     'audit_failed',
     'audit_passed',
+  ].includes(condition)) {
+    const known = item.decisions || {};
+    return known[condition] === true;
+  }
+
+  // Post-model billing gates (Milestone A). Each is pre-stamped onto item.decisions
+  // by its preceding gate system step (gate.checkEpisodeEligibility, etc.) before
+  // the condition step evaluates — same read-only passthrough as the RCM gates.
+  if ([
+    'episode_eligible',
+    'episode_not_eligible',
+    'documents_exist',
+    'documents_missing',
+    'patient_data_complete',
+    'patient_data_incomplete',
+    'signature_exists',
+    'signature_missing',
+  ].includes(condition)) {
+    const known = item.decisions || {};
+    return known[condition] === true;
+  }
+
+  // CCN + audit/submit tail (Milestone B). Each is pre-stamped onto item.decisions
+  // by its preceding system step (ccn.runService, audit.runCycle / audit.reAudit)
+  // before the condition step evaluates — same read-only passthrough.
+  if ([
+    'ccn_failed',
+    'ccn_ok',
+    'audit_pass_98',
+    'audit_pass_below_98',
   ].includes(condition)) {
     const known = item.decisions || {};
     return known[condition] === true;
@@ -790,7 +895,7 @@ export const taskRegistry = {
   },
 
   'signing.sendToPhysician': async ({ item }) => {
-    const date = new Date().toISOString().slice(0, 10);
+    const date = await businessToday(); // SIM: send date follows the business clock
     const orderId = item.extraction_payload?.orderId;
     if (orderId) await markOrderSentToPhysician(orderId, date);
     const orderPayload = mergeDeep(item.order_payload, {
@@ -821,7 +926,7 @@ export const taskRegistry = {
   },
 
   'signing.updateOrderSigned': async ({ item }) => {
-    const date = new Date().toISOString().slice(0, 10);
+    const date = await businessToday(); // SIM: signed date fallback follows the business clock
     if (item.extraction_payload?.orderId) {
       await markOrderSignedByPhysician(item.extraction_payload.orderId, item.order_payload?.order_status?.SignedByPhyscianDate || date);
     }
@@ -1041,9 +1146,19 @@ export const taskRegistry = {
       },
       order_admission_details: { billing_provider: { NPI: orderPatch.NPI } },
     });
+    // Multi-signal PDF ↔ order matching over the extracted text (filename ->
+    // order-number-in-text -> patient+date heuristic). Ambiguous/no-match is NOT
+    // guessed silently: it stamps pdf_match_ambiguous and, because the fill task
+    // carries the 'Confirm order document' action, we route there by OR-ing the
+    // ambiguity into ai_extraction_fail (the fill task's gate).
+    const mergedForMatch = { ...item, patient_payload: patientPayload, order_payload: orderPayload };
+    const pdfMatch = matchPdfForItem(mergedForMatch, result.pdfText || item.extraction_payload?.pdfText);
+    const extractionFailed = result.ok !== true;
     const decisions = setDecisions(item, {
-      ai_extraction_success: result.ok === true,
-      ai_extraction_fail: result.ok !== true,
+      ai_extraction_success: !extractionFailed && !pdfMatch.ambiguous,
+      ai_extraction_fail: extractionFailed || pdfMatch.ambiguous,
+      pdf_match: pdfMatch.match,
+      pdf_match_ambiguous: pdfMatch.ambiguous,
     });
     await updateItem(item.id, {
       patientPayload,
@@ -1056,11 +1171,12 @@ export const taskRegistry = {
         missingAfter: result.missingAfter,
         validationErrors: result.validationErrors,
         model: result.model,
+        pdfMatch: pdfMatch.match,
         ...(result.pdfText ? { pdfText: result.pdfText } : {}),
       },
       decisions,
     });
-    return { ok: true, output: { tiersUsed: result.tiersUsed, missingAfter: result.missingAfter, ok: result.ok } };
+    return { ok: true, output: { tiersUsed: result.tiersUsed, missingAfter: result.missingAfter, ok: result.ok, pdfMatch: pdfMatch.match } };
   },
 
   // n4: AI CC-note / CPO service. Partial success is acceptable; sets
@@ -1113,6 +1229,117 @@ export const taskRegistry = {
   'ai.rework': async ({ item }) => {
     const result = await reworkAudits({ item });
     return { ok: true, output: { cycles: result.cycles, fixed: result.fixed, remaining: result.remaining, error: result.error || null } };
+  },
+
+  // ── Post-model billing gates (Milestone A) ──
+  // Each re-derives the item's episode state from the REAL DB rows (never returns
+  // ok:false for a business "no" — stamps decisions the gate condition nodes read).
+  // Runs AFTER the record review, so episode/admission/order rows exist.
+
+  // Gate 1: episode eligibility (signed 485 + valid F2F window). Stamps
+  // episode_eligible / episode_not_eligible.
+  'gate.checkEpisodeEligibility': async ({ item }) => {
+    const ctx = await loadEpisodeGateContext(item);
+    const eligible = ctx?.assessment?.eligible === true;
+    const decisions = setDecisions(item, {
+      episode_eligible: eligible,
+      episode_not_eligible: !eligible,
+    });
+    await updateItem(item.id, { decisions });
+    return { ok: true, output: { eligible, status: ctx?.assessment?.status || 'none', reason: ctx?.assessment?.reason || null } };
+  },
+
+  // Gate exit: flip the patient toward billable/claimable (denormalized latest
+  // episode status). Stamps billable_claimable.
+  'gate.makeBillableClaimable': async ({ item }) => {
+    const result = await makeEpisodeBillableClaimable(item);
+    const decisions = setDecisions(item, { billable_claimable: result.billable === true });
+    await updateItem(item.id, { decisions });
+    return { ok: true, output: result };
+  },
+
+  // Gate 2: 485 + F2F document presence. Stamps documents_exist / documents_missing.
+  'gate.checkDocumentsExist': async ({ item }) => {
+    const ctx = await loadEpisodeGateContext(item);
+    const { documentsExist, has485, hasF2f } = gateDocumentsExist(ctx);
+    const decisions = setDecisions(item, {
+      documents_exist: documentsExist,
+      documents_missing: !documentsExist,
+    });
+    await updateItem(item.id, { decisions });
+    return { ok: true, output: { documentsExist, has485, hasF2f } };
+  },
+
+  // Gate 3: required patient demographics complete. Stamps
+  // patient_data_complete / patient_data_incomplete.
+  'gate.checkPatientDataComplete': async ({ item }) => {
+    const ctx = await loadEpisodeGateContext(item);
+    const { patientDataComplete } = await gatePatientDataComplete(item, ctx);
+    const decisions = setDecisions(item, {
+      patient_data_complete: patientDataComplete,
+      patient_data_incomplete: !patientDataComplete,
+    });
+    await updateItem(item.id, { decisions });
+    return { ok: true, output: { patientDataComplete } };
+  },
+
+  // Gate 4: every episode order physician-signed. Stamps
+  // signature_exists / signature_missing.
+  'gate.checkSignatureExists': async ({ item }) => {
+    const ctx = await loadEpisodeGateContext(item);
+    const { signatureExists, unsignedOrderNumbers } = gateSignatureExists(ctx);
+    const decisions = setDecisions(item, {
+      signature_exists: signatureExists,
+      signature_missing: !signatureExists,
+    });
+    await updateItem(item.id, { decisions });
+    return { ok: true, output: { signatureExists, unsignedOrderNumbers } };
+  },
+
+  // ── CCN + audit/submit tail (Milestone B) ──
+  // Runs AFTER make_billable_claimable. CCN generation for the item's billable
+  // months; Gemini-dead => stamps ccn_failed and routes the human 'Create CCN
+  // manually' task.
+  'ccn.runService': async ({ item }) => {
+    const result = await runCcnService({ item });
+    const decisions = setDecisions(item, {
+      ccn_failed: result.ccnFailed,
+      ccn_ok: !result.ccnFailed,
+    });
+    await updateItem(item.id, { decisions });
+    return {
+      ok: true,
+      output: {
+        ccnFailed: result.ccnFailed,
+        processedMonths: result.processedMonths,
+        generatedNotes: result.generatedNotes,
+        failures: result.failures,
+      },
+    };
+  },
+
+  // ONE step: audit -> rework -> re-audit, bounded <= 5 cycles, computes passRate.
+  // Stamps audit_pass_98 = passRate >= 0.98.
+  'audit.runCycle': async ({ item }) => {
+    const result = await runAuditCycle(item, 5);
+    const decisions = setDecisions(item, {
+      audit_pass_98: result.passRate >= AUDIT_PASS_THRESHOLD,
+      audit_pass_below_98: result.passRate < AUDIT_PASS_THRESHOLD,
+    });
+    await updateItem(item.id, { decisions });
+    return { ok: true, output: result };
+  },
+
+  // One more bounded cycle after the human 'Resolve audit failures' task. Re-stamps
+  // audit_pass_98 so the Orchestrator reflects the post-resolution pass rate.
+  'audit.reAudit': async ({ item }) => {
+    const result = await runAuditCycle(item, 1);
+    const decisions = setDecisions(item, {
+      audit_pass_98: result.passRate >= AUDIT_PASS_THRESHOLD,
+      audit_pass_below_98: result.passRate < AUDIT_PASS_THRESHOLD,
+    });
+    await updateItem(item.id, { decisions });
+    return { ok: true, output: result };
   },
 };
 
