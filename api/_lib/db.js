@@ -12,9 +12,12 @@ function isNeonUrl(url) {
 // - tagged template literal: sql`SELECT ... ${x}` → rows array
 // - sql.query(text, params?) → rows array
 function makePgSql(url) {
+  // Strip sslmode from the URL — pg v8 treats sslmode=require as verify-full
+  // (rejects self-signed RDS certs). We set ssl explicitly instead.
+  const cleanUrl = url.replace(/[?&]sslmode=[^&]*/g, '').replace(/[?&]uselibpqcompat=[^&]*/g, '');
   const pool = new pg.Pool({
-    connectionString: url,
-    ssl: /sslmode=require/.test(url) ? { rejectUnauthorized: false } : false,
+    connectionString: cleanUrl,
+    ssl: { rejectUnauthorized: false },
   });
 
   const sql = async (strings, ...values) => {
