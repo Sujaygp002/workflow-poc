@@ -1,13 +1,16 @@
-# What can you do in Command Center?
+# What can you do in the MVP?
 
-Command Center is a control room for handling patient paperwork from home-health
-agencies. Think of it as a smart to-do machine: papers come in, the machine walks
-each one through a checklist, and people step in only when a human decision is
-needed.
+The MVP is a control room for handling patient paperwork from home-health
+agencies. Papers come in, the system walks each one through a checklist, and
+people step in only when a human decision is needed. As it works, it builds the
+**object model** — the patients, admissions, episodes and orders it keeps track
+of — and saves every change in the **persistence layer** (the database), so
+nothing is ever lost.
 
 ## 1. Build a process (the Workflow page)
 
-A "workflow" is just a checklist of steps the system follows, in order.
+This is where you use the **workflow language**: a checklist of steps you snap
+together, which the system then follows in order.
 
 - Click **New Workflow** to start building one from scratch.
 - Add steps one by one. Some the computer does on its own; some are jobs for a
@@ -25,7 +28,8 @@ This is the live scoreboard for everything happening right now.
 - See every run drawn as a **flowchart**, so you can follow the path each item took.
 - See which step each item is sitting on at this moment.
 - Spot which jobs are **waiting for a person** (a pink "to do" tag shows how many).
-- See counts of what got **created or updated** (patients, orders, and so on).
+- See the **object model** grow: counts of patients, admissions, episodes and
+  orders **created or updated**, shown as a family tree.
 - Use the **time-travel control** to jump the clock forward a day and see what
   happens next — then reset it back.
 
@@ -68,8 +72,11 @@ This is for a staff member doing the hands-on work.
 
 ## How it all fits together
 
-An agency uploads its patients and orders. The system runs the checklist on each
-one, doing the easy steps by itself. When a step needs a person, it lands in an
-employee's to-do list. Orders that need a signature go to the doctor, who signs a
-whole batch at once. Once everything is in order, the paperwork is prepared for
-billing — and you can watch it all move along on the Orchestrator page.
+An agency uploads its patients and orders. The system runs the checklist — the
+workflow — on each one, doing the easy steps by itself. Every step reads and
+updates the **object model** (patient → admission → episode → order), and every
+change lands safely in the **persistence layer**. When a step needs a person, it
+shows up in an employee's to-do list. Orders that need a signature go to the
+doctor, who signs a whole batch at once. Once everything is in order, the
+paperwork is prepared for billing — and you can watch it all move along on the
+Orchestrator page.
