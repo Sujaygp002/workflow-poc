@@ -26,6 +26,11 @@ export const SMTP_USER = process.env.SMTP_USER || 'invovationmailer2026@gmail.co
 export const SMTP_PASS = process.env.SMTP_PASS || 'dnhjnqyfcufgzqqn';
 export const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER || 'no-reply@hhh-intake.local';
 
+// AWS S3 for blob storage (replaces Vercel Blob in AWS deployment)
+export const S3_BUCKET = process.env.S3_BUCKET || '';
+export const S3_REGION = process.env.S3_REGION || 'eu-north-1';
+export const S3_PUBLIC_URL_BASE = process.env.S3_PUBLIC_URL_BASE || '';
+
 // Twilio for outbound agency SMS / calls. ENV-ONLY — NO hardcoded fallbacks (this
 // is a NEW credential; the repo is public, so a leaked live token is unacceptable).
 // When any of SID / token / from-number is unset, the twilio module degrades

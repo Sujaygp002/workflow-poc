@@ -1,0 +1,15 @@
+node_modules
+dist
+.git
+.github
+docs
+md
+reference
+public/sample-4-artifacts
+scripts/cdp.mjs
+*.md
+.env
+.env.*
+.vercel
+*.log
+.DS_Store
