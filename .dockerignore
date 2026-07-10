@@ -5,7 +5,6 @@ dist
 docs
 md
 reference
-public/sample-4-artifacts
 scripts/cdp.mjs
 *.md
 .env

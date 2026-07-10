@@ -69,6 +69,27 @@ async function start() {
   // Health check for ALB
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
+  // Private-bucket blob proxy: streams S3 objects through the app so the
+  // bucket never needs public access. blobStore's S3_PUBLIC_URL_BASE points
+  // here, so stored blobUrls resolve for both browsers and server-side fetch.
+  if (process.env.S3_BUCKET) {
+    const { S3Client, GetObjectCommand } = await import('@aws-sdk/client-s3');
+    const s3 = new S3Client({ region: process.env.S3_REGION || 'eu-north-1' });
+    app.get('/api/blobs/*', async (req, res) => {
+      const key = decodeURIComponent(req.params[0] || '');
+      if (!key) return res.status(400).json({ error: 'Missing blob key' });
+      try {
+        const obj = await s3.send(new GetObjectCommand({ Bucket: process.env.S3_BUCKET, Key: key }));
+        if (obj.ContentType) res.setHeader('Content-Type', obj.ContentType);
+        if (obj.ContentLength) res.setHeader('Content-Length', obj.ContentLength);
+        obj.Body.pipe(res);
+      } catch (error) {
+        const status = error?.$metadata?.httpStatusCode === 404 || error?.name === 'NoSuchKey' ? 404 : 500;
+        res.status(status).json({ error: status === 404 ? 'Blob not found' : 'Blob fetch failed' });
+      }
+    });
+  }
+
   // API routes (must come before static/SPA catch-all)
   app.all('/api/area-intake', wrap(h.areaIntake));
   app.all('/api/auth', wrap(h.auth));
