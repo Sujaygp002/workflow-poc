@@ -101,6 +101,7 @@ async function start() {
   app.all('/api/work-items', wrap(h.workItems));
   app.all('/api/workflow-runs/:id', wrap(h.workflowRunById, { id: 'id' }));
   app.all('/api/workflow-runs', wrap(h.workflowRuns));
+  app.all('/api/workflows/bulk-upload/start', wrap(h.bulkUpload));
   app.all('/api/workflows/bulk-upload', wrap(h.bulkUpload));
   app.all('/api/workflows', wrap(h.workflows));
 
