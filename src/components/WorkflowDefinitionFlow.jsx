@@ -5,7 +5,7 @@
 //   { id, name, actor, taskKey, condition, preReq, description }
 // as a vertical top-down flowchart with decision diamonds, actor-coloured boxes,
 // and ⓘ info popovers.
-import { Fragment, useState } from 'react';
+import { useState } from 'react';
 import { ArrowDown, Bot, Cog, User, Clock, Info, CheckCircle2, Circle, AlertCircle } from 'lucide-react';
 
 // ── Actor styling ─────────────────────────────────────
@@ -553,27 +553,68 @@ export function runObjectStats(run) {
 }
 
 // ── Run object side box ───────────────────────────────
-// A compact created / updated grid per object type, plus a "before trigger"
+// A nested tree of the domain hierarchy per object type, plus a "before trigger"
 // summary of how many already existed.
+//
+// The domain chain (parent → child) the tree indents along:
+const OBJECT_CHAIN = ['Patient Unit', 'Patient Record', 'Admission Object', 'Episode Object', 'Order'];
+
+// Small colored count badges — green created, sky updated, slate existed —
+// matching the Tailwind idiom used elsewhere in this file.
+function ObjectBadges({ row }) {
+  return (
+    <div className="mt-0.5 flex flex-wrap items-center gap-1">
+      <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-black text-emerald-700">{row.created} created</span>
+      <span className="rounded bg-sky-50 px-1.5 py-0.5 text-[10px] font-black text-sky-700">{row.updated} updated</span>
+      {row.existed > 0 && (
+        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-black text-slate-600">{row.existed} existed</span>
+      )}
+    </div>
+  );
+}
+
+function ObjectTreeNode({ row, depth }) {
+  // Progressive indentation: each level steps in further, with a left border
+  // as the connector line so the parent→child chain reads as a tree.
+  return (
+    <li
+      className={depth > 0 ? 'border-l border-slate-200 pl-3' : ''}
+      style={depth > 0 ? { marginLeft: (depth - 1) * 14 } : undefined}
+    >
+      <div className="text-[11px] font-semibold text-slate-700">{row.object}</div>
+      <ObjectBadges row={row} />
+    </li>
+  );
+}
+
 export function RunObjectSidebar({ run }) {
   const rows = runObjectStats(run);
   if (!rows) return null;
   const anyExisted = rows.some((r) => r.existed > 0);
+  // The run's objects form the patient hierarchy only when they are a prefix of
+  // the domain chain (Patient Unit → … → Order). Otherwise fall back to a flat
+  // list so non-hierarchy workflows still render sensibly.
+  const isPatientChain =
+    rows.length > 0 && rows.every((r, i) => r.object === OBJECT_CHAIN[i]);
   return (
     <aside className="w-60 shrink-0 rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
       <div className="mb-2 text-[11px] font-black uppercase tracking-wide text-slate-400">Objects this run</div>
-      <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-2 gap-y-1">
-        <span className="text-[10px] font-black uppercase text-slate-400">object</span>
-        <span className="text-[10px] font-black uppercase text-emerald-600 text-center">created</span>
-        <span className="text-[10px] font-black uppercase text-violet-600 text-center">updated</span>
-        {rows.map((r) => (
-          <Fragment key={r.object}>
-            <span className="truncate text-[11px] font-semibold text-slate-700">{r.object}</span>
-            <span className="rounded bg-emerald-50 px-2 py-0.5 text-center text-xs font-black text-emerald-700">{r.created}</span>
-            <span className="rounded bg-violet-50 px-2 py-0.5 text-center text-xs font-black text-violet-700">{r.updated}</span>
-          </Fragment>
-        ))}
-      </div>
+      {isPatientChain ? (
+        <ul className="space-y-2">
+          {rows.map((r, i) => (
+            <ObjectTreeNode key={r.object} row={r} depth={i} />
+          ))}
+        </ul>
+      ) : (
+        <ul className="space-y-2">
+          {rows.map((r) => (
+            <li key={r.object}>
+              <div className="text-[11px] font-semibold text-slate-700">{r.object}</div>
+              <ObjectBadges row={r} />
+            </li>
+          ))}
+        </ul>
+      )}
       {anyExisted && (
         <div className="mt-3 border-t border-slate-200 pt-2">
           <div className="text-[10px] font-black uppercase tracking-wide text-slate-400">before trigger</div>
