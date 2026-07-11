@@ -51,7 +51,7 @@ export const ACTIONS = {
   // and stamp the decisions the gate condition nodes read. No external calls.
   check_episode_eligibility: { key: 'check_episode_eligibility', kind: 'system', label: 'Check episode eligibility', taskKey: 'gate.checkEpisodeEligibility' },
   make_billable_claimable: { key: 'make_billable_claimable', kind: 'system', label: 'Make billable / claimable', taskKey: 'gate.makeBillableClaimable' },
-  check_documents_exist: { key: 'check_documents_exist', kind: 'system', label: 'Check 485 + F2F documents exist', taskKey: 'gate.checkDocumentsExist' },
+  check_documents_exist: { key: 'check_documents_exist', kind: 'system', label: 'Check 485 document exists', taskKey: 'gate.checkDocumentsExist' },
   check_patient_data_complete: { key: 'check_patient_data_complete', kind: 'system', label: 'Check patient data complete', taskKey: 'gate.checkPatientDataComplete' },
   check_signature_exists: { key: 'check_signature_exists', kind: 'system', label: 'Check physician signature exists', taskKey: 'gate.checkSignatureExists' },
   send_orders_to_physician_portal: { key: 'send_orders_to_physician_portal', kind: 'system', label: 'Send unsigned orders to physician portal', taskKey: 'signing.sendEpisodeOrdersToPhysician' },
@@ -541,8 +541,8 @@ export const CONDITIONS = {
   order_fields_ready: { key: 'order_fields_ready', label: 'Order fields ready', negation: 'order_fields_missing', description: 'required order fields and matched PDF present' },
   physician_signed: { key: 'physician_signed', label: 'Physician signed', negation: 'physician_signature_missing', description: 'physician has signed the document' },
   physician_signature_missing: { key: 'physician_signature_missing', label: 'Signature missing', negation: 'physician_signed', description: 'physician has not signed yet' },
-  patient_eligible: { key: 'patient_eligible', label: 'Patient eligible', negation: 'patient_not_eligible', description: 'required 485 and valid F2F documents exist' },
-  patient_not_eligible: { key: 'patient_not_eligible', label: 'Patient not eligible', negation: 'patient_eligible', description: 'required 485 or F2F document missing' },
+  patient_eligible: { key: 'patient_eligible', label: 'Patient eligible', negation: 'patient_not_eligible', description: 'a required 485 document exists' },
+  patient_not_eligible: { key: 'patient_not_eligible', label: 'Patient not eligible', negation: 'patient_eligible', description: 'no 485 document present' },
 
   // ── Daily Agency Intake -> RCM Pipeline ──
   agency_uploaded: { key: 'agency_uploaded', label: 'Agency uploaded today', negation: 'agency_not_uploaded', description: 'the agency uploaded documents for the day bucket' },
@@ -553,10 +553,10 @@ export const CONDITIONS = {
   audit_passed: { key: 'audit_passed', label: 'Audit passed', negation: 'audit_failed', description: 'all RCM records passed the audit rules' },
 
   // ── Post-model billing gates (Milestone A) ──
-  episode_eligible: { key: 'episode_eligible', label: 'Episode eligible', negation: 'episode_not_eligible', description: 'signed 485 + valid F2F window (computeEpisodeAssessment)' },
-  episode_not_eligible: { key: 'episode_not_eligible', label: 'Episode not eligible', negation: 'episode_eligible', description: 'missing 485 or a valid F2F window' },
-  documents_exist: { key: 'documents_exist', label: '485 + F2F documents exist', negation: 'documents_missing', description: 'both a 485 and an F2F document are present on the episode' },
-  documents_missing: { key: 'documents_missing', label: '485 / F2F documents missing', negation: 'documents_exist', description: 'a 485 or F2F document is missing' },
+  episode_eligible: { key: 'episode_eligible', label: 'Episode eligible', negation: 'episode_not_eligible', description: 'a 485 is present on the episode (computeEpisodeAssessment)' },
+  episode_not_eligible: { key: 'episode_not_eligible', label: 'Episode not eligible', negation: 'episode_eligible', description: 'no 485 present on the episode' },
+  documents_exist: { key: 'documents_exist', label: '485 document exists', negation: 'documents_missing', description: 'a 485 document is present on the episode' },
+  documents_missing: { key: 'documents_missing', label: '485 document missing', negation: 'documents_exist', description: 'no 485 document is present on the episode' },
   patient_data_complete: { key: 'patient_data_complete', label: 'Patient data complete', negation: 'patient_data_incomplete', description: 'all required patient demographics are filled' },
   patient_data_incomplete: { key: 'patient_data_incomplete', label: 'Patient data incomplete', negation: 'patient_data_complete', description: 'one or more required patient demographics are missing' },
   signature_exists: { key: 'signature_exists', label: 'Physician signature exists', negation: 'signature_missing', description: 'every episode order is physician-signed' },

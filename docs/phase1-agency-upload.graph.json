@@ -1,6 +1,6 @@
 {
   "name": "Agency Bulk Upload — Daily Intake",
-  "description": "Daily agency intake. Fires once per day per onboarded agency at 12:00 America/Chicago. If the agency has NOT uploaded today, one human task reaches out (call / sms via twilio + a real email) and the branch ends. If it HAS uploaded, the object model is built end to end: a human task extracts & fills the patient/order data from the uploaded documents (and confirms an ambiguous order PDF), patient resolve (create vs update), admission date-gap fill then resolve, episode date-gap fill then resolve, order create vs skip-duplicate, and a record review (Review passed continues; Review failed restarts the item from step 1). AFTER review, post-model billing gates run linearly: check 485+F2F documents, patient data completeness, and physician signature. A failing gate routes an async remediation human task (documents / patient data) or auto-sends unsigned orders to the physician PG portal (system step); each is re-evaluated by the next daily run. When all gates pass, make billable/claimable runs once, then the tail: a human 'Create CCN' task (real CCN fields: note title / text / type / CPO minutes), then a human 'Submit claim' gate (confirm-only; records submitted_at + amounts; no external call).",
+  "description": "Daily agency intake. Fires once per day per onboarded agency at 12:00 America/Chicago. If the agency has NOT uploaded today, one human task reaches out (call / sms via twilio + a real email) and the branch ends. If it HAS uploaded, the object model is built end to end: a human task extracts & fills the patient/order data from the uploaded documents (and confirms an ambiguous order PDF), patient resolve (create vs update), admission date-gap fill then resolve, episode date-gap fill then resolve, order create vs skip-duplicate, and a record review (Review passed continues; Review failed restarts the item from step 1). AFTER review, post-model billing gates run linearly: check the 485 document (F2F not required), patient data completeness, and physician signature. A failing gate routes an async remediation human task (documents / patient data) or auto-sends unsigned orders to the physician PG portal (system step); each is re-evaluated by the next daily run. When all gates pass, make billable/claimable runs once, then the tail: a human 'Create CCN' task (real CCN fields: note title / text / type / CPO minutes), then a human 'Submit claim' gate (confirm-only; records submitted_at + amounts; no external call).",
   "trigger": { "type": "daily_time", "hour": 12, "minute": 0, "tz": "America/Chicago" },
   "graph": {
     "entry": "n1",
@@ -20,7 +20,7 @@
       {
         "id": "g-gates",
         "name": "Post-Model Billing Gates",
-        "info": "After the record review, re-derive the episode's state from the real DB rows and run the gates linearly: check 485+F2F documents, patient data completeness, and physician signature. A failed gate routes an async remediation task (docs/data) or auto-sends unsigned orders to the physician portal — each re-evaluated by the next daily run. When all gates pass, make billable/claimable runs once and the CCN + submit tail follows.",
+        "info": "After the record review, re-derive the episode's state from the real DB rows and run the gates linearly: check the 485 document (F2F not required), patient data completeness, and physician signature. A failed gate routes an async remediation task (docs/data) or auto-sends unsigned orders to the physician portal — each re-evaluated by the next daily run. When all gates pass, make billable/claimable runs once and the CCN + submit tail follows.",
         "nodeIds": ["n8s", "n9", "n11", "t6", "n12", "t7", "n13", "n10", "t8"]
       },
       {
@@ -193,15 +193,15 @@
         "id": "n9",
         "kind": "system",
         "name": "Check episode eligibility",
-        "description": "Re-derive the episode's eligibility from the real DB rows (signed 485 + valid F2F window). Stamps episode_eligible / episode_not_eligible (informational). The billing gates below then run linearly for every item.",
+        "description": "Re-derive the episode's eligibility from the real DB rows (a 485 is present — F2F is no longer required). Stamps episode_eligible / episode_not_eligible (informational). The billing gates below then run linearly for every item.",
         "actionKey": "check_episode_eligibility",
         "next": "n11"
       },
       {
         "id": "n11",
         "kind": "system",
-        "name": "Check 485 + F2F documents exist",
-        "description": "Not eligible — check whether both a 485 and an F2F document are present. Stamps documents_exist / documents_missing.",
+        "name": "Check 485 document exists",
+        "description": "Check whether a 485 document is present on the episode. A 485 alone satisfies this gate (F2F is not required). Stamps documents_exist / documents_missing.",
         "actionKey": "check_documents_exist",
         "next": "c8"
       },
@@ -218,7 +218,7 @@
         "id": "t6",
         "kind": "task",
         "name": "Get missing documents",
-        "description": "A 485 or F2F document is missing — reach out to the agency to upload it (call / sms route through twilio; email is a real send), the same outreach as the contact-agency task. Async: the next daily run re-evaluates this gate and auto-resolves this task once the documents are present.",
+        "description": "The 485 document is missing — reach out to the agency to upload it (call / sms route through twilio; email is a real send), the same outreach as the contact-agency task. Async: the next daily run re-evaluates this gate and auto-resolves this task once the 485 is present.",
         "assigneeEmployeeId": "EMPLOYEE_ID_PLACEHOLDER",
         "actions": [
           { "id": "a_gd_call", "actionKey": "call_agency", "label": "Call agency" },

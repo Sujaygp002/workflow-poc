@@ -1206,6 +1206,8 @@ export function computeEpisodeAssessment(episode = {}, episodeOrders = [], admis
   }
 
   const has485 = episodeOrders.some((order) => docTypeOf(order).includes('485'));
+  // F2F presence is tracked for informational display only — a 485 alone makes
+  // the episode eligible (the F2F-required rule was removed per product decision).
   const f2fOrders = admissionOrders.filter((order) => docTypeOf(order).includes('f2f') || docTypeOf(order).includes('face'));
   const validF2f = f2fOrders.find((order) => {
     if (!order.order_date || !episode.eoe) return false;
@@ -1217,7 +1219,7 @@ export function computeEpisodeAssessment(episode = {}, episodeOrders = [], admis
     .map((order) => order.order_number)
     .filter(Boolean);
   const allEpisodeOrdersSigned = unsignedOrderNumbers.length === 0;
-  const eligible = has485 && !!validF2f;
+  const eligible = has485;
   const billable = eligible && allEpisodeOrdersSigned;
 
   return {
@@ -2073,15 +2075,15 @@ export async function loadEpisodeGateContext(item) {
   return { episode, episodeOrders, admissionOrders, assessment, patientId: bundle.patientId || episode.patient_id || null };
 }
 
-// gate: 485 (episode-level) + F2F (admission-level) presence — independent of
-// signature/window (that is the eligibility gate). Documents "exist" when both a
-// 485 and an F2F document are attached.
+// gate: 485 (episode-level) presence — independent of signature/window. A 485
+// alone satisfies the documents gate; F2F is tracked for display only (the
+// F2F-required rule was removed per product decision).
 export function gateDocumentsExist(ctx) {
   if (!ctx) return { documentsExist: false, has485: false, hasF2f: false };
   const docType = (o) => String(o.document_type || o.order_type || '').toLowerCase();
   const has485 = ctx.episodeOrders.some((o) => docType(o).includes('485'));
   const hasF2f = ctx.admissionOrders.some((o) => docType(o).includes('f2f') || docType(o).includes('face'));
-  return { documentsExist: has485 && hasF2f, has485, hasF2f };
+  return { documentsExist: has485, has485, hasF2f };
 }
 
 // gate: every episode order is physician-signed.
@@ -2654,7 +2656,6 @@ export async function runBillingMonitorPass() {
     if (!assessment.eligible) {
       const missing = [];
       if (!assessment.reason.has485) missing.push('485 cert/recert');
-      if (!assessment.reason.hasF2f || !assessment.reason.f2fWithin180DaysOfEoe) missing.push('valid F2F');
       issues.missingDocuments.push({
         episode: updatedEpisode,
         missingDocuments: missing,

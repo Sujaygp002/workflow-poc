@@ -557,7 +557,7 @@ const LEGACY_EMAIL_TASKS = {
       return {
         to: hhah.contact_info?.email || hhah.email || '',
         subject: 'Missing document required for billing',
-        body: `Hi ${hhah.name || ''},\n\nPlease send the missing document(s): ${missing.join(', ') || '485/F2F document'}.\n\nThank you.`,
+        body: `Hi ${hhah.name || ''},\n\nPlease send the missing document(s): ${missing.join(', ') || '485 document'}.\n\nThank you.`,
       };
     },
     sendLabel: 'Send email & continue',
@@ -1000,7 +1000,7 @@ export default function WorkerTaskDetail({ detail, onBack, onCompleted, onAuthEx
   const hasPdf = !!(pdf && (pdf.fileName || pdf.blobUrl || pdf.url));
   const isAgencyContact = taskKind === 'contact';
   const contactReason = task?.condition === 'documents_missing'
-    ? 'A 485 or F2F document is missing for this patient — ask the agency to upload it.'
+    ? 'The 485 document is missing for this patient — ask the agency to upload it.'
     : null;
   // Legacy email/CPO panels render standalone (as WorkBucket did).
   const showRecordContext = hasRecordContext && !legacyEmailSpec && !isLegacyCpo && !isAgencyContact;

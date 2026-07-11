@@ -117,6 +117,19 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-07-12** — **Eligibility/documents no longer require F2F — a 485 alone qualifies.**
+  Per product decision, removed the F2F-presence requirement. `computeEpisodeAssessment`
+  (repositories.js): `eligible = has485` (was `has485 && !!validF2f`); `gateDocumentsExist`:
+  `documentsExist = has485` (was `has485 && hasF2f`). F2F is still detected and surfaced on
+  `reason` (hasF2f / f2fWithin180DaysOfEoe) for informational display only, and the map's
+  485/F2F/other order-type breakdown is unchanged. Updated catalog labels/descriptions
+  (`check_documents_exist` → "Check 485 document exists"; documents_exist/episode_eligible/
+  patient_eligible descriptions), the dead `runBillingMonitorPass` missing-doc list (drops the
+  "valid F2F" push), graph node text (n9/n11/t6 + description + g-gates info), and two worker
+  strings. Net effect: agencies with 485s but no F2F (e.g. AccentCare) now pass the docs gate and
+  can flow to the billable tail. Republish the def so the compiled labels/condition descriptions
+  update. lint + build pass; deploy via push.
+
 - **2026-07-11** — **Workflow: "Send orders to physician portal" now runs right after Review
   record** (graph node `n8s`, `send_orders_to_physician_portal`, `preReq:["t5"]`, `next:n9`), so
   every reviewed item auto-sends its UNSIGNED orders for signature before the billing gates —
