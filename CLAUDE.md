@@ -117,6 +117,22 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-07-11** — **"Objects this run" sidebar redesigned as a belongs-to ladder (winning
+  mockup candidate A).** `RunObjectSidebar` in `WorkflowDefinitionFlow.jsx`: the circle-chain
+  (`ObjectCircleNode` + `OBJECT_TONES`) replaced by `ObjectLadderCard` + `OBJECT_META` — one
+  icon KPI card per hierarchy level (lucide `UserRound`/`ClipboardList`/`Hospital`/
+  `CalendarRange`/`FileCheck`), each stair-stepped 16px under its parent and joined by a plain
+  rounded CSS elbow (border-left/bottom div, no SVG, no arrowheads — structure, not process).
+  Cards show a lay display label ("Patient Units", "Admissions" — row keys/logic unchanged), a
+  hero total (created+updated+existed), and "N new" (emerald) / "N updated" / "N already there"
+  (amber) pills. Kicker under the header: "Each item on this ladder lives inside the one above
+  it." Aside widened `w-60` → `w-80` (audited safe at 1440px; no Orchestrator change needed).
+  Non-patient-chain object sets fall back to flat cards (no indent/elbows/kicker). The
+  "before trigger — N already exist" block is kept (now with the simplified labels).
+  `runObjectStats` derivation untouched (presentation-only). Also added the design-phase
+  mockup dir `2026-07-11/diagram-mockups` (vendored tailwind.js) to the ESLint global ignores.
+  lint + build pass.
+
 - **2026-07-09** — **Documentation + .env.example pass: production pipeline build fully chronicled.**
   - **CLAUDE.md**: this Change Log entry (covers Milestones A, B, C/D and the whole production
     pipeline build from PDF extraction through CCN/audit/submit, plus sim-clock and MSA map).

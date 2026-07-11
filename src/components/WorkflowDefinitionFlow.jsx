@@ -6,7 +6,7 @@
 // as a vertical top-down flowchart with decision diamonds, actor-coloured boxes,
 // and ⓘ info popovers.
 import { useState } from 'react';
-import { ArrowDown, Bot, Cog, User, Clock, Info, CheckCircle2, Circle, AlertCircle } from 'lucide-react';
+import { ArrowDown, Bot, Cog, User, Clock, Info, CheckCircle2, Circle, AlertCircle, UserRound, ClipboardList, Hospital, CalendarRange, FileCheck } from 'lucide-react';
 
 // ── Actor styling ─────────────────────────────────────
 // system = sky/blue, AI = violet, human = pink
@@ -553,42 +553,61 @@ export function runObjectStats(run) {
 }
 
 // ── Run object side box ───────────────────────────────
-// A circle-chain diagram of the domain hierarchy per object type (same visual
-// language as the Coverage Map balls), plus a "before trigger" summary of how
-// many already existed.
+// A "belongs-to ladder": one KPI card per object type, each stair-stepped
+// under its parent and joined by a plain rounded elbow (family-tree form —
+// structure, not process, so no arrowheads). Plus a "before trigger" summary
+// of how many already existed.
 //
-// The domain chain (parent → child) the circles connect along:
+// The domain chain (parent → child) the ladder descends along:
 const OBJECT_CHAIN = ['Patient Unit', 'Patient Record', 'Admission Object', 'Episode Object', 'Order'];
 
-// One color tone per hierarchy level, echoing the map's color-coded balls.
-const OBJECT_TONES = {
-  'Patient Unit': 'border-violet-300 bg-violet-50 text-violet-700',
-  'Patient Record': 'border-sky-300 bg-sky-50 text-sky-700',
-  'Admission Object': 'border-emerald-300 bg-emerald-50 text-emerald-700',
-  'Episode Object': 'border-amber-300 bg-amber-50 text-amber-700',
-  Order: 'border-rose-300 bg-rose-50 text-rose-700',
+// One visual identity per hierarchy level: card border tone, icon-chip tone,
+// icon, and a lay-reader display label (row keys stay the raw object names).
+const OBJECT_META = {
+  'Patient Unit': { label: 'Patient Units', icon: UserRound, border: 'border-violet-300', chip: 'bg-violet-50 text-violet-700' },
+  'Patient Record': { label: 'Patient Records', icon: ClipboardList, border: 'border-sky-300', chip: 'bg-sky-50 text-sky-700' },
+  'Admission Object': { label: 'Admissions', icon: Hospital, border: 'border-emerald-300', chip: 'bg-emerald-50 text-emerald-700' },
+  'Episode Object': { label: 'Episodes', icon: CalendarRange, border: 'border-amber-300', chip: 'bg-amber-50 text-amber-700' },
+  Order: { label: 'Orders', icon: FileCheck, border: 'border-rose-300', chip: 'bg-rose-50 text-rose-700' },
 };
+const OBJECT_META_FALLBACK = { icon: Circle, border: 'border-slate-300', chip: 'bg-slate-100 text-slate-600' };
 
-// A colored circle holding the created count, chained to the next level by a
-// vertical connector line; updated/existed render as chips beside the circle.
-function ObjectCircleNode({ row, last }) {
-  const tone = OBJECT_TONES[row.object] || 'border-slate-300 bg-white text-slate-600';
+// One rung of the ladder: icon chip + label + hero total + new/updated pills.
+// `indent` stair-steps the card 16px under its parent (0 = flat, for object
+// sets that aren't the patient hierarchy); indented rungs draw the elbow.
+// The elbow's -14 top/left equals the ul's gap-3 (12px) + the card's 2px
+// border, so the stem starts flush under the parent card's bottom edge.
+function ObjectLadderCard({ row, indent }) {
+  const meta = OBJECT_META[row.object] || OBJECT_META_FALLBACK;
+  const Icon = meta.icon;
+  const total = row.created + row.updated + row.existed;
+  const inset = indent * 16;
   return (
-    <li className="flex items-stretch gap-2.5">
-      <div className="flex flex-col items-center">
-        <div className={`flex h-11 w-11 shrink-0 flex-col items-center justify-center rounded-full border-2 ${tone}`}>
-          <span className="text-sm font-black leading-none">{row.created}</span>
-          <span className="text-[8px] font-bold uppercase leading-none opacity-70">new</span>
+    <li style={{ marginLeft: inset, width: `calc(100% - ${inset}px)`, position: 'relative' }}>
+      {indent > 0 && (
+        <div
+          aria-hidden
+          style={{ position: 'absolute', left: -14, top: -14, width: 14, height: 'calc(50% + 14px)', borderLeft: '2px solid #cbd5e1', borderBottom: '2px solid #cbd5e1', borderBottomLeftRadius: 8 }}
+        />
+      )}
+      <div className={`flex items-center gap-2.5 rounded-xl border-2 bg-white p-2 pr-2.5 shadow-sm ${meta.border}`}>
+        <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${meta.chip}`}>
+          <Icon className="h-5 w-5" />
         </div>
-        {!last && <div className="w-px flex-1 bg-slate-300" style={{ minHeight: 12 }} />}
-      </div>
-      <div className="pb-3 pt-1">
-        <div className="text-[11px] font-semibold text-slate-700">{row.object}</div>
-        <div className="mt-0.5 flex flex-wrap items-center gap-1">
-          <span className="rounded bg-sky-50 px-1.5 py-0.5 text-[10px] font-black text-sky-700">{row.updated} updated</span>
-          {row.existed > 0 && (
-            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-black text-slate-600">{row.existed} existed</span>
-          )}
+        <div className="min-w-0 flex-1">
+          <div className="text-[10px] font-black uppercase tracking-wide text-slate-500">{meta.label || row.object}</div>
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1">
+            <span className="text-[26px] font-black leading-none text-slate-900">{total}</span>
+            {row.created > 0 && (
+              <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">{row.created} new</span>
+            )}
+            {row.updated > 0 && (
+              <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">{row.updated} updated</span>
+            )}
+            {row.existed > 0 && (
+              <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">{row.existed} already there</span>
+            )}
+          </div>
         </div>
       </div>
     </li>
@@ -599,16 +618,19 @@ export function RunObjectSidebar({ run }) {
   const rows = runObjectStats(run);
   if (!rows) return null;
   const anyExisted = rows.some((r) => r.existed > 0);
-  // Connectors only make sense when the objects form the patient hierarchy
-  // (a prefix of the domain chain); other workflows get standalone circles.
+  // The stair-step + elbows only make sense when the objects form the patient
+  // hierarchy (a prefix of the domain chain); other workflows get flat cards.
   const isPatientChain =
     rows.length > 0 && rows.every((r, i) => r.object === OBJECT_CHAIN[i]);
   return (
-    <aside className="w-60 shrink-0 rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
-      <div className="mb-2 text-[11px] font-black uppercase tracking-wide text-slate-400">Objects this run</div>
-      <ul>
+    <aside className="w-80 shrink-0 rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
+      <div className="text-[11px] font-black uppercase tracking-wide text-slate-400">Objects this run</div>
+      {isPatientChain && (
+        <div className="mt-0.5 text-[11px] font-medium text-slate-500">Each item on this ladder lives inside the one above it.</div>
+      )}
+      <ul className="mt-2.5 flex flex-col gap-3">
         {rows.map((r, i) => (
-          <ObjectCircleNode key={r.object} row={r} last={!isPatientChain || i === rows.length - 1} />
+          <ObjectLadderCard key={r.object} row={r} indent={isPatientChain ? i : 0} />
         ))}
       </ul>
       {anyExisted && (
@@ -617,7 +639,7 @@ export function RunObjectSidebar({ run }) {
           <div className="mt-1 space-y-0.5">
             {rows.filter((r) => r.existed > 0).map((r) => (
               <div key={r.object} className="flex items-center justify-between text-[11px]">
-                <span className="text-slate-600">{r.object}</span>
+                <span className="text-slate-600">{(OBJECT_META[r.object] || {}).label || r.object}</span>
                 <span className="font-bold text-sky-700">{r.existed} already exist</span>
               </div>
             ))}

@@ -5,7 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist', 'public/bucket-ui/assets']),
+  globalIgnores(['dist', 'public/bucket-ui/assets', '2026-07-11/diagram-mockups']),
   {
     files: ['**/*.{js,jsx}'],
     extends: [
