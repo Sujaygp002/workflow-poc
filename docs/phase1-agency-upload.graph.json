@@ -21,7 +21,7 @@
         "id": "g-gates",
         "name": "Post-Model Billing Gates",
         "info": "After the record review, re-derive the episode's state from the real DB rows and run the gates linearly: check 485+F2F documents, patient data completeness, and physician signature. A failed gate routes an async remediation task (docs/data) or auto-sends unsigned orders to the physician portal — each re-evaluated by the next daily run. When all gates pass, make billable/claimable runs once and the CCN + submit tail follows.",
-        "nodeIds": ["n9", "n11", "t6", "n12", "t7", "n13", "n10", "t8"]
+        "nodeIds": ["n8s", "n9", "n11", "t6", "n12", "t7", "n13", "n10", "t8"]
       },
       {
         "id": "g-ccn-audit",
@@ -179,6 +179,14 @@
         "actions": [
           { "id": "a_review", "actionKey": "review_record", "label": "Review record" }
         ],
+        "next": "n8s"
+      },
+      {
+        "id": "n8s",
+        "kind": "system",
+        "name": "Send orders to physician portal",
+        "description": "Right after the record review, auto-send the episode's unsigned orders to the physician portal for signature (SentToPhysicianDate + SendToPhysician_Status). They appear in the PG portal Bulk Sign list at /pg-login. Already-signed orders are skipped. Idempotent.",
+        "actionKey": "send_orders_to_physician_portal",
         "next": "n9"
       },
       {

@@ -117,6 +117,20 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-07-11** — **Workflow: "Send orders to physician portal" now runs right after Review
+  record** (graph node `n8s`, `send_orders_to_physician_portal`, `preReq:["t5"]`, `next:n9`), so
+  every reviewed item auto-sends its UNSIGNED orders for signature before the billing gates —
+  they appear in the PG portal Bulk Sign list at `/pg-login`. Added to the `g-gates` group.
+  Published live as def cc-1783522521545 **v5** (23 steps). Verified end-to-end on the live
+  system: completing Extract&fill + Review for an unsigned-order patient moved Prima Care's
+  bulk-sign list 0→1; a signed-order patient correctly sent nothing. Pure graph change (the
+  `signing.sendEpisodeOrdersToPhysician` task fn already shipped) — no redeploy. (Also
+  re-provisioned AccentCare Fall River as a fresh 40-item run under v5 with all Extract&fill
+  tasks queued in the worker portal for manual employee testing; setup script
+  `~/Desktop/data/setup-accentcare-run.mjs`. Note: AccentCare data has no F2F documents, so items
+  reach Extract&fill → Review → send-for-signature → Get-missing-documents; the Create CCN /
+  Submit claim tail needs an eligible episode (signed 485 + F2F) which this dataset lacks.)
+
 - **2026-07-11** — **Sim-clock +1 day now creates the next day's workflow run.** The daily tick
   (`dailyTimeTickHandler`) skipped run creation before the noon fire time (`beforeFireTime`
   guard). Advancing the simulated day is an explicit "run the next day now" gesture, so when the
