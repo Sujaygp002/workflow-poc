@@ -112,7 +112,7 @@ function Legend() {
 // business date and lets a demo advance it (+1 day / +1 month) or reset to real
 // time. The business clock drives the daily-tick fire time + day bucket, CPO /
 // eligibility "today" reads, so +1 month rolls a June CPO bucket into July.
-function SimTimeControl() {
+function SimTimeControl({ onAdvance }) {
   const [state, setState] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -132,12 +132,14 @@ function SimTimeControl() {
     if (busy) return;
     setBusy(true);
     try {
+      // simulateTime('+1d'|'+1m') force-fires the daily tick server-side and
+      // returns the new business state, so the next day's run is created
+      // regardless of the simulated time-of-day.
       setState(await simulateBusinessTime(op));
       setError(null);
-      // After advancing the day, auto-fire the daily workflow tick
-      if (op === '+1d') {
-        try { await tickTimeTriggers(); } catch { /* non-fatal */ }
-      }
+      // Pull the freshly-created run into the Orchestrator list right away
+      // (don't wait for the ~2.5s poll).
+      if (op === '+1d' || op === '+1m') onAdvance?.();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -297,7 +299,7 @@ export default function Orchestrator() {
           <p className="mt-1 text-sm text-slate-500">Live workflow runs rendered as flowcharts — system, AI and human tasks with decision branches.</p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <SimTimeControl />
+          <SimTimeControl onAdvance={refresh} />
           <button
             onClick={() => setLive((v) => !v)}
             className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${live ? 'border-green-300 bg-green-50 text-green-700' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}

@@ -160,7 +160,12 @@ async function appendMissingAgencyBaseItems({ workflow, run, dayBucket, tz }) {
 //     Contact-Agency task at noon; new agencies join late). Idempotent.
 // Run source label daily:<wfId>:<dayBucket> is shared with the upload on-demand
 // create path, so at most one run exists per workflow per calendar day.
-async function dailyTimeTickHandler() {
+// force=true bypasses the noon fire-time guard — used when the operator
+// explicitly advances the simulated day (+1d/+1m): the intent is "show me the
+// next day's run now", so the daily run is created regardless of the sim
+// time-of-day. A real cron/poll tick passes force=false and still only fires
+// at/after the configured hour.
+async function dailyTimeTickHandler({ force = false } = {}) {
   const workflows = await listActiveBuilderWorkflowsByTrigger('daily_time');
   const started = [];
   const skipped = [];
@@ -183,7 +188,7 @@ async function dailyTimeTickHandler() {
       continue;
     }
     const { dayBucket, hour, minute } = nowParts;
-    const beforeFireTime = hour * 60 + minute < targetHour * 60 + targetMinute;
+    const beforeFireTime = !force && (hour * 60 + minute < targetHour * 60 + targetMinute);
 
     const sourceLabel = dailySourceLabel(workflow.id, dayBucket);
     const existing = await findWorkflowRunBySourceLabel(workflow.id, sourceLabel);
@@ -298,8 +303,17 @@ export default async function handler(req, res) {
           return sendJson(res, 200, await tickHandler());
         // SIM (Milestone D): advance / reset the simulated business clock.
         // op '+1d' | '+1m' | 'reset'. Handler logic lives in api/_lib/clock.js.
-        case 'simulateTime':
-          return sendJson(res, 200, await applySimTimeOp(body.op));
+        case 'simulateTime': {
+          const simState = await applySimTimeOp(body.op);
+          // Advancing the simulated day/month is an explicit "run the next
+          // day now" gesture — force the daily tick so the new day's run
+          // appears immediately (bypasses the noon fire-time guard).
+          let tick = null;
+          if (body.op === '+1d' || body.op === '+1m') {
+            tick = await dailyTimeTickHandler({ force: true });
+          }
+          return sendJson(res, 200, { ...simState, tick });
+        }
         default:
           return sendJson(res, 400, { error: 'Unsupported workflow-runs action.' });
       }

@@ -117,6 +117,22 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-07-11** — **Sim-clock +1 day now creates the next day's workflow run.** The daily tick
+  (`dailyTimeTickHandler`) skipped run creation before the noon fire time (`beforeFireTime`
+  guard). Advancing the simulated day is an explicit "run the next day now" gesture, so when the
+  business clock lands before noon the Orchestrator showed "no workflow run yet". Fix:
+  `dailyTimeTickHandler({ force })` bypasses the fire-time guard, and the `simulateTime` action
+  force-fires the tick after `+1d`/`+1m` (returns `{ ...simState, tick }`). Real cron/poll ticks
+  still pass `force:false` and stay gated to the configured hour. Frontend `SimTimeControl` gained
+  an `onAdvance` callback (wired to the Orchestrator `refresh`) so the new run appears immediately
+  instead of on the next 2.5s poll. (Provisioning note — NOT a code change: built preload fixtures
+  from `~/Desktop/orders_company_output` and provisioned 2 new preloaded agencies **AccentCare Fall
+  River (TEST)** `accentcare-test` and **Southcoast Home Health (TEST)** `southcoast-test`
+  (`TestAgency!2026`), 3 new PGs (Hawthorn Medical Associates, Orthopaedic Specialists of MA,
+  Brockton NHC) + Prima Care reuse, 29 physicians mapped, PG logins `<slug>-test`/`TestPg!2026`,
+  via the live HTTP endpoints; per-agency preload manifests stored so the HHAH one-click upload
+  works. Build+provision script: `~/Desktop/data/provision-company.mjs`.)
+
 - **2026-07-11** — **CCN tail de-duplicated (single Create CCN → Submit claim) + group renamed.**
   The billing gates were an eligible/not-eligible FORK whose two arms (eligible + signature-passed)
   each carried their own make_billable → Create CCN → Submit claim tail (a/b idempotent twins) — the
