@@ -23,6 +23,24 @@ export async function validateGraph(graph, trigger) {
   } else if (trigger.type === 'time_interval') {
     const seconds = Number(trigger.intervalSeconds);
     if (!Number.isFinite(seconds) || seconds < 5) messages.push('time_interval trigger needs intervalSeconds >= 5.');
+  } else if (trigger.type === 'daily_time') {
+    // A bad IANA tz would make Intl.DateTimeFormat throw inside the daily tick
+    // and the upload reconcile path — reject it at save time.
+    if (trigger.tz) {
+      try {
+        new Intl.DateTimeFormat('en-US', { timeZone: String(trigger.tz) });
+      } catch {
+        messages.push(`daily_time trigger: "${trigger.tz}" is not a valid IANA timezone (e.g. America/Chicago).`);
+      }
+    }
+    if (trigger.hour !== undefined && trigger.hour !== null && trigger.hour !== '') {
+      const hour = Number(trigger.hour);
+      if (!Number.isInteger(hour) || hour < 0 || hour > 23) messages.push('daily_time trigger: hour must be an integer 0-23.');
+    }
+    if (trigger.minute !== undefined && trigger.minute !== null && trigger.minute !== '') {
+      const minute = Number(trigger.minute);
+      if (!Number.isInteger(minute) || minute < 0 || minute > 59) messages.push('daily_time trigger: minute must be an integer 0-59.');
+    }
   }
 
   if (!nodes.length) messages.push('The workflow needs at least one node.');

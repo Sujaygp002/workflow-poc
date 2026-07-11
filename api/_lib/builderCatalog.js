@@ -2,8 +2,10 @@
 // Every entry maps to EXISTING code — taskRegistry keys, repository fns, mailer.
 import { sendEmail } from './mailer.js';
 import {
+  createManualCcnNote,
   findOrder,
   findOrderById,
+  loadEpisodeGateContext,
   markOrderSentToPhysician,
   recordClaimSubmission,
   updateCpoMinutes,
@@ -52,6 +54,7 @@ export const ACTIONS = {
   check_documents_exist: { key: 'check_documents_exist', kind: 'system', label: 'Check 485 + F2F documents exist', taskKey: 'gate.checkDocumentsExist' },
   check_patient_data_complete: { key: 'check_patient_data_complete', kind: 'system', label: 'Check patient data complete', taskKey: 'gate.checkPatientDataComplete' },
   check_signature_exists: { key: 'check_signature_exists', kind: 'system', label: 'Check physician signature exists', taskKey: 'gate.checkSignatureExists' },
+  send_orders_to_physician_portal: { key: 'send_orders_to_physician_portal', kind: 'system', label: 'Send unsigned orders to physician portal', taskKey: 'signing.sendEpisodeOrdersToPhysician' },
 
   // ── CCN + audit/submit tail (Milestone B) ──
   // Appended AFTER make_billable_claimable. CCN generation (Gemini-dead => stamps
@@ -79,6 +82,9 @@ function mergeDeep(target, source) {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// The four CC-note types from the reference AIProcessingService.
+export const CCN_NOTE_TYPES = ['Preventive Care', 'Safety', 'Goals', 'Medications'];
 
 function validDate(value) {
   return typeof value === 'string' && YMD_RE.test(value) && !Number.isNaN(Date.parse(value));
@@ -187,25 +193,42 @@ export const HUMAN_ACTIONS = {
       return null;
     },
     async execute(action, result, item) {
+      // Session-agency invariant (mirrors taskRegistry.guardSessionHhah, which
+      // cannot be imported here without a cycle): when the item carries the
+      // authenticated upload agency, no human patch may reassign the HHAH.
+      const references = { ...(result.references || {}) };
+      if (item.reference_payload?.HHAH?.data_tags?.source === 'session_agency') {
+        delete references.HHAH;
+      }
       await updateItem(item.id, {
         patientPayload: mergeDeep(item.patient_payload, result.patient || {}),
         orderPayload: mergeDeep(item.order_payload, result.order || {}),
-        referencePayload: mergeDeep(item.reference_payload, result.references || {}),
+        referencePayload: mergeDeep(item.reference_payload, references),
       });
       return { filled: true };
     },
   },
+  // Review has TWO outcomes: 'passed' continues to the billing gates;
+  // 'failed' completes the task but restarts the ENTIRE item from step 1
+  // (human.performActions surfaces restartItem → the engine resets every task
+  // row + clears decisions via restartItemFromTop). Legacy {approved:true}
+  // payloads are accepted as 'passed'.
   review_record: {
     key: 'review_record',
     label: 'Review record',
-    inputs: ['approved'],
+    inputs: ['outcome', 'note'],
     validate(action, result) {
-      if (!result || result.approved !== true) return 'The record must be approved to complete this action';
+      if (result?.approved === true) return null;
+      if (!result || !['passed', 'failed'].includes(result.outcome)) return 'Choose Review passed or Review failed';
       return null;
     },
     async execute(action, result, item) {
+      const outcome = result?.approved === true ? 'passed' : result.outcome;
+      if (outcome === 'failed') {
+        return { review: 'failed', note: result?.note || null };
+      }
       await updateItem(item.id, { decisions: { ...(item.decisions || {}), record_reviewed: true } });
-      return { reviewed: true };
+      return { review: 'passed', reviewed: true, note: result?.note || null };
     },
   },
   add_cpo_minutes: {
@@ -409,21 +432,48 @@ export const HUMAN_ACTIONS = {
     },
   },
 
-  // ── CCN manual fallback (Milestone B) ──
-  // Reached when run_ccn_service stamps ccn_failed (Gemini unavailable, or a month
-  // returned no notes). A coordinator writes / confirms the clinical notes off-line.
-  // Confirm-only (no auto-generation here) — the next run's CCN service re-evaluates
-  // the months; this task documents that the notes were handled manually.
+  // ── Create CCN (human) ──
+  // A CCN is a CC note that lives INSIDE the episode alongside its orders
+  // (reference: CCNote docs are stored in the orders container with
+  // EntityType='CCNote'; POC equivalent: cpo_months.reason.ccNotes on the
+  // episode's CPO month). The coordinator writes the note here — title, text,
+  // type, CPO minutes — and it is persisted for real: the note is appended to
+  // the episode's CPO month and its minutes are added to cpo_min. Never marked
+  // physician-signed.
   create_ccn_manually: {
     key: 'create_ccn_manually',
-    label: 'Create CCN manually',
-    inputs: ['confirmed', 'note'],
-    validate(action, result) {
-      if (!result || result.confirmed !== true) return 'Confirm the CCN notes were created / confirmed manually';
+    label: 'Create CCN',
+    inputs: ['noteTitle', 'noteText', 'noteType', 'cpoMin', 'month'],
+    async validate(action, result, item) {
+      if (!result || typeof result !== 'object') return 'Fill in the CCN fields';
+      if (!hasValue(result.noteTitle)) return 'Note title is required';
+      if (!hasValue(result.noteText)) return 'Note text is required';
+      if (!CCN_NOTE_TYPES.includes(result.noteType)) return `Note type must be one of: ${CCN_NOTE_TYPES.join(', ')}`;
+      const minutes = Number(result.cpoMin);
+      if (!Number.isFinite(minutes) || minutes < 1) return 'CPO minutes must be at least 1';
+      if (result.month && !/^\d{4}-\d{2}$/.test(String(result.month))) return 'Month must be YYYY-MM';
+      const ctx = await loadEpisodeGateContext(item);
+      if (!ctx) return 'No episode is linked to this item yet — the CCN needs a resolved episode.';
       return null;
     },
-    async execute(action, result) {
-      return { ccn_created_manually: true, confirmed: true, note: result?.note || null };
+    async execute(action, result, item) {
+      const saved = await createManualCcnNote({
+        item,
+        noteTitle: result.noteTitle,
+        noteText: result.noteText,
+        noteType: result.noteType,
+        cpoMin: result.cpoMin,
+        month: result.month || null,
+      });
+      return {
+        ccn_created: true,
+        noteTitle: saved.note.noteTitle,
+        noteType: saved.note.noteType,
+        cpoMinutes: saved.note.cpoMinutes,
+        cpo_month: saved.cpoMonth.cpo_month,
+        cpo_month_total_min: saved.cpoMonth.cpo_min,
+        cpo_month_status: saved.cpoMonth.status,
+      };
     },
   },
 

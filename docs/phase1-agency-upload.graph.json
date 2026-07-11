@@ -1,6 +1,6 @@
 {
   "name": "Agency Bulk Upload — Daily Intake",
-  "description": "Daily agency intake. Fires once per day per onboarded agency at 12:00 America/Chicago. If the agency has NOT uploaded today, one human task reaches out (call / sms via twilio + a real email) and the branch ends. If it HAS uploaded, the object model is built end to end: a human task extracts & fills the patient/order data from the uploaded documents (and confirms an ambiguous order PDF), patient resolve (create vs update), admission date-gap fill then resolve, episode date-gap fill then resolve, order create vs skip-duplicate, and a record review. AFTER review, post-model billing gates run: episode-eligibility -> make billable/claimable; not eligible -> document / patient-data / signature gates each routing an async remediation human task that the next daily run re-evaluates. AFTER make billable/claimable, the human tail runs: a human 'Create CCN' task, then a human 'Audit RCM records & resolve failures' task, then a human 'Submit claim' gate (confirm-only; records submitted_at + amounts; no external call).",
+  "description": "Daily agency intake. Fires once per day per onboarded agency at 12:00 America/Chicago. If the agency has NOT uploaded today, one human task reaches out (call / sms via twilio + a real email) and the branch ends. If it HAS uploaded, the object model is built end to end: a human task extracts & fills the patient/order data from the uploaded documents (and confirms an ambiguous order PDF), patient resolve (create vs update), admission date-gap fill then resolve, episode date-gap fill then resolve, order create vs skip-duplicate, and a record review (Review passed continues; Review failed restarts the item from step 1). AFTER review, post-model billing gates run: episode-eligibility -> make billable/claimable; not eligible -> document / patient-data gates each routing an async remediation human task that the next daily run re-evaluates; the signature gate auto-sends unsigned orders to the physician PG portal (system step). AFTER make billable/claimable, the tail runs: a human 'Create CCN' task (real CCN fields: note title / text / type / CPO minutes), then a human 'Submit claim' gate (confirm-only; records submitted_at + amounts; no external call).",
   "trigger": { "type": "daily_time", "hour": 12, "minute": 0, "tz": "America/Chicago" },
   "graph": {
     "entry": "n1",
@@ -26,10 +26,10 @@
       {
         "id": "g-ccn-audit",
         "name": "CCN, Audit & Submit Claim",
-        "info": "After make billable/claimable: a human 'Create CCN' task (a coordinator writes / confirms the clinical notes for the item's billable months), then a human 'Audit RCM records & resolve failures' task (a coordinator audits the agency's RCM records and fixes anything flagged), then a human 'Submit claim' gate (confirm-only, records submitted_at + amounts, NO external call). The tail is instantiated on BOTH make_billable arms (eligible arm 'a' + signature-pass arm 'b') — idempotent twins, because the frozen DAG cannot converge two branch-walks on a single node; every tail step is agency-scoped and idempotent.",
+        "info": "After make billable/claimable, exactly TWO human tasks: 'Create CCN' (the coordinator writes the CC note — note title, note text, note type, CPO minutes — persisted inside the episode's CPO month like an order lives inside the episode), then 'Submit claim' (confirm-only gate, records submitted_at + amounts, NO external call). The tail is instantiated on BOTH make_billable arms (eligible arm 'a' + signature-pass arm 'b') — idempotent twins, because the frozen DAG cannot converge two branch-walks on a single node.",
         "nodeIds": [
-          "t9a", "t10a", "t11a",
-          "t9b", "t10b", "t11b"
+          "t9a", "t11a",
+          "t9b", "t11b"
         ]
       }
     ],
@@ -177,11 +177,10 @@
         "id": "t5",
         "kind": "task",
         "name": "Review record",
-        "description": "Coordinator reviews the assembled patient/admission/episode/order and confirms the checklist. Completing this settles the record review; the post-model billing gates run next.",
+        "description": "Coordinator verifies the assembled patient object module against the patient's orders and records a note. Review passed settles the review and the post-model billing gates run next; Review failed restarts this item from the top of the pipeline.",
         "assigneeEmployeeId": "EMPLOYEE_ID_PLACEHOLDER",
         "actions": [
-          { "id": "a_review", "actionKey": "review_record", "label": "Review record" },
-          { "id": "a_confirm", "actionKey": "confirm_checklist", "label": "Confirm checklist" }
+          { "id": "a_review", "actionKey": "review_record", "label": "Review record" }
         ],
         "next": "n9"
       },
@@ -231,10 +230,12 @@
         "id": "t6",
         "kind": "task",
         "name": "Get missing documents",
-        "description": "A 485 or F2F document is missing — contact the agency, run the RPA placeholder, or confirm manually in the EHR. Async: the next daily run re-evaluates this gate and auto-resolves this task once the documents are present.",
+        "description": "A 485 or F2F document is missing — reach out to the agency to upload it (call / sms route through twilio; email is a real send), the same outreach as the contact-agency task. Async: the next daily run re-evaluates this gate and auto-resolves this task once the documents are present.",
         "assigneeEmployeeId": "EMPLOYEE_ID_PLACEHOLDER",
         "actions": [
-          { "id": "a_getdocs", "actionKey": "get_missing_documents", "label": "Get missing documents" }
+          { "id": "a_gd_call", "actionKey": "call_agency", "label": "Call agency" },
+          { "id": "a_gd_sms", "actionKey": "sms_agency", "label": "Text agency" },
+          { "id": "a_gd_email", "actionKey": "email_agency", "label": "Email agency" }
         ]
       },
       {
@@ -291,34 +292,20 @@
       },
       {
         "id": "t8",
-        "kind": "task",
-        "name": "Send for signature to Physician",
-        "description": "An episode order is unsigned — mark it 'sent to physician portal' (records SentToPhysician; HUMAN action, no auto-send) and verify / bulk-sign at /pg-login. Async: the next daily run re-evaluates this gate and auto-resolves this task once signed.",
-        "assigneeEmployeeId": "EMPLOYEE_ID_PLACEHOLDER",
-        "actions": [
-          { "id": "a_sendsig", "actionKey": "send_for_signature", "label": "Send for signature to physician" }
-        ]
+        "kind": "system",
+        "name": "Send orders to physician portal",
+        "description": "An episode order is unsigned — SYSTEM step: automatically mark every unsigned episode order 'sent to the physician portal' (SentToPhysicianDate + SendToPhysician_Status) so they appear in the PG portal Bulk Sign list at /pg-login. Async gate: the next daily run re-evaluates check_signature_exists once the physician signs.",
+        "actionKey": "send_orders_to_physician_portal"
       },
 
       {
         "id": "t9a",
         "kind": "task",
         "name": "Create CCN",
-        "description": "A coordinator writes / confirms the CCN clinical notes for the item's billable CPO months, then the audit task runs. (Arm a — eligible path.)",
+        "description": "A coordinator writes the CCN — note title, note text, note type, CPO minutes — persisted inside the episode's CPO month (a CCN lives inside the episode, like an order). Then the claim is ready to submit. (Arm a — eligible path.)",
         "assigneeEmployeeId": "EMPLOYEE_ID_PLACEHOLDER",
         "actions": [
           { "id": "a_ccn", "actionKey": "create_ccn_manually", "label": "Create CCN" }
-        ],
-        "next": "t10a"
-      },
-      {
-        "id": "t10a",
-        "kind": "task",
-        "name": "Audit RCM records & resolve failures",
-        "description": "A coordinator audits the agency's RCM records and confirms / fixes anything flagged, then the claim is ready to submit. (Arm a.)",
-        "assigneeEmployeeId": "EMPLOYEE_ID_PLACEHOLDER",
-        "actions": [
-          { "id": "a_resolve_audit", "actionKey": "resolve_audit_failures", "label": "Audit RCM records & resolve failures" }
         ],
         "next": "t11a"
       },
@@ -337,21 +324,10 @@
         "id": "t9b",
         "kind": "task",
         "name": "Create CCN",
-        "description": "A coordinator writes / confirms the CCN clinical notes for the item's billable CPO months, then the audit task runs. (Arm b — signature-pass path, idempotent twin of t9a.)",
+        "description": "A coordinator writes the CCN — note title, note text, note type, CPO minutes — persisted inside the episode's CPO month (a CCN lives inside the episode, like an order). Then the claim is ready to submit. (Arm b — signature-pass path, idempotent twin of t9a.)",
         "assigneeEmployeeId": "EMPLOYEE_ID_PLACEHOLDER",
         "actions": [
           { "id": "a_ccn", "actionKey": "create_ccn_manually", "label": "Create CCN" }
-        ],
-        "next": "t10b"
-      },
-      {
-        "id": "t10b",
-        "kind": "task",
-        "name": "Audit RCM records & resolve failures",
-        "description": "A coordinator audits the agency's RCM records and confirms / fixes anything flagged, then the claim is ready to submit. (Arm b.)",
-        "assigneeEmployeeId": "EMPLOYEE_ID_PLACEHOLDER",
-        "actions": [
-          { "id": "a_resolve_audit", "actionKey": "resolve_audit_failures", "label": "Audit RCM records & resolve failures" }
         ],
         "next": "t11b"
       },

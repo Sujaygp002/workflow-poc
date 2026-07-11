@@ -78,9 +78,12 @@ export async function fetchWorkflowDefinitions() {
   return body.workflows || [];
 }
 
-export async function fetchPatients({ hhahId = '' } = {}) {
-  const qs = hhahId ? `?hhahId=${encodeURIComponent(hhahId)}` : '';
-  const res = await fetch(`/api/patients${qs}`);
+export async function fetchPatients({ hhahId = '', pgId = '' } = {}) {
+  const params = new URLSearchParams();
+  if (hhahId) params.set('hhahId', hhahId);
+  if (pgId) params.set('pgId', pgId);
+  const qs = params.toString();
+  const res = await fetch(`/api/patients${qs ? `?${qs}` : ''}`);
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || 'Unable to load patients');
   return body.patients || [];
@@ -155,6 +158,18 @@ export async function createPg({ name, npi = '' }) {
 
 export async function createPractitioner({ name, npi }) {
   return postReferenceData('createPractitioner', { name, npi }, 'Unable to create practitioner');
+}
+
+export async function updateAgency({ id, ...fields }) {
+  return postReferenceData('updateAgency', { id, ...fields }, 'Unable to update agency');
+}
+
+export async function updatePg({ id, ...fields }) {
+  return postReferenceData('updatePg', { id, ...fields }, 'Unable to update PG');
+}
+
+export async function updatePractitioner({ id, ...fields }) {
+  return postReferenceData('updatePractitioner', { id, ...fields }, 'Unable to update practitioner');
 }
 
 export async function mapPgToPractitioner({ pgId, practitionerId }) {

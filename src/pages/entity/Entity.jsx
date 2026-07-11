@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Building2, Check, Link2, Loader2, Plus, RefreshCw, Stethoscope, UsersRound } from 'lucide-react';
+import { Building2, Check, Link2, Loader2, Pencil, Plus, RefreshCw, Stethoscope, UsersRound } from 'lucide-react';
 import {
   createAgency,
   createPg,
   createPractitioner,
   fetchReferenceData,
   mapPgToPractitioner,
+  updateAgency,
+  updatePg,
+  updatePractitioner,
 } from '../../lib/workflowApi';
 
 function Field({ label, required = false, children }) {
@@ -33,14 +36,14 @@ function TextInput({ value, onChange, placeholder = '', required = false }) {
   );
 }
 
-function CreateButton({ saving, label }) {
+function CreateButton({ saving, label, icon = null }) {
   return (
     <button
       type="submit"
       disabled={saving}
       className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2 text-sm font-bold text-white hover:bg-violet-700 disabled:opacity-60"
     >
-      {saving ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
+      {saving ? <Loader2 size={15} className="animate-spin" /> : icon || <Plus size={15} />}
       {label}
     </button>
   );
@@ -80,10 +83,14 @@ export default function Entity() {
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
 
-  // Agency form
+  // Agency form (create + edit; agencyEditRow non-null puts the panel into edit mode)
   const [agencyName, setAgencyName] = useState('');
   const [agencyNpi, setAgencyNpi] = useState('');
   const [agencyEmail, setAgencyEmail] = useState('');
+  const [agencyPhone, setAgencyPhone] = useState('');
+  const [agencyType, setAgencyType] = useState('');
+  const [agencyTos, setAgencyTos] = useState('');
+  const [agencyEditRow, setAgencyEditRow] = useState(null);
   const [agencySaving, setAgencySaving] = useState(false);
   const [agencyMsg, setAgencyMsg] = useState('');
   const [agencyErr, setAgencyErr] = useState('');
@@ -91,6 +98,8 @@ export default function Entity() {
   // PG form
   const [pgName, setPgName] = useState('');
   const [pgNpi, setPgNpi] = useState('');
+  const [pgType, setPgType] = useState('');
+  const [pgEditRow, setPgEditRow] = useState(null);
   const [pgSaving, setPgSaving] = useState(false);
   const [pgMsg, setPgMsg] = useState('');
   const [pgErr, setPgErr] = useState('');
@@ -98,6 +107,8 @@ export default function Entity() {
   // Practitioner form
   const [pracName, setPracName] = useState('');
   const [pracNpi, setPracNpi] = useState('');
+  const [pracSpec, setPracSpec] = useState('');
+  const [pracEditRow, setPracEditRow] = useState(null);
   const [pracSaving, setPracSaving] = useState(false);
   const [pracMsg, setPracMsg] = useState('');
   const [pracErr, setPracErr] = useState('');
@@ -169,26 +180,122 @@ export default function Entity() {
     [data.physicianGroups, practitionerById],
   );
 
+  // ── Edit mode: the pencil on a row prefills that card's inline form panel ──
+  function resetAgencyForm() {
+    setAgencyEditRow(null);
+    setAgencyName('');
+    setAgencyNpi('');
+    setAgencyEmail('');
+    setAgencyPhone('');
+    setAgencyType('');
+    setAgencyTos('');
+  }
+
+  function startEditAgency(row) {
+    setAgencyEditRow(row);
+    setAgencyName(row.name || '');
+    setAgencyNpi(row.npi || '');
+    setAgencyType(row.type || '');
+    setAgencyTos(row.type_of_service || '');
+    setAgencyEmail(row.contact_info?.email || '');
+    setAgencyPhone(row.contact_info?.phone_number || '');
+    setAgencyMsg('');
+    setAgencyErr('');
+  }
+
+  function cancelEditAgency() {
+    resetAgencyForm();
+    setAgencyMsg('');
+    setAgencyErr('');
+  }
+
+  function resetPgForm() {
+    setPgEditRow(null);
+    setPgName('');
+    setPgNpi('');
+    setPgType('');
+  }
+
+  function startEditPg(row) {
+    setPgEditRow(row);
+    setPgName(row.name || '');
+    setPgNpi(row.npi || '');
+    setPgType(row.type || '');
+    setPgMsg('');
+    setPgErr('');
+  }
+
+  function cancelEditPg() {
+    resetPgForm();
+    setPgMsg('');
+    setPgErr('');
+  }
+
+  function resetPracForm() {
+    setPracEditRow(null);
+    setPracName('');
+    setPracNpi('');
+    setPracSpec('');
+  }
+
+  function startEditPractitioner(row) {
+    setPracEditRow(row);
+    setPracName(row.physician_name || '');
+    setPracNpi(row.npi_digits || '');
+    setPracSpec(row.speciality || '');
+    setPracMsg('');
+    setPracErr('');
+  }
+
+  function cancelEditPractitioner() {
+    resetPracForm();
+    setPracMsg('');
+    setPracErr('');
+  }
+
   async function submitAgency(event) {
     event.preventDefault();
-    if (!agencyName.trim()) {
+    const name = agencyName.trim();
+    if (!name) {
       setAgencyErr('Agency name is required.');
       setAgencyMsg('');
       return;
     }
     setAgencySaving(true);
     try {
+      if (agencyEditRow) {
+        // Only send fields that changed against the row being edited.
+        const payload = { id: agencyEditRow.id };
+        if (name !== (agencyEditRow.name || '')) payload.name = name;
+        if (agencyNpi.trim() !== (agencyEditRow.npi || '')) payload.npi = agencyNpi.trim();
+        if (agencyType.trim() !== (agencyEditRow.type || '')) payload.type = agencyType.trim();
+        if (agencyTos.trim() !== (agencyEditRow.type_of_service || '')) payload.typeOfService = agencyTos.trim();
+        const contact = {};
+        if (agencyEmail.trim() !== (agencyEditRow.contact_info?.email || '')) contact.email = agencyEmail.trim();
+        if (agencyPhone.trim() !== (agencyEditRow.contact_info?.phone_number || '')) contact.phone_number = agencyPhone.trim();
+        if (Object.keys(contact).length > 0) payload.contact = contact;
+        if (Object.keys(payload).length === 1) {
+          setAgencyMsg('No changes to save.');
+          setAgencyErr('');
+          return;
+        }
+        const body = await updateAgency(payload);
+        mergeCreated('hhahs', body?.agency);
+        setAgencyMsg(`Agency "${name}" updated.`);
+        setAgencyErr('');
+        resetAgencyForm();
+        await refresh();
+        return;
+      }
       const body = await createAgency({
-        name: agencyName.trim(),
+        name,
         npi: agencyNpi.trim(),
         contact: agencyEmail.trim() ? { email: agencyEmail.trim() } : {},
       });
       mergeCreated('hhahs', body?.agency);
-      setAgencyMsg(`Agency "${agencyName.trim()}" created.`);
+      setAgencyMsg(`Agency "${name}" created.`);
       setAgencyErr('');
-      setAgencyName('');
-      setAgencyNpi('');
-      setAgencyEmail('');
+      resetAgencyForm();
       await refresh();
     } catch (err) {
       setAgencyErr(err.message);
@@ -200,19 +307,37 @@ export default function Entity() {
 
   async function submitPg(event) {
     event.preventDefault();
-    if (!pgName.trim()) {
+    const name = pgName.trim();
+    if (!name) {
       setPgErr('PG name is required.');
       setPgMsg('');
       return;
     }
     setPgSaving(true);
     try {
-      const body = await createPg({ name: pgName.trim(), npi: pgNpi.trim() });
+      if (pgEditRow) {
+        const payload = { id: pgEditRow.id };
+        if (name !== (pgEditRow.name || '')) payload.name = name;
+        if (pgNpi.trim() !== (pgEditRow.npi || '')) payload.npi = pgNpi.trim();
+        if (pgType.trim() !== (pgEditRow.type || '')) payload.type = pgType.trim();
+        if (Object.keys(payload).length === 1) {
+          setPgMsg('No changes to save.');
+          setPgErr('');
+          return;
+        }
+        const body = await updatePg(payload);
+        mergeCreated('physicianGroups', body?.pg);
+        setPgMsg(`PG "${name}" updated.`);
+        setPgErr('');
+        resetPgForm();
+        await refresh();
+        return;
+      }
+      const body = await createPg({ name, npi: pgNpi.trim() });
       mergeCreated('physicianGroups', body?.pg);
-      setPgMsg(`PG "${pgName.trim()}" created.`);
+      setPgMsg(`PG "${name}" created.`);
       setPgErr('');
-      setPgName('');
-      setPgNpi('');
+      resetPgForm();
       await refresh();
     } catch (err) {
       setPgErr(err.message);
@@ -224,8 +349,9 @@ export default function Entity() {
 
   async function submitPractitioner(event) {
     event.preventDefault();
+    const name = pracName.trim();
     const npiDigits = pracNpi.replace(/\D/g, '');
-    if (!pracName.trim()) {
+    if (!name) {
       setPracErr('Practitioner name is required.');
       setPracMsg('');
       return;
@@ -237,12 +363,29 @@ export default function Entity() {
     }
     setPracSaving(true);
     try {
-      const body = await createPractitioner({ name: pracName.trim(), npi: pracNpi.trim() });
+      if (pracEditRow) {
+        const payload = { id: pracEditRow.id };
+        if (name !== (pracEditRow.physician_name || '')) payload.name = name;
+        if (pracNpi.trim() !== (pracEditRow.npi_digits || '')) payload.npi = pracNpi.trim();
+        if (pracSpec.trim() !== (pracEditRow.speciality || '')) payload.speciality = pracSpec.trim();
+        if (Object.keys(payload).length === 1) {
+          setPracMsg('No changes to save.');
+          setPracErr('');
+          return;
+        }
+        const body = await updatePractitioner(payload);
+        mergeCreated('practitioners', body?.practitioner);
+        setPracMsg(`Practitioner "${name}" updated.`);
+        setPracErr('');
+        resetPracForm();
+        await refresh();
+        return;
+      }
+      const body = await createPractitioner({ name, npi: pracNpi.trim() });
       mergeCreated('practitioners', body?.practitioner);
-      setPracMsg(`Practitioner "${pracName.trim()}" created.`);
+      setPracMsg(`Practitioner "${name}" created.`);
       setPracErr('');
-      setPracName('');
-      setPracNpi('');
+      resetPracForm();
       await refresh();
     } catch (err) {
       setPracErr(err.message);
@@ -327,16 +470,43 @@ export default function Entity() {
           emptyText="No agencies yet. Create one above."
           rows={data.hhahs}
           renderRow={(row) => (
-            <div key={row.id} className="p-3 text-sm">
-              <div className="font-bold text-slate-800">{row.name}</div>
-              <div className="text-xs text-slate-500">NPI {row.npi || 'Missing'}</div>
-              <div className="mt-1 text-xs text-slate-400">
-                {row.contact_info?.email || row.contact_info?.phone_number || 'No contact'}
+            <div
+              key={row.id}
+              className={`flex items-start justify-between gap-2 p-3 text-sm ${agencyEditRow?.id === row.id ? 'bg-violet-50/60' : ''}`}
+            >
+              <div className="min-w-0">
+                <div className="font-bold text-slate-800">{row.name}</div>
+                <div className="text-xs text-slate-500">NPI {row.npi || 'Missing'}</div>
+                <div className="mt-1 text-xs text-slate-400">
+                  {row.contact_info?.email || row.contact_info?.phone_number || 'No contact'}
+                </div>
               </div>
+              <button
+                type="button"
+                onClick={() => startEditAgency(row)}
+                title="Edit agency"
+                className="shrink-0 rounded-lg p-1.5 text-slate-400 hover:bg-violet-50 hover:text-violet-600"
+              >
+                <Pencil size={14} />
+              </button>
             </div>
           )}
           form={
             <form onSubmit={submitAgency} className="space-y-3">
+              {agencyEditRow && (
+                <div className="flex items-center justify-between text-xs">
+                  <span className="truncate font-bold uppercase tracking-wide text-violet-700">
+                    Editing {agencyEditRow.name}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={cancelEditAgency}
+                    className="shrink-0 font-semibold text-slate-500 underline hover:text-slate-800"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
               <Field label="Agency name" required>
                 <TextInput value={agencyName} onChange={setAgencyName} placeholder="Sunrise Home Health" required />
               </Field>
@@ -348,7 +518,26 @@ export default function Entity() {
                   <TextInput value={agencyEmail} onChange={setAgencyEmail} placeholder="Optional" />
                 </Field>
               </div>
-              <CreateButton saving={agencySaving} label="Create agency" />
+              {agencyEditRow && (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label="Type">
+                      <TextInput value={agencyType} onChange={setAgencyType} placeholder="Optional" />
+                    </Field>
+                    <Field label="Type of service">
+                      <TextInput value={agencyTos} onChange={setAgencyTos} placeholder="Optional" />
+                    </Field>
+                  </div>
+                  <Field label="Contact phone">
+                    <TextInput value={agencyPhone} onChange={setAgencyPhone} placeholder="Optional" />
+                  </Field>
+                </>
+              )}
+              <CreateButton
+                saving={agencySaving}
+                label={agencyEditRow ? 'Save changes' : 'Create agency'}
+                icon={agencyEditRow ? <Check size={15} /> : null}
+              />
               <Notice message={agencyMsg} error={agencyErr} />
             </form>
           }
@@ -365,29 +554,65 @@ export default function Entity() {
               ? row.contact_info.physician_ids.length
               : 0;
             return (
-              <div key={row.id} className="p-3 text-sm">
-                <div className="flex items-center gap-1 font-bold text-slate-800">
-                  {row.name}
-                  {row.raw_data?.source === 'auto_upload' && (
-                    <span className="ml-1.5 rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-amber-700">Auto</span>
-                  )}
+              <div
+                key={row.id}
+                className={`flex items-start justify-between gap-2 p-3 text-sm ${pgEditRow?.id === row.id ? 'bg-violet-50/60' : ''}`}
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1 font-bold text-slate-800">
+                    {row.name}
+                    {row.raw_data?.source === 'auto_upload' && (
+                      <span className="ml-1.5 rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-amber-700">Auto</span>
+                    )}
+                  </div>
+                  <div className="text-xs text-slate-500">NPI {row.npi || 'Missing'}</div>
+                  <div className="mt-1 text-xs text-slate-400">
+                    {mappedCount} mapped practitioner{mappedCount === 1 ? '' : 's'}
+                  </div>
                 </div>
-                <div className="text-xs text-slate-500">NPI {row.npi || 'Missing'}</div>
-                <div className="mt-1 text-xs text-slate-400">
-                  {mappedCount} mapped practitioner{mappedCount === 1 ? '' : 's'}
-                </div>
+                <button
+                  type="button"
+                  onClick={() => startEditPg(row)}
+                  title="Edit PG"
+                  className="shrink-0 rounded-lg p-1.5 text-slate-400 hover:bg-violet-50 hover:text-violet-600"
+                >
+                  <Pencil size={14} />
+                </button>
               </div>
             );
           }}
           form={
             <form onSubmit={submitPg} className="space-y-3">
+              {pgEditRow && (
+                <div className="flex items-center justify-between text-xs">
+                  <span className="truncate font-bold uppercase tracking-wide text-violet-700">
+                    Editing {pgEditRow.name}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={cancelEditPg}
+                    className="shrink-0 font-semibold text-slate-500 underline hover:text-slate-800"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
               <Field label="PG name" required>
                 <TextInput value={pgName} onChange={setPgName} placeholder="Valley Physician Group" required />
               </Field>
               <Field label="NPI">
                 <TextInput value={pgNpi} onChange={setPgNpi} placeholder="Optional" />
               </Field>
-              <CreateButton saving={pgSaving} label="Create PG" />
+              {pgEditRow && (
+                <Field label="Type">
+                  <TextInput value={pgType} onChange={setPgType} placeholder="Optional" />
+                </Field>
+              )}
+              <CreateButton
+                saving={pgSaving}
+                label={pgEditRow ? 'Save changes' : 'Create PG'}
+                icon={pgEditRow ? <Check size={15} /> : null}
+              />
               <Notice message={pgMsg} error={pgErr} />
             </form>
           }
@@ -402,35 +627,71 @@ export default function Entity() {
           renderRow={(row) => {
             const pgNames = Array.isArray(row.history?.PG_names) ? row.history.PG_names : [];
             return (
-              <div key={row.id} className="p-3 text-sm">
-                <div className="flex items-center gap-1 font-bold text-slate-800">
-                  {row.physician_name || 'Unnamed practitioner'}
-                  {row.raw_data?.source === 'auto_upload' && (
-                    <span className="ml-1.5 rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-amber-700">Auto</span>
+              <div
+                key={row.id}
+                className={`flex items-start justify-between gap-2 p-3 text-sm ${pracEditRow?.id === row.id ? 'bg-violet-50/60' : ''}`}
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1 font-bold text-slate-800">
+                    {row.physician_name || 'Unnamed practitioner'}
+                    {row.raw_data?.source === 'auto_upload' && (
+                      <span className="ml-1.5 rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-amber-700">Auto</span>
+                    )}
+                  </div>
+                  <div className="text-xs text-slate-500">NPI {row.npi_digits || 'Missing'}</div>
+                  {pgNames.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {pgNames.map((pg) => (
+                        <span key={pg.id || pg.name} className="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] text-violet-700">
+                          {pg.name}
+                        </span>
+                      ))}
+                    </div>
                   )}
                 </div>
-                <div className="text-xs text-slate-500">NPI {row.npi_digits || 'Missing'}</div>
-                {pgNames.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    {pgNames.map((pg) => (
-                      <span key={pg.id || pg.name} className="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] text-violet-700">
-                        {pg.name}
-                      </span>
-                    ))}
-                  </div>
-                )}
+                <button
+                  type="button"
+                  onClick={() => startEditPractitioner(row)}
+                  title="Edit practitioner"
+                  className="shrink-0 rounded-lg p-1.5 text-slate-400 hover:bg-violet-50 hover:text-violet-600"
+                >
+                  <Pencil size={14} />
+                </button>
               </div>
             );
           }}
           form={
             <form onSubmit={submitPractitioner} className="space-y-3">
+              {pracEditRow && (
+                <div className="flex items-center justify-between text-xs">
+                  <span className="truncate font-bold uppercase tracking-wide text-violet-700">
+                    Editing {pracEditRow.physician_name || 'practitioner'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={cancelEditPractitioner}
+                    className="shrink-0 font-semibold text-slate-500 underline hover:text-slate-800"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
               <Field label="Practitioner name" required>
                 <TextInput value={pracName} onChange={setPracName} placeholder="Dr. Kim" required />
               </Field>
               <Field label="NPI" required>
                 <TextInput value={pracNpi} onChange={setPracNpi} placeholder="10-digit NPI" required />
               </Field>
-              <CreateButton saving={pracSaving} label="Create practitioner" />
+              {pracEditRow && (
+                <Field label="Speciality">
+                  <TextInput value={pracSpec} onChange={setPracSpec} placeholder="Optional" />
+                </Field>
+              )}
+              <CreateButton
+                saving={pracSaving}
+                label={pracEditRow ? 'Save changes' : 'Create practitioner'}
+                icon={pracEditRow ? <Check size={15} /> : null}
+              />
               <Notice message={pracMsg} error={pracErr} />
             </form>
           }

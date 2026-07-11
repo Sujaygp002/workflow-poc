@@ -480,6 +480,45 @@ export async function openTaskRun({ taskRunId, employeeId }) {
   return { task: rows[0] };
 }
 
+// 'Review failed' restart: reset EVERY task row of the item back to pending and
+// clear the item's decisions so the whole pipeline re-runs from step 1 on the
+// next automation pass. Decisions MUST be cleared — evaluateCondition
+// short-circuits on pre-stamped flags and would otherwise replay the old
+// branches. extraction_payload is kept (pdf, appendKey, resolved ids — the
+// write steps are idempotent), with the failed review recorded on
+// extraction_payload.reviewRestarts for the audit trail.
+export async function restartItemFromTop(itemId, { note = null } = {}) {
+  const sql = getSql();
+  const item = await getItem(itemId);
+  if (!item) return null;
+  await sql`
+    UPDATE workflow_task_runs
+    SET status = 'pending',
+        opened_at = NULL,
+        action_state = NULL,
+        output = NULL,
+        notes = NULL,
+        error_message = NULL,
+        started_at = NULL,
+        completed_at = NULL,
+        updated_at = now()
+    WHERE item_id = ${itemId}
+  `;
+  const extractionPayload = {
+    ...(item.extraction_payload || {}),
+    reviewRestarts: [
+      ...(item.extraction_payload?.reviewRestarts || []),
+      { at: new Date().toISOString(), note: note || null },
+    ],
+  };
+  return updateItem(itemId, {
+    status: 'running',
+    decisions: {},
+    errorMessage: null,
+    extractionPayload,
+  });
+}
+
 export async function findNewestRunForWorkflow(workflowId) {
   const sql = getSql();
   const rows = await sql`
@@ -705,6 +744,78 @@ export async function createHhahFromPayload(referencePayload) {
       contact_info = home_health_agencies.contact_info || EXCLUDED.contact_info,
       raw_data = home_health_agencies.raw_data || EXCLUDED.raw_data,
       updated_at = now()
+    RETURNING *
+  `;
+  return rows[0];
+}
+
+// ── Entity admin edits (Entity page) ─────────────────────────────────────────
+// Update-by-id for the three reference entities. Blank/omitted fields keep the
+// current value; contact_info is merged (never replaced) so PG physician_ids
+// mappings survive an edit. Renames recompute normalized_name (UNIQUE).
+
+export async function updateHhahEntity({ id, name, npi, type, typeOfService, contact }) {
+  const sql = getSql();
+  const current = (await sql`SELECT * FROM home_health_agencies WHERE id = ${id} LIMIT 1`)[0];
+  if (!current) throw new Error('Agency not found');
+  const nextName = blankToNull(name) || current.name;
+  const rows = await sql`
+    UPDATE home_health_agencies
+    SET name = ${nextName},
+        normalized_name = ${normalizeName(nextName)},
+        npi = ${blankToNull(npi) || current.npi},
+        type = ${blankToNull(type) || current.type},
+        type_of_service = ${blankToNull(typeOfService) || current.type_of_service},
+        contact_info = ${await jsonParam({ ...(current.contact_info || {}), ...(contact || {}) })}::jsonb,
+        updated_at = now()
+    WHERE id = ${id}
+    RETURNING *
+  `;
+  // Sync the denormalized copies — patients.hhah_name feeds the portal patient
+  // lists and the Coverage Map's patient edges (which drop unknown agency names).
+  if (nextName !== current.name) {
+    await sql`UPDATE patients SET hhah_name = ${nextName}, updated_at = now() WHERE agency_id = ${id}`;
+  }
+  return rows[0];
+}
+
+export async function updatePgEntity({ id, name, npi, type, contact }) {
+  const sql = getSql();
+  const current = (await sql`SELECT * FROM physician_groups WHERE id = ${id} LIMIT 1`)[0];
+  if (!current) throw new Error('Physician group not found');
+  const nextName = blankToNull(name) || current.name;
+  const rows = await sql`
+    UPDATE physician_groups
+    SET name = ${nextName},
+        normalized_name = ${normalizeName(nextName)},
+        npi = ${blankToNull(npi) || current.npi},
+        type = ${blankToNull(type) || current.type},
+        contact_info = ${await jsonParam({ ...(current.contact_info || {}), ...(contact || {}) })}::jsonb,
+        updated_at = now()
+    WHERE id = ${id}
+    RETURNING *
+  `;
+  // Sync the denormalized copies — patients.pg_name feeds the portal lists and
+  // the Coverage Map's patient edges.
+  if (nextName !== current.name) {
+    await sql`UPDATE patients SET pg_name = ${nextName}, updated_at = now() WHERE pg_id = ${id}`;
+  }
+  return rows[0];
+}
+
+export async function updatePractitionerEntity({ id, name, npi, speciality, contact }) {
+  const sql = getSql();
+  const current = (await sql`SELECT * FROM practitioners WHERE id = ${id} LIMIT 1`)[0];
+  if (!current) throw new Error('Practitioner not found');
+  const nextNpi = normalizeNpi(npi) || current.npi_digits;
+  const rows = await sql`
+    UPDATE practitioners
+    SET physician_name = ${blankToNull(name) || current.physician_name},
+        npi_digits = ${nextNpi},
+        speciality = ${blankToNull(speciality) || current.speciality},
+        contact_info = ${await jsonParam({ ...(current.contact_info || {}), ...(contact || {}) })}::jsonb,
+        updated_at = now()
+    WHERE id = ${id}
     RETURNING *
   `;
   return rows[0];
@@ -959,6 +1070,90 @@ export async function writeOrderBundle(item, patientBundle) {
   await linkPatientToPg(patient?.id || null, pg?.id || null);
 
   return { order: storedOrder, skipped: false };
+}
+
+// ── Review-failed restart repair path ────────────────────────────────────────
+// On a restart re-walk (extraction_payload.reviewRestarts non-empty) the
+// find-or-create resolvers must CORRECT the previously written rows instead of
+// forking new ones: date fixes re-key the SAME admission/episode rows (so the
+// existing order stays attached to them), and the skip-duplicate step re-syncs
+// the persisted order's fields from the corrected payload.
+
+export function isRestartRewalk(item) {
+  return (item?.extraction_payload?.reviewRestarts || []).length > 0;
+}
+
+export async function rekeyAdmissionDates(item, admissionId) {
+  if (!admissionId) return null;
+  const sql = getSql();
+  const details = item.patient_payload?.admission_details || {};
+  try {
+    const rows = await sql`
+      UPDATE patient_admissions
+      SET soc = ${parseDate(details.SOC)},
+          eoc = ${parseDate(details.EOC)},
+          mrn = COALESCE(${details.MRN || null}, mrn),
+          raw_data = raw_data || ${await jsonParam(details)}::jsonb,
+          updated_at = now()
+      WHERE id = ${admissionId}
+      RETURNING *
+    `;
+    return rows[0] || null;
+  } catch {
+    // UNIQUE (patient_id, soc, eoc) collision — another admission already owns
+    // the corrected dates. Fall back to the normal find-or-create path.
+    return null;
+  }
+}
+
+export async function rekeyEpisodeDates(item, episodeId) {
+  if (!episodeId) return null;
+  const sql = getSql();
+  const details = item.patient_payload?.admission_details || {};
+  try {
+    const rows = await sql`
+      UPDATE patient_episodes
+      SET soe = ${parseDate(details.SOE)},
+          eoe = ${parseDate(details.EOE)},
+          raw_data = raw_data || ${await jsonParam(details)}::jsonb,
+          updated_at = now()
+      WHERE id = ${episodeId}
+      RETURNING *
+    `;
+    return rows[0] || null;
+  } catch {
+    // UNIQUE (admission_id, soe, eoe) collision — fall back to find-or-create.
+    return null;
+  }
+}
+
+// Correct the already-persisted order row from the item's (re-filled) payload:
+// order fields, billing provider, and re-attachment to the freshly resolved
+// admission/episode. Blank payload values keep the current column value.
+export async function syncOrderRowFromItem(item) {
+  const order = item.order_payload || {};
+  const existing = item.extraction_payload?.orderId
+    ? await findOrderById(item.extraction_payload.orderId)
+    : await findOrder(order.order_info?.order_number);
+  if (!existing) return null;
+  const bundle = item.extraction_payload?.patientBundle || {};
+  const practitioner = await findPractitionerByNpi(item.reference_payload?.practitioner?.NPI);
+  const sql = getSql();
+  const rows = await sql`
+    UPDATE orders
+    SET order_type = COALESCE(${blankToNull(order.order_info?.order_type)}, order_type),
+        document_type = COALESCE(${blankToNull(order.order_info?.document_type || order.order_info?.order_type)}, document_type),
+        order_date = COALESCE(${parseDate(order.order_info?.order_date)}, order_date),
+        admission_id = COALESCE(${bundle.admissionId || null}, admission_id),
+        episode_id = COALESCE(${bundle.episodeId || null}, episode_id),
+        billing_provider_id = COALESCE(${practitioner?.id || null}, billing_provider_id),
+        order_status = order_status || ${await jsonParam(order.order_status || {})}::jsonb,
+        raw_data = raw_data || ${await jsonParam(order)}::jsonb,
+        updated_at = now()
+    WHERE id = ${existing.id}
+    RETURNING *
+  `;
+  return rows[0] || null;
 }
 
 // ── Episode / CPO status ─────────────────────────────────
@@ -2198,6 +2393,30 @@ export async function listPgUnsignedOrders(pgId = null) {
   `;
 }
 
+// All DB orders for one patient (worker task context: "the order/s of that
+// patient" shown beside review / fill / CCN tasks), with the matched PDF blob.
+export async function listOrdersForPatient(patientId) {
+  if (!patientId) return [];
+  const sql = getSql();
+  return sql`
+    SELECT
+      o.*,
+      d.file_name AS pdf_file_name,
+      d.blob_url AS pdf_blob_url
+    FROM orders o
+    LEFT JOIN LATERAL (
+      SELECT file_name, blob_url
+      FROM uploaded_documents
+      WHERE lower(regexp_replace(file_name, '\\.pdf$', '', 'i')) = lower(o.order_number)
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) d ON true
+    WHERE o.patient_id = ${patientId}
+    ORDER BY o.order_date DESC NULLS LAST, o.created_at DESC
+    LIMIT 100
+  `;
+}
+
 export async function bulkSignOrders({ orderIds = [], pgId = null, date = todayYmd() }) {
   const ids = [...new Set(orderIds.filter(Boolean))];
   if (!ids.length) return { updated: [], skipped: [] };
@@ -2290,16 +2509,73 @@ export async function updateCpoMinutes({ cpoMonthId, cpoMin = 30, monthReady = n
   `)[0];
   if (!current) throw new Error('CPO month not found');
   const next = cpoStatusForMonth({ ...current, cpo_min: cpoMin }, current.episode_status, monthReady);
+  // Merge (not replace) reason: the row's reason jsonb also carries ccNotes
+  // (persistMonthNotes / createManualCcnNote append there) — a full replace
+  // would silently drop every stored CC note.
+  const mergedReason = { ...(current.reason || {}), ...next.reason };
   const rows = await sql`
     UPDATE cpo_months
     SET cpo_min = ${Number(cpoMin) || 0},
         status = ${next.status},
-        reason = ${await jsonParam(next.reason)}::jsonb,
+        reason = ${await jsonParam(mergedReason)}::jsonb,
         updated_at = now()
     WHERE id = ${cpoMonthId}
     RETURNING *
   `;
   return rows[0];
+}
+
+// Human 'Create CCN' action: append one coordinator-written CC note to the
+// episode's CPO month (created on demand) and add its minutes to cpo_min.
+// The note lives inside the episode exactly like the AI-generated ones
+// (cpo_months.reason.ccNotes) so the CCN auto-resolve gate and the patient
+// hierarchy both see it. Never marked physician-signed.
+export async function createManualCcnNote({ item, noteTitle, noteText, noteType, cpoMin, month = null }) {
+  const sql = getSql();
+  const ctx = await loadEpisodeGateContext(item);
+  if (!ctx) throw new Error('No episode is linked to this item yet — the CCN needs a resolved episode.');
+  const episodeId = ctx.episode.id;
+  const fallbackMonth = String(dateOnly(ctx.episode.soe) || (await businessToday())).slice(0, 7);
+  const monthLabel = /^\d{4}-\d{2}$/.test(String(month || '')) ? month : fallbackMonth;
+  const monthDate = `${monthLabel}-01`;
+
+  await sql`
+    INSERT INTO cpo_months (episode_id, cpo_month)
+    VALUES (${episodeId}, ${monthDate})
+    ON CONFLICT (episode_id, cpo_month) DO NOTHING
+  `;
+  const row = (await sql`
+    SELECT cm.*, e.status AS episode_status
+    FROM cpo_months cm
+    JOIN patient_episodes e ON e.id = cm.episode_id
+    WHERE cm.episode_id = ${episodeId} AND cm.cpo_month = ${monthDate}
+    LIMIT 1
+  `)[0];
+  if (!row) throw new Error('Could not resolve the CPO month for this episode.');
+
+  const note = {
+    noteTitle: String(noteTitle).trim(),
+    noteText: String(noteText).trim(),
+    noteType,
+    cpoMinutes: Number(cpoMin) || 0,
+    sentToPhysicianDate: await businessToday(),
+    noteStatus: 'completed',
+    data_tags: { generated_by: 'human', physician_signed: false },
+  };
+  const reason = row.reason || {};
+  const nextMin = Number(row.cpo_min || 0) + note.cpoMinutes;
+  const next = cpoStatusForMonth({ ...row, cpo_min: nextMin }, row.episode_status, null);
+  const nextReason = { ...reason, ...next.reason, ccNotes: [...(reason.ccNotes || []), note] };
+  const updated = await sql`
+    UPDATE cpo_months
+    SET cpo_min = ${nextMin},
+        status = ${next.status},
+        reason = ${await jsonParam(nextReason)}::jsonb,
+        updated_at = now()
+    WHERE id = ${row.id}
+    RETURNING *
+  `;
+  return { cpoMonth: updated[0], note, episodeId };
 }
 
 export async function runBillingMonitorPass() {

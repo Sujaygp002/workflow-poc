@@ -9,10 +9,16 @@
 // client-side compile mirror feeds the live preview (rendered with the shared
 // WorkflowFlow flowchart); after a successful save the preview switches to the
 // server-compiled steps until the next edit.
-import { Fragment, useEffect, useMemo, useState } from 'react';
+//
+// Presentation: the Flow column renders each sequence as a compact numbered
+// list of collapsible rows (click to expand the edit form; arrows reorder);
+// consecutive nodes sharing a TASK group render inside a tinted group frame.
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowDown,
   ArrowLeft,
+  ArrowUp,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -37,13 +43,14 @@ function newId(prefix) {
   return `${prefix}${Date.now().toString(36)}${idCounter}`;
 }
 
-// TASK-group tint palette (cycled by group index). A group's member node cards
-// get a tinted border + a group-name pill in the header so membership is visible.
+// TASK-group tint palette (cycled by group index). Consecutive member nodes
+// render wrapped in a tinted group frame (ring + frame bg) with the group name
+// as a header, so membership is visible at a glance.
 const GROUP_TINTS = [
-  { ring: 'border-violet-400', pill: 'bg-violet-100 text-violet-700 border-violet-300', dot: 'bg-violet-500' },
-  { ring: 'border-teal-400', pill: 'bg-teal-100 text-teal-700 border-teal-300', dot: 'bg-teal-500' },
-  { ring: 'border-orange-400', pill: 'bg-orange-100 text-orange-700 border-orange-300', dot: 'bg-orange-500' },
-  { ring: 'border-fuchsia-400', pill: 'bg-fuchsia-100 text-fuchsia-700 border-fuchsia-300', dot: 'bg-fuchsia-500' },
+  { ring: 'border-violet-400', pill: 'bg-violet-100 text-violet-700 border-violet-300', dot: 'bg-violet-500', frame: 'bg-violet-50/60' },
+  { ring: 'border-teal-400', pill: 'bg-teal-100 text-teal-700 border-teal-300', dot: 'bg-teal-500', frame: 'bg-teal-50/60' },
+  { ring: 'border-orange-400', pill: 'bg-orange-100 text-orange-700 border-orange-300', dot: 'bg-orange-500', frame: 'bg-orange-50/60' },
+  { ring: 'border-fuchsia-400', pill: 'bg-fuchsia-100 text-fuchsia-700 border-fuchsia-300', dot: 'bg-fuchsia-500', frame: 'bg-fuchsia-50/60' },
 ];
 function groupTint(index) {
   return GROUP_TINTS[((index % GROUP_TINTS.length) + GROUP_TINTS.length) % GROUP_TINTS.length];
@@ -60,6 +67,25 @@ const ACTION_PARAM_FIELDS = {
 };
 
 const INPUT_CLS = 'mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-800 placeholder:text-slate-300 focus:border-violet-400 focus:outline-none';
+const LABEL_CLS = 'text-xs font-semibold text-slate-600';
+
+// Humanize an internal action-input key for the "Worker fills: …" hint
+// (e.g. "soc" → "SOC", "orderDate" → "Order Date").
+const INPUT_KEY_ACRONYMS = new Set(['soc', 'eoc', 'soe', 'eoe', 'mrn', 'npi', 'dob', 'id', 'pdf', 'ccn', 'cpo', 'tz', 'ehr', 'pg', 'hhah']);
+function humanizeInputKey(key) {
+  return String(key)
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((word) => (INPUT_KEY_ACRONYMS.has(word.toLowerCase()) ? word.toUpperCase() : word.charAt(0).toUpperCase() + word.slice(1)))
+    .join(' ');
+}
+
+function clampInt(value, min, max) {
+  const n = parseInt(value, 10);
+  if (Number.isNaN(n)) return min;
+  return Math.min(max, Math.max(min, n));
+}
 
 function makeAction(catalog) {
   return { id: newId('a'), actionKey: catalog?.actions?.human?.[0]?.key || 'confirm_checklist', label: '', params: {} };
@@ -277,6 +303,9 @@ function clientValidate({ name, seq }) {
 }
 
 // ── small building blocks ─────────────────────────────────────────────────────
+// A quiet "+" affordance between steps: short connector stems + a small pill
+// button that opens the insert-kind dropdown. Deliberately low-contrast so 27
+// insert points do not visually compete with the step rows themselves.
 function InsertPoint({ onInsert, hint }) {
   const [open, setOpen] = useState(false);
   const item = (kind, label, cls) => (
@@ -292,16 +321,18 @@ function InsertPoint({ onInsert, hint }) {
     </button>
   );
   return (
-    <div className="relative flex flex-col items-center py-1">
+    <div className="relative flex flex-col items-center">
+      <span className="h-1 w-px bg-slate-200" />
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex h-6 w-6 items-center justify-center rounded-full border border-dashed border-slate-300 bg-white text-slate-400 hover:border-violet-400 hover:text-violet-600"
-        title="Insert a node here"
+        className={`flex items-center gap-1 rounded-full border border-dashed bg-white px-1.5 py-0.5 ${open ? 'border-violet-400 text-violet-600' : 'border-slate-200 text-slate-300 hover:border-violet-300 hover:text-violet-600'}`}
+        title="Insert a step here"
       >
-        <Plus size={13} />
+        <Plus size={11} />
+        {hint && <span className="pr-0.5 text-xs font-medium text-slate-400">{hint}</span>}
       </button>
-      {hint && !open && <span className="mt-1 text-[10px] text-slate-400">{hint}</span>}
+      <span className="h-1 w-px bg-slate-200" />
       {open && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
@@ -316,75 +347,102 @@ function InsertPoint({ onInsert, hint }) {
   );
 }
 
-// Per-node group selector + membership pill, rendered in the header of a
-// system/task NodeCard. Condition nodes never get this (they emit no step).
+// Per-node group selector, rendered inside the expanded form of a system/task
+// NodeCard (membership itself is visible via the tinted group frames in the
+// list). Condition nodes never get this (they emit no step).
 function GroupControl({ node, groups, onChange }) {
-  const idx = groups.findIndex((g) => g.id === node.groupId);
-  const member = idx >= 0 ? groups[idx] : null;
-  const tint = member ? groupTint(idx) : null;
+  if (!groups.length) return null;
   return (
-    <span className="ml-auto flex items-center gap-1.5">
-      {member && (
-        <span className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${tint.pill}`}>
-          <span className={`h-1.5 w-1.5 rounded-full ${tint.dot}`} /> {member.name || 'TASK group'}
-        </span>
-      )}
+    <label className="mt-2 block">
+      <span className={LABEL_CLS}>TASK group</span>
       <select
         value={node.groupId || ''}
         onChange={(e) => onChange({ ...node, groupId: e.target.value || null })}
         title="Assign this step to a TASK group"
-        className="rounded-lg border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-bold text-slate-600 focus:border-violet-400 focus:outline-none"
+        className={INPUT_CLS}
       >
-        <option value="">Group: —</option>
+        <option value="">— no group —</option>
         {groups.map((g) => <option key={g.id} value={g.id}>{g.name || 'TASK group'}</option>)}
       </select>
-    </span>
+    </label>
   );
 }
 
-function NodeShell({ tone, badge, title, onRemove, children, groupControl, ringOverride }) {
+// Shared collapsible card chrome for every node. Collapsed (default) = one
+// compact summary row: step number, kind icon, name + meta, move/remove
+// controls. Clicking the row expands the full edit form beneath it.
+function NodeShell({ tone, icon, kindLabel, stepNo, summary, meta, onRemove, onMove, canMoveUp, canMoveDown, defaultOpen = false, children }) {
+  const [open, setOpen] = useState(defaultOpen);
   const tones = {
-    sky: { ring: 'border-sky-300', bg: 'bg-sky-50', badge: 'bg-sky-600' },
-    pink: { ring: 'border-pink-300', bg: 'bg-pink-50', badge: 'bg-pink-600' },
-    amber: { ring: 'border-amber-400', bg: 'bg-amber-50', badge: 'bg-amber-500' },
+    sky: { chip: 'bg-sky-100 text-sky-700', openRing: 'border-sky-300', body: 'bg-sky-50/40' },
+    pink: { chip: 'bg-pink-100 text-pink-700', openRing: 'border-pink-300', body: 'bg-pink-50/40' },
+    amber: { chip: 'bg-amber-100 text-amber-700', openRing: 'border-amber-300', body: 'bg-amber-50/40' },
   };
   const t = tones[tone];
+  const moveBtn = 'flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:pointer-events-none disabled:opacity-25';
   return (
-    <div className={`w-full rounded-xl border-2 ${ringOverride || t.ring} ${t.bg} p-3 shadow-sm`}>
-      <div className="flex items-center gap-2">
-        <span className={`rounded-md ${t.badge} px-1.5 py-0.5 text-[9px] font-black uppercase text-white`}>{badge}</span>
-        <span className="text-xs font-black uppercase tracking-wide text-slate-500">{title}</span>
-        {groupControl}
-        <button
-          type="button"
-          onClick={onRemove}
-          className={`${groupControl ? '' : 'ml-auto '}flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-white/70 hover:text-rose-600`}
-          title="Remove this node"
-        >
-          <Trash2 size={13} />
-        </button>
+    <div className={`w-full rounded-xl border bg-white shadow-sm ${open ? t.openRing : 'border-slate-200'}`}>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => setOpen((v) => !v)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen((v) => !v); } }}
+        title={open ? 'Collapse this step' : 'Click to edit this step'}
+        className={`flex w-full cursor-pointer items-center gap-2 px-2.5 py-2 hover:bg-slate-50/70 ${open ? 'rounded-t-xl' : 'rounded-xl'}`}
+      >
+        <span className="w-6 shrink-0 text-center font-mono text-xs font-bold text-slate-400">{stepNo}</span>
+        <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${t.chip}`} title={kindLabel}>{icon}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-semibold text-slate-800">{summary}</span>
+          {meta && <span className="block truncate text-xs text-slate-500">{meta}</span>}
+        </span>
+        <span className="flex shrink-0 items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+          {onMove && (
+            <>
+              <button type="button" disabled={!canMoveUp} onClick={() => onMove(-1)} title="Move step up" className={moveBtn}>
+                <ArrowUp size={13} />
+              </button>
+              <button type="button" disabled={!canMoveDown} onClick={() => onMove(1)} title="Move step down" className={moveBtn}>
+                <ArrowDown size={13} />
+              </button>
+            </>
+          )}
+          <button
+            type="button"
+            onClick={onRemove}
+            className="flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+            title="Remove this step"
+          >
+            <Trash2 size={13} />
+          </button>
+        </span>
+        <ChevronDown size={14} className={`shrink-0 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
       </div>
-      <div className="mt-2">{children}</div>
+      {open && <div className={`rounded-b-xl border-t border-slate-100 ${t.body} px-3 pb-3 pt-2.5`}>{children}</div>}
     </div>
   );
 }
 
-function SystemNodeCard({ node, onChange, onRemove, catalog, groups = [] }) {
+function SystemNodeCard({ node, stepNo, onChange, onRemove, onMove, canMoveUp, canMoveDown, catalog, groups = [], defaultOpen }) {
   const actions = catalog?.actions?.system || [];
   const selected = actions.find((a) => a.key === node.actionKey);
-  const gIdx = groups.findIndex((g) => g.id === node.groupId);
+  const actionLabel = selected?.label || node.actionKey;
   return (
     <NodeShell
       tone="sky"
-      badge="SYS"
-      title="System action"
+      icon={<Cog size={13} />}
+      kindLabel="System action — runs automatically"
+      stepNo={stepNo}
+      summary={node.name.trim() || actionLabel}
+      meta={`System · ${node.name.trim() ? actionLabel : 'runs automatically'}`}
       onRemove={onRemove}
-      ringOverride={gIdx >= 0 ? groupTint(gIdx).ring : undefined}
-      groupControl={groups.length ? <GroupControl node={node} groups={groups} onChange={onChange} /> : undefined}
+      onMove={onMove}
+      canMoveUp={canMoveUp}
+      canMoveDown={canMoveDown}
+      defaultOpen={defaultOpen}
     >
-      <div className="mb-2 text-[10px] text-slate-500">Runs automatically</div>
       <label className="block">
-        <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Action</span>
+        <span className={LABEL_CLS}>Action</span>
         <select
           value={node.actionKey}
           onChange={(e) => onChange({ ...node, actionKey: e.target.value })}
@@ -394,7 +452,7 @@ function SystemNodeCard({ node, onChange, onRemove, catalog, groups = [] }) {
         </select>
       </label>
       <label className="mt-2 block">
-        <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Step name (optional)</span>
+        <span className={LABEL_CLS}>Step name (optional)</span>
         <input
           type="text"
           value={node.name}
@@ -403,6 +461,7 @@ function SystemNodeCard({ node, onChange, onRemove, catalog, groups = [] }) {
           className={INPUT_CLS}
         />
       </label>
+      <GroupControl node={node} groups={groups} onChange={onChange} />
     </NodeShell>
   );
 }
@@ -414,7 +473,7 @@ function TaskActionRow({ action, index, count, onChange, onMove, onRemove, catal
   return (
     <div className="rounded-lg border border-pink-200 bg-white/80 p-2">
       <div className="flex items-center gap-1.5">
-        <span className="w-5 text-center font-mono text-[10px] font-bold text-pink-400">{index + 1}</span>
+        <span className="w-5 text-center font-mono text-xs font-bold text-pink-400">{index + 1}</span>
         <select
           value={action.actionKey}
           onChange={(e) => onChange({ ...action, actionKey: e.target.value })}
@@ -453,15 +512,15 @@ function TaskActionRow({ action, index, count, onChange, onMove, onRemove, catal
         />
       ))}
       {spec?.inputs?.length > 0 && (
-        <div className="mt-1 text-[10px] text-slate-400">worker fills: {spec.inputs.join(', ')}</div>
+        <div className="mt-1 text-xs text-slate-500">Worker fills: {spec.inputs.map(humanizeInputKey).join(', ')}</div>
       )}
     </div>
   );
 }
 
-function TaskNodeCard({ node, onChange, onRemove, catalog, groups = [] }) {
+function TaskNodeCard({ node, stepNo, onChange, onRemove, onMove, canMoveUp, canMoveDown, catalog, groups = [], defaultOpen }) {
   const employees = catalog?.employees || [];
-  const gIdx = groups.findIndex((g) => g.id === node.groupId);
+  const assignee = employees.find((emp) => emp.id === node.assigneeEmployeeId);
   const updateAction = (i, next) => {
     const actions = [...node.actions];
     actions[i] = next;
@@ -481,15 +540,24 @@ function TaskNodeCard({ node, onChange, onRemove, catalog, groups = [] }) {
   return (
     <NodeShell
       tone="pink"
-      badge="HUMAN"
-      title="Task"
+      icon={<User size={13} />}
+      kindLabel="Task — a worker must complete it"
+      stepNo={stepNo}
+      summary={node.name.trim() || <span className="italic text-slate-400">Untitled task</span>}
+      meta={(
+        <>
+          Human task · {assignee ? assignee.display_name : <span className="font-semibold text-rose-500">unassigned</span>}
+          {' · '}{node.actions.length} action{node.actions.length === 1 ? '' : 's'}
+        </>
+      )}
       onRemove={onRemove}
-      ringOverride={gIdx >= 0 ? groupTint(gIdx).ring : undefined}
-      groupControl={groups.length ? <GroupControl node={node} groups={groups} onChange={onChange} /> : undefined}
+      onMove={onMove}
+      canMoveUp={canMoveUp}
+      canMoveDown={canMoveDown}
+      defaultOpen={defaultOpen}
     >
-      <div className="mb-2 text-[10px] text-rose-500">Worker must complete</div>
       <label className="block">
-        <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Task name <span className="text-rose-500">*</span></span>
+        <span className={LABEL_CLS}>Task name <span className="text-rose-500">*</span></span>
         <input
           type="text"
           value={node.name}
@@ -499,7 +567,7 @@ function TaskNodeCard({ node, onChange, onRemove, catalog, groups = [] }) {
         />
       </label>
       <label className="mt-2 block">
-        <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Assigned employee <span className="text-rose-500">*</span></span>
+        <span className={LABEL_CLS}>Assigned employee <span className="text-rose-500">*</span></span>
         <select
           value={node.assigneeEmployeeId}
           onChange={(e) => onChange({ ...node, assigneeEmployeeId: e.target.value })}
@@ -512,12 +580,12 @@ function TaskNodeCard({ node, onChange, onRemove, catalog, groups = [] }) {
         </select>
       </label>
       {employees.length === 0 && (
-        <div className="mt-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
+        <div className="mt-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
           No employees yet — create one on the Employees page first. A task cannot be saved without an assignee.
         </div>
       )}
       <div className="mt-3">
-        <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Actions (done in order)</div>
+        <div className={LABEL_CLS}>Actions (done in order)</div>
         <div className="mt-1.5 space-y-1.5">
           {node.actions.map((action, i) => (
             <TaskActionRow
@@ -540,18 +608,39 @@ function TaskNodeCard({ node, onChange, onRemove, catalog, groups = [] }) {
           <Plus size={12} /> Add action
         </button>
       </div>
+      <GroupControl node={node} groups={groups} onChange={onChange} />
     </NodeShell>
   );
 }
 
-function ConditionNodeCard({ node, onChange, onRemove, catalog, groups = [] }) {
+function ConditionNodeCard({ node, stepNo, onChange, onRemove, onMove, canMoveUp, canMoveDown, catalog, groups = [], depth = 0, defaultOpen }) {
   const conditions = catalog?.conditions || [];
   const selected = conditions.find((c) => c.key === node.conditionKey);
+  // Nested conditions (depth ≥ 1) always stack their branches — the column is
+  // too narrow for a side-by-side split once you are inside another branch.
+  const branchGrid = depth === 0 ? 'grid grid-cols-1 gap-3 xl:grid-cols-2' : 'grid grid-cols-1 gap-3';
   return (
-    <NodeShell tone="amber" badge="IF" title="Condition" onRemove={onRemove}>
-      <div className="mb-2 text-[10px] text-amber-600">Branches the flow</div>
+    <NodeShell
+      tone="amber"
+      icon={<GitFork size={13} />}
+      kindLabel="Condition — branches the flow"
+      stepNo={stepNo}
+      summary={selected?.label || node.conditionKey}
+      meta={(
+        <>
+          Condition · TRUE: {node.ifTrue.length} step{node.ifTrue.length === 1 ? '' : 's'}
+          {' · '}FALSE: {node.ifFalse.length} step{node.ifFalse.length === 1 ? '' : 's'}
+          {!node.ifTrue.length && <span className="font-semibold text-rose-500"> · TRUE branch needs a node</span>}
+        </>
+      )}
+      onRemove={onRemove}
+      onMove={onMove}
+      canMoveUp={canMoveUp}
+      canMoveDown={canMoveDown}
+      defaultOpen={defaultOpen}
+    >
       <label className="block">
-        <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500">If …</span>
+        <span className={LABEL_CLS}>If …</span>
         <select
           value={node.conditionKey}
           onChange={(e) => onChange({ ...node, conditionKey: e.target.value })}
@@ -560,51 +649,59 @@ function ConditionNodeCard({ node, onChange, onRemove, catalog, groups = [] }) {
           {conditions.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
         </select>
       </label>
-      {selected?.description && <div className="mt-1 text-[10px] text-slate-500">{selected.description}</div>}
-      <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+      {selected?.description && <div className="mt-1 text-xs text-slate-500">{selected.description}</div>}
+      <div className={`mt-3 ${branchGrid}`}>
         <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-2">
-          <div className="text-center text-[11px] font-black tracking-wide text-emerald-700">
-            ✓ If condition is TRUE →
-          </div>
+          <div className="px-1 pb-1 text-xs font-bold text-emerald-700">✓ If condition is TRUE</div>
           <SequenceEditor
             seq={node.ifTrue}
             onChange={(seq) => onChange({ ...node, ifTrue: seq })}
             catalog={catalog}
             groups={groups}
+            depth={depth + 1}
             emptyHint="add at least one node"
           />
         </div>
         <div className="rounded-xl border border-rose-200 bg-rose-50/40 p-2">
-          <div className="text-center text-[11px] font-black tracking-wide text-rose-600">
-            ✗ If condition is FALSE →
-          </div>
+          <div className="px-1 pb-1 text-xs font-bold text-rose-600">✗ If condition is FALSE</div>
           <SequenceEditor
             seq={node.ifFalse}
             onChange={(seq) => onChange({ ...node, ifFalse: seq })}
             catalog={catalog}
             groups={groups}
+            depth={depth + 1}
             emptyHint="optional — skips to join"
           />
         </div>
       </div>
-      <div className="mt-2 text-center text-[10px] font-black uppercase tracking-wide text-amber-600">
-        ↓ branches re-join and continue below ↓
+      <div className="mt-2 text-center text-xs font-semibold text-amber-600">
+        ↓ branches re-join and continue below
       </div>
     </NodeShell>
   );
 }
 
-function NodeCard({ node, onChange, onRemove, catalog, groups }) {
-  if (node.kind === 'system') return <SystemNodeCard node={node} onChange={onChange} onRemove={onRemove} catalog={catalog} groups={groups} />;
-  if (node.kind === 'task') return <TaskNodeCard node={node} onChange={onChange} onRemove={onRemove} catalog={catalog} groups={groups} />;
-  return <ConditionNodeCard node={node} onChange={onChange} onRemove={onRemove} catalog={catalog} groups={groups} />;
+function NodeCard({ node, stepNo, onChange, onRemove, onMove, canMoveUp, canMoveDown, catalog, groups, depth = 0, defaultOpen = false }) {
+  const shared = { stepNo, onChange, onRemove, onMove, canMoveUp, canMoveDown, catalog, groups, defaultOpen };
+  if (node.kind === 'system') return <SystemNodeCard node={node} {...shared} />;
+  if (node.kind === 'task') return <TaskNodeCard node={node} {...shared} />;
+  return <ConditionNodeCard node={node} {...shared} depth={depth} />;
 }
 
-// Renders a sequence of node cards with an insert point before/after every node.
-function SequenceEditor({ seq, onChange, catalog, emptyHint, groups = [] }) {
-  const insertAt = (index, kind) => {
+// Renders a sequence as a compact, numbered, collapsible list. Consecutive
+// nodes sharing a TASK group render inside one tinted group frame (the group
+// name as header); a quiet + affordance sits between every pair of steps.
+// SequenceEditor owns the array, so insert / remove / move are simple splices.
+function SequenceEditor({ seq, onChange, catalog, emptyHint, groups = [], depth = 0 }) {
+  // The most recently inserted node opens expanded so it can be filled in
+  // immediately; everything else starts collapsed.
+  const [lastInsertedId, setLastInsertedId] = useState(null);
+  const insertAt = (index, kind, groupId = null) => {
+    const node = makeNode(kind, catalog);
+    if (groupId && kind !== 'condition') node.groupId = groupId;
+    setLastInsertedId(node.id);
     const next = [...seq];
-    next.splice(index, 0, makeNode(kind, catalog));
+    next.splice(index, 0, node);
     onChange(next);
   };
   const updateAt = (index, node) => {
@@ -613,29 +710,93 @@ function SequenceEditor({ seq, onChange, catalog, emptyHint, groups = [] }) {
     onChange(next);
   };
   const removeAt = (index) => onChange(seq.filter((_, i) => i !== index));
+  const moveAt = (index, dir) => {
+    const j = index + dir;
+    if (j < 0 || j >= seq.length) return;
+    const next = [...seq];
+    [next[index], next[j]] = [next[j], next[index]];
+    onChange(next);
+  };
 
   if (!seq.length) {
     return (
-      <div className="flex flex-col items-center">
+      <div className="flex flex-col items-center py-1">
         <InsertPoint onInsert={(kind) => insertAt(0, kind)} hint={emptyHint} />
       </div>
     );
   }
+
+  // Chunk the sequence into segments of consecutive nodes sharing a groupId
+  // (condition nodes are always ungrouped). Grouped segments render inside a
+  // tinted frame; inserting between two group members joins the group.
+  const segments = [];
+  seq.forEach((node, index) => {
+    const groupId = (node.kind !== 'condition' && node.groupId) || null;
+    const last = segments[segments.length - 1];
+    if (last && last.groupId === groupId) last.items.push({ node, index });
+    else segments.push({ groupId, items: [{ node, index }] });
+  });
+
+  const renderNode = ({ node, index }) => (
+    <NodeCard
+      node={node}
+      stepNo={index + 1}
+      onChange={(next) => updateAt(index, next)}
+      onRemove={() => removeAt(index)}
+      onMove={(dir) => moveAt(index, dir)}
+      canMoveUp={index > 0}
+      canMoveDown={index < seq.length - 1}
+      catalog={catalog}
+      groups={groups}
+      depth={depth}
+      defaultOpen={node.id === lastInsertedId}
+    />
+  );
+
   return (
-    <div className="flex w-full flex-col items-center">
+    <div className="flex w-full flex-col">
       <InsertPoint onInsert={(kind) => insertAt(0, kind)} />
-      {seq.map((node, i) => (
-        <Fragment key={node.id}>
-          <NodeCard
-            node={node}
-            onChange={(next) => updateAt(i, next)}
-            onRemove={() => removeAt(i)}
-            catalog={catalog}
-            groups={groups}
-          />
-          <InsertPoint onInsert={(kind) => insertAt(i + 1, kind)} />
-        </Fragment>
-      ))}
+      {segments.map((segment) => {
+        const firstId = segment.items[0].node.id;
+        const lastIndex = segment.items[segment.items.length - 1].index;
+        const gIdx = segment.groupId ? groups.findIndex((g) => g.id === segment.groupId) : -1;
+        if (gIdx >= 0) {
+          const tint = groupTint(gIdx);
+          const group = groups[gIdx];
+          return (
+            <Fragment key={`group-${firstId}`}>
+              <div className={`w-full rounded-xl border-2 ${tint.ring} ${tint.frame} p-2`}>
+                <div className="mb-1.5 flex items-center gap-1.5 px-1">
+                  <span className={`h-2 w-2 shrink-0 rounded-full ${tint.dot}`} />
+                  <span className="truncate text-xs font-bold text-slate-700">{group.name || 'TASK group'}</span>
+                  <span className="shrink-0 text-xs text-slate-400">
+                    TASK group · {segment.items.length} step{segment.items.length === 1 ? '' : 's'}
+                  </span>
+                </div>
+                {segment.items.map((item, k) => (
+                  <Fragment key={item.node.id}>
+                    {renderNode(item)}
+                    {k < segment.items.length - 1 && (
+                      <InsertPoint onInsert={(kind) => insertAt(item.index + 1, kind, segment.groupId)} />
+                    )}
+                  </Fragment>
+                ))}
+              </div>
+              <InsertPoint onInsert={(kind) => insertAt(lastIndex + 1, kind)} />
+            </Fragment>
+          );
+        }
+        return (
+          <Fragment key={`run-${firstId}`}>
+            {segment.items.map((item) => (
+              <Fragment key={item.node.id}>
+                {renderNode(item)}
+                <InsertPoint onInsert={(kind) => insertAt(item.index + 1, kind)} />
+              </Fragment>
+            ))}
+          </Fragment>
+        );
+      })}
     </div>
   );
 }
@@ -677,14 +838,14 @@ function GroupsPanel({ groups, seq, onChange, onSeqChange }) {
       <div className="flex items-center gap-2">
         <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-700 text-white"><Layers size={14} /></span>
         <h2 className="font-bold text-slate-900">TASK groups</h2>
-        <span className="ml-auto text-[10px] font-black uppercase tracking-wide text-slate-400">collapse steps into one TASK box</span>
+        <span className="ml-auto text-xs font-medium text-slate-400">collapse steps into one TASK box</span>
       </div>
-      <p className="mt-1 text-[11px] text-slate-500">
-        Create a TASK container, then assign flow steps to it with the “Group:” dropdown on each step. Grouping is presentation only — the compiled engine steps are unchanged.
+      <p className="mt-1 text-xs text-slate-500">
+        Create a TASK container, then assign flow steps to it with the “TASK group” field on each step. Grouped steps render inside a tinted frame in the Flow. Grouping is presentation only — the compiled engine steps are unchanged.
       </p>
       <div className="mt-3 space-y-2">
         {groups.length === 0 && (
-          <div className="rounded-lg border border-dashed border-slate-300 px-3 py-2 text-center text-[11px] text-slate-400">
+          <div className="rounded-lg border border-dashed border-slate-300 px-3 py-2 text-center text-xs text-slate-400">
             No groups yet — add one, then tag steps into it.
           </div>
         )}
@@ -693,10 +854,10 @@ function GroupsPanel({ groups, seq, onChange, onSeqChange }) {
           return (
             <div key={g.id} className={`rounded-xl border-2 ${tint.ring} bg-white p-2.5`}>
               <div className="flex items-center gap-2">
-                <span className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-wide ${tint.pill}`}>
+                <span className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${tint.pill}`}>
                   <span className={`h-1.5 w-1.5 rounded-full ${tint.dot}`} /> TASK
                 </span>
-                <span className="text-[10px] font-mono text-slate-400">{counts[g.id] || 0} step{(counts[g.id] || 0) === 1 ? '' : 's'}</span>
+                <span className="text-xs text-slate-400">{counts[g.id] || 0} step{(counts[g.id] || 0) === 1 ? '' : 's'}</span>
                 <button
                   type="button"
                   onClick={() => removeGroup(g.id)}
@@ -737,12 +898,36 @@ function GroupsPanel({ groups, seq, onChange, onSeqChange }) {
 
 function TriggerCard({ trigger, onChange, catalog, docUploadClash }) {
   const triggers = catalog?.triggers || [];
+  const paramInputCls = 'rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm font-normal text-slate-800 placeholder:text-slate-300 focus:border-violet-400 focus:outline-none';
+  // Remember the last-seen params per trigger type so switching radios and
+  // back does NOT destroy e.g. a daily_time hour/minute/tz configuration.
+  const remembered = useRef({});
+  useEffect(() => {
+    remembered.current[trigger.type] = trigger;
+  }, [trigger]);
+  const selectTrigger = (key) => {
+    if (key === trigger.type) return;
+    const prev = remembered.current[key];
+    if (prev) {
+      onChange({ ...prev, type: key });
+      return;
+    }
+    if (key === 'time_interval') {
+      onChange({ type: key, intervalSeconds: 60 });
+      return;
+    }
+    if (key === 'daily_time') {
+      onChange({ type: key, hour: 12, minute: 0, tz: 'America/Chicago' });
+      return;
+    }
+    onChange({ type: key });
+  };
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
       <div className="flex items-center gap-2">
         <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-violet-600 text-white"><Zap size={14} /></span>
         <h2 className="font-bold text-slate-900">Trigger</h2>
-        <span className="ml-auto text-[10px] font-black uppercase tracking-wide text-slate-400">starts the workflow</span>
+        <span className="ml-auto text-xs font-medium text-slate-400">starts the workflow</span>
       </div>
       <div className="mt-3 space-y-2">
         {triggers.map((t) => (
@@ -754,28 +939,68 @@ function TriggerCard({ trigger, onChange, catalog, docUploadClash }) {
               type="radio"
               name="trigger"
               checked={trigger.type === t.key}
-              onChange={() => onChange({ type: t.key, ...(t.key === 'time_interval' ? { intervalSeconds: trigger.intervalSeconds || 60 } : {}) })}
+              onChange={() => selectTrigger(t.key)}
               className="mt-1 accent-violet-600"
             />
             <span className="min-w-0">
               <span className="block text-sm font-bold text-slate-800">{t.label}</span>
-              <span className="block text-[11px] text-slate-500">{t.description}</span>
+              <span className="block text-xs text-slate-500">{t.description}</span>
               {t.key === 'time_interval' && trigger.type === 'time_interval' && (
                 <span className="mt-1.5 flex items-center gap-2">
-                  <span className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Every</span>
+                  <span className={LABEL_CLS}>Every</span>
                   <input
                     type="number"
                     min={5}
                     value={trigger.intervalSeconds ?? 60}
-                    onChange={(e) => onChange({ type: 'time_interval', intervalSeconds: Number(e.target.value) })}
+                    onChange={(e) => onChange({ ...trigger, intervalSeconds: Number(e.target.value) })}
                     onClick={(e) => e.preventDefault()}
-                    className="w-24 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm text-slate-800 focus:border-violet-400 focus:outline-none"
+                    className={`w-24 ${paramInputCls}`}
                   />
                   <span className="text-xs text-slate-500">seconds (min 5)</span>
                 </span>
               )}
+              {t.key === 'daily_time' && trigger.type === 'daily_time' && (
+                <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                  <span className={`flex items-center gap-1.5 ${LABEL_CLS}`}>
+                    Hour
+                    <input
+                      type="number"
+                      min={0}
+                      max={23}
+                      value={trigger.hour ?? 12}
+                      onChange={(e) => onChange({ ...trigger, hour: clampInt(e.target.value, 0, 23) })}
+                      onClick={(e) => e.preventDefault()}
+                      className={`w-16 ${paramInputCls}`}
+                    />
+                  </span>
+                  <span className={`flex items-center gap-1.5 ${LABEL_CLS}`}>
+                    Minute
+                    <input
+                      type="number"
+                      min={0}
+                      max={59}
+                      value={trigger.minute ?? 0}
+                      onChange={(e) => onChange({ ...trigger, minute: clampInt(e.target.value, 0, 59) })}
+                      onClick={(e) => e.preventDefault()}
+                      className={`w-16 ${paramInputCls}`}
+                    />
+                  </span>
+                  <span className={`flex items-center gap-1.5 ${LABEL_CLS}`}>
+                    Timezone
+                    <input
+                      type="text"
+                      value={trigger.tz ?? ''}
+                      onChange={(e) => onChange({ ...trigger, tz: e.target.value })}
+                      onClick={(e) => e.preventDefault()}
+                      placeholder="America/Chicago"
+                      className={`w-44 ${paramInputCls}`}
+                    />
+                  </span>
+                  <span className="w-full text-xs text-slate-400">Fires once per day at this local time (24-hour clock).</span>
+                </span>
+              )}
               {t.key === 'document_upload' && trigger.type === 'document_upload' && docUploadClash > 0 && (
-                <span className="mt-1.5 flex items-start gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2 py-1.5 text-[11px] font-semibold text-amber-800">
+                <span className="mt-1.5 flex items-start gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs font-semibold text-amber-800">
                   <AlertTriangle size={13} className="mt-0.5 shrink-0" />
                   {docUploadClash} other active builder workflow{docUploadClash > 1 ? 's' : ''} already use{docUploadClash > 1 ? '' : 's'} this
                   trigger — one HHAH upload will start a run of EACH of them plus this one.
@@ -804,7 +1029,7 @@ function BuilderTips() {
         {open ? <ChevronUp size={13} className="ml-auto" /> : <ChevronDown size={13} className="ml-auto" />}
       </button>
       {open && (
-        <ul className="space-y-1.5 px-4 pb-3 pt-1 text-[11px] text-slate-600">
+        <ul className="space-y-1.5 px-4 pb-3 pt-1 text-xs text-slate-600">
           <li>• System nodes run automatically in sequence — no worker needed.</li>
           <li>• Human task nodes pause and wait for a worker to complete one or more actions.</li>
           <li>• Condition nodes branch the flow: add steps for both the TRUE and FALSE paths.</li>
@@ -915,16 +1140,16 @@ export default function WorkflowBuilder({ workflow = null, existingWorkflows = [
         </button>
         <div>
           {workflow && (
-            <div className="mb-0.5 flex items-center gap-1.5 text-[11px] text-slate-400">
+            <div className="mb-0.5 flex items-center gap-1.5 text-xs text-slate-400">
               <span>Workflows</span>
               <span>/</span>
-              <span className="font-semibold text-slate-600">Editing: {workflow.name || editingId}</span>
+              <span className="font-semibold text-slate-600" title={editingId ? `ID ${editingId}` : undefined}>
+                Editing: {workflow.name || 'Untitled workflow'}
+              </span>
             </div>
           )}
           <h1 className="text-2xl font-bold text-slate-800">{workflow ? 'Edit workflow' : 'New workflow'}</h1>
-          <p className="mt-0.5 text-sm text-slate-500">
-            {editingId ? <span className="font-mono text-[11px]">{editingId}</span> : 'Pick a trigger, then add system actions, tasks and conditions.'}
-          </p>
+          <p className="mt-0.5 text-sm text-slate-500">Pick a trigger, then add system actions, tasks and conditions.</p>
         </div>
         <button
           type="button"
@@ -1002,16 +1227,16 @@ export default function WorkflowBuilder({ workflow = null, existingWorkflows = [
           </div>
 
           <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="mb-1 flex items-center gap-2">
+            <div className="mb-2 flex items-center gap-2">
               <h2 className="font-bold text-slate-900">Flow</h2>
-              <span className="text-[10px] font-black uppercase tracking-wide text-slate-400">top to bottom · use ＋ to insert</span>
+              <span className="text-xs text-slate-400">top to bottom · click a step to edit · ＋ inserts between steps</span>
             </div>
             {!catalog && !catalogError ? (
               <div className="flex items-center gap-2 py-6 text-sm text-slate-400">
                 <Loader2 size={15} className="animate-spin" /> Loading palette…
               </div>
             ) : (
-              <div className="mx-auto max-w-2xl">
+              <div>
                 <div className="mx-auto w-fit rounded-full border-2 border-slate-300 bg-slate-50 px-4 py-1 text-xs font-black text-slate-600">
                   START · {triggerLabel(trigger)}
                 </div>

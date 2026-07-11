@@ -31,7 +31,9 @@ function Section({ title, count, children, defaultOpen = false, tone = 'slate', 
       ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
       : tone === 'rose'
         ? 'border-rose-200 bg-rose-50 text-rose-800'
-        : 'border-slate-200 bg-slate-50 text-slate-700';
+        : tone === 'violet'
+          ? 'border-violet-200 bg-violet-50 text-violet-800'
+          : 'border-slate-200 bg-slate-50 text-slate-700';
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white">
@@ -80,6 +82,19 @@ function OrderRow({ order, archive = false }) {
           <div className="mt-0.5 text-xs text-slate-500">
             Signed date: {formatUiDate(order.signed_date)}
           </div>
+          {(order.order_status?.cpo_min || order.order_status?.justification_title || order.order_status?.justification_note) && (
+            <div className="mt-1 text-xs text-slate-600">
+              {order.order_status?.cpo_min != null && order.order_status?.cpo_min !== '' && (
+                <span className="mr-2 font-semibold">CPO min: {order.order_status.cpo_min}</span>
+              )}
+              {order.order_status?.justification_title && (
+                <span className="font-semibold">Justification: {order.order_status.justification_title}</span>
+              )}
+              {order.order_status?.justification_note && (
+                <div className="mt-0.5 text-slate-500">{order.order_status.justification_note}</div>
+              )}
+            </div>
+          )}
           {order.archive_reason && (
             <div className="mt-0.5 text-[11px] font-semibold text-slate-400">Archive reason: {order.archive_reason}</div>
           )}
@@ -104,6 +119,55 @@ function OrderList({ title, orders = [], archive = false, tone = 'slate' }) {
     <Section title={title} count={orders.length} defaultOpen={!archive && orders.length > 0} tone={tone} emptyText={`No ${title.toLowerCase()}.`}>
       <div className="grid gap-2">
         {orders.map((order) => <OrderRow key={order.id} order={order} archive={archive} />)}
+      </div>
+    </Section>
+  );
+}
+
+// CC notes (CCNs) live INSIDE the episode alongside its orders — one card per
+// note, read from the episode's CPO months (cpo_months.reason.ccNotes).
+function CcnNoteCard({ note }) {
+  return (
+    <div className="rounded-lg border border-violet-200 bg-violet-50/60 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="font-bold text-slate-900">{note.noteTitle || 'Untitled note'}</div>
+        <Pill tone="bg-violet-100 text-violet-700 border-violet-200">{note.noteType || 'CC note'}</Pill>
+        <Pill tone="bg-white text-violet-700 border-violet-200">{Number(note.cpoMinutes) || 0} CPO min</Pill>
+        {note.data_tags?.generated_by === 'human'
+          ? <Pill tone="bg-pink-50 text-pink-700 border-pink-200">coordinator</Pill>
+          : <Pill tone="bg-sky-50 text-sky-700 border-sky-200">AI service</Pill>}
+      </div>
+      <div className="mt-1 text-xs text-slate-500">
+        Month {formatUiDate(note.month)} | Sent {formatUiDate(note.sentToPhysicianDate)}
+      </div>
+      {note.noteText && (
+        <div className="mt-1 text-xs leading-relaxed text-slate-600">{note.noteText}</div>
+      )}
+    </div>
+  );
+}
+
+function CcnList({ episode }) {
+  const cpoMonths = episode.cpoMonths || [];
+  const notes = cpoMonths.flatMap((month, monthIndex) => (month.reason?.ccNotes || []).map((note, noteIndex) => ({
+    ...note,
+    month: month.cpo_month,
+    key: `${month.id || monthIndex}-${noteIndex}`,
+  })));
+  const totalMinutes = cpoMonths.reduce((sum, month) => sum + (Number(month.cpo_min) || 0), 0);
+  return (
+    <Section
+      title="CC Notes (CCN)"
+      count={notes.length}
+      defaultOpen={notes.length > 0}
+      tone="violet"
+      emptyText="No CC notes yet — the Create CCN task adds them here."
+    >
+      <div className="grid gap-2">
+        {totalMinutes > 0 && (
+          <div className="text-xs font-semibold text-slate-500">{totalMinutes} CPO minutes captured across {cpoMonths.length} month(s).</div>
+        )}
+        {notes.map((note) => <CcnNoteCard key={note.key} note={note} />)}
       </div>
     </Section>
   );
@@ -137,10 +201,15 @@ function EpisodePanel({ episode, title = 'Latest Episode', archive = false }) {
           <OrderList title="Archived Episode Orders" orders={episode.orders || []} archive />
         </div>
       ) : (
-        <div className="mt-3 grid gap-3 lg:grid-cols-2">
-          <OrderList title="Signed Orders" orders={episode.signed_orders || []} tone="emerald" />
-          <OrderList title="Unsigned Orders" orders={episode.unsigned_orders || []} tone="amber" />
-        </div>
+        <>
+          <div className="mt-3 grid gap-3 lg:grid-cols-2">
+            <OrderList title="Signed Orders" orders={episode.signed_orders || []} tone="emerald" />
+            <OrderList title="Unsigned Orders" orders={episode.unsigned_orders || []} tone="amber" />
+          </div>
+          <div className="mt-3">
+            <CcnList episode={episode} />
+          </div>
+        </>
       )}
     </div>
   );

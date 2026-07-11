@@ -2,7 +2,13 @@
 // (Untouched / Processing / Done); POST {action:'open'} claims a task and moves
 // it to Processing, returning the full task detail + action checklist.
 import { handleError, methodNotAllowed, readJson, sendJson } from '../_lib/http.js';
-import { getItem, listEmployeeBucketItems, openTaskRun } from '../_lib/repositories.js';
+import {
+  getItem,
+  getPatientTree,
+  listEmployeeBucketItems,
+  listOrdersForPatient,
+  openTaskRun,
+} from '../_lib/repositories.js';
 import { taskDisplayPayload } from '../_lib/taskRegistry.js';
 import { requireSession } from '../_lib/auth.js';
 
@@ -52,11 +58,23 @@ export default async function handler(req, res) {
       if (opened.error) return sendJson(res, opened.status || 400, { error: opened.error });
       const task = opened.task;
       const item = await getItem(task.item_id);
+      // Task context for the redesigned worker panels: the patient's real DB
+      // orders (review / fill / CCN tasks show "the order/s of that patient")
+      // and the full patient object module (unit → record → admission →
+      // episode → orders + CPO months/CC notes). Best-effort — a missing
+      // patient just leaves them empty.
+      const patientId = item?.extraction_payload?.patientBundle?.patientId || null;
+      const [patientOrders, patientTree] = patientId
+        ? await Promise.all([
+            listOrdersForPatient(patientId).catch(() => []),
+            getPatientTree(patientId).catch(() => null),
+          ])
+        : [[], null];
       return sendJson(res, 200, {
         task,
         actions: taskActions(task),
         actionState: task.action_state || {},
-        payload: item ? taskDisplayPayload(item) : {},
+        payload: item ? { ...taskDisplayPayload(item), patientOrders, patientTree } : {},
         pdf: item?.extraction_payload?.pdf || null,
       });
     }

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Building2, CheckCircle2, ClipboardSignature, ExternalLink, FileText, LayoutDashboard, Loader2, Lock, RefreshCw, Stethoscope, UserRound } from 'lucide-react';
+import { ArrowLeft, Building2, CheckCircle2, ClipboardSignature, ExternalLink, FileText, GitBranch, LayoutDashboard, Loader2, Lock, RefreshCw, Stethoscope, UserRound } from 'lucide-react';
 import { formatUiDate } from '../../lib/dateFormat';
 import { clearAuthToken, externalLogin, getAuthToken, getSession, logout, setAuthToken } from '../../lib/authApi';
-import { bulkSignPgOrders, fetchPgUnsignedOrders } from '../../lib/workflowApi';
+import { bulkSignPgOrders, fetchPatientTree, fetchPatients, fetchPgUnsignedOrders } from '../../lib/workflowApi';
 import RcmTable from '../../components/RcmTable';
+import PatientHierarchyView from '../../components/PatientHierarchyView';
 
 function todayYmd() {
   return new Date().toISOString().slice(0, 10);
@@ -224,6 +225,147 @@ function BulkSign({ user }) {
   );
 }
 
+const EPISODE_STATUS_TONES = {
+  billable: 'border-green-200 bg-green-100 text-green-700',
+  eligible: 'border-sky-200 bg-sky-100 text-sky-700',
+  started: 'border-amber-200 bg-amber-50 text-amber-700',
+};
+
+function EpisodeStatusPill({ status }) {
+  const key = String(status || '').toLowerCase();
+  const tone = EPISODE_STATUS_TONES[key] || 'border-slate-200 bg-slate-100 text-slate-500';
+  return (
+    <span className={`inline-flex shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${tone}`}>
+      {key && key !== 'none' ? key : 'no episode'}
+    </span>
+  );
+}
+
+// Patients tab: the PG-scoped mirror of the HHAH portal's patient list + hierarchy
+// drilldown (see HhhLogin.jsx). Fetches /api/patients?pgId=<session pgId>.
+function PgPatients({ user }) {
+  const pgId = user?.pgId || '';
+  const [patients, setPatients] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [selectedPatient, setSelectedPatient] = useState(null);
+  const [selectedTree, setSelectedTree] = useState(null);
+  const [treeError, setTreeError] = useState('');
+
+  const refresh = useCallback(async () => {
+    if (!pgId) return;
+    setLoading(true);
+    try {
+      setPatients(await fetchPatients({ pgId }));
+      setError('');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [pgId]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  async function openPatient(patient) {
+    setSelectedPatient(patient);
+    setSelectedTree(null);
+    setTreeError('');
+    try {
+      setSelectedTree(await fetchPatientTree(patient.id));
+    } catch (err) {
+      setTreeError(err.message);
+    }
+  }
+
+  function backToList() {
+    setSelectedPatient(null);
+    setSelectedTree(null);
+    setTreeError('');
+  }
+
+  if (!pgId) {
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400">
+        No physician group is linked to this account.
+      </div>
+    );
+  }
+
+  return (
+    <section className="grid gap-5 lg:grid-cols-[360px_1fr]">
+      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+        <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+          <div>
+            <h2 className="font-bold text-slate-900">Patients</h2>
+            <p className="text-xs text-slate-500">
+              {user?.pgName || 'Your physician group'} · {patients.length} patient{patients.length === 1 ? '' : 's'}
+            </p>
+          </div>
+          <button onClick={refresh} className="rounded-lg p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-700">
+            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+          </button>
+        </div>
+        {error && <div className="border-b border-rose-100 bg-rose-50 px-4 py-2 text-sm text-rose-600">{error}</div>}
+        <div className="max-h-[640px] space-y-2 overflow-y-auto p-3">
+          {loading && patients.length === 0 ? (
+            <div className="flex justify-center py-16 text-slate-400"><Loader2 className="animate-spin" /></div>
+          ) : patients.length === 0 ? (
+            <div className="py-12 text-center text-sm text-slate-400">
+              <UserRound size={30} className="mx-auto mb-2 opacity-40" />
+              No patients are linked to your physician group yet
+            </div>
+          ) : patients.map((patient) => (
+            <button
+              key={patient.id}
+              onClick={() => openPatient(patient)}
+              className={`w-full rounded-xl border p-3 text-left transition-colors ${selectedPatient?.id === patient.id ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="truncate font-bold text-slate-800">{patient.name}</div>
+                <EpisodeStatusPill status={patient.latest_episode_status} />
+              </div>
+              <div className="mt-0.5 text-xs text-slate-500">DOB {formatUiDate(patient.dob)} | MRN {patient.mrn || 'Missing'}</div>
+              <div className="mt-1 text-xs text-slate-400">Agency: {patient.hhah_name || 'Missing'}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="min-h-[520px] rounded-2xl border border-slate-200 bg-white p-4">
+        {!selectedPatient ? (
+          <div className="flex h-full min-h-[460px] items-center justify-center text-center text-slate-400">
+            <div>
+              <GitBranch size={42} className="mx-auto mb-3 opacity-40" />
+              <p className="font-medium">Select a patient to open details.</p>
+            </div>
+          </div>
+        ) : treeError ? (
+          <div className="space-y-4">
+            <button onClick={backToList} className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800">
+              <ArrowLeft size={15} /> Back to patient list
+            </button>
+            <div className="text-sm text-rose-600">{treeError}</div>
+          </div>
+        ) : !selectedTree ? (
+          <div className="flex h-full min-h-[460px] items-center justify-center text-slate-400">
+            <Loader2 size={24} className="animate-spin" />
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <button onClick={backToList} className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800">
+              <ArrowLeft size={15} /> Back to patient list
+            </button>
+            <PatientHierarchyView tree={selectedTree} />
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export default function PgLogin() {
   const [user, setUser] = useState(null);
   const [checkingSession, setCheckingSession] = useState(() => !!getAuthToken('pg'));
@@ -327,13 +469,7 @@ export default function PgLogin() {
           </div>
         )}
         {activeTab === 'sign' && <BulkSign user={user} />}
-        {activeTab === 'patients' && (
-          <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center">
-            <UserRound size={40} className="mx-auto mb-3 text-slate-300" />
-            <h2 className="text-xl font-bold text-slate-700">Patients</h2>
-            <p className="mt-1 text-sm text-slate-400">Patient view for your physician group coming soon.</p>
-          </div>
-        )}
+        {activeTab === 'patients' && <PgPatients user={user} />}
         {activeTab === 'rcm' && <RcmTable pgId={pgId} />}
       </main>
     </div>

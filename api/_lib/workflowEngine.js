@@ -3,6 +3,7 @@ import {
   getItemTasks,
   getRunItems,
   getTaskRun,
+  restartItemFromTop,
   updateItem,
   updateRunStatus,
   updateTask,
@@ -198,6 +199,14 @@ export async function completeHumanTask({ taskRunId, notes, payload, definition 
   if (result.ok === false) {
     await updateItem(item.id, { status: 'failed', errorMessage: result.error || `${step.name} failed` });
   }
+
+  // 'Review failed' outcome: the review task itself completed above, but the
+  // item restarts from step 1 — reset every task row to pending and clear the
+  // stamped decisions, then let the automation walk the pipeline fresh.
+  if (result.restartItem) {
+    await restartItemFromTop(item.id, { note: result.restartNote || null });
+  }
+
   await runWorkflowAutomation({ runId: task.run_id, definition });
 
   return { task, result };

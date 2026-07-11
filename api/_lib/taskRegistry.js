@@ -9,10 +9,14 @@ import {
   gateSignatureExists,
   insertAiExtraction,
   isOrderSigned,
+  isRestartRewalk,
   loadEpisodeGateContext,
   makeEpisodeBillableClaimable,
   markOrderSignedByPhysician,
   markOrderSentToPhysician,
+  rekeyAdmissionDates,
+  rekeyEpisodeDates,
+  syncOrderRowFromItem,
   updateItem,
   updateTask,
   updateCpoMinutes,
@@ -685,7 +689,17 @@ export const taskRegistry = {
   'admission.resolve': async ({ item }) => {
     const bundle = item.extraction_payload?.patientBundle || {};
     const patientId = bundle.patientId || (await findPatient(item.patient_payload, item.reference_payload))?.id || null;
-    const { admission, existed } = await writeAdmissionBundle(item, patientId);
+    // Restart re-walk: corrected dates must RE-KEY the same admission row (a
+    // find-or-create with new dates would fork a duplicate and strand the order).
+    let admission = null;
+    let existed = false;
+    if (isRestartRewalk(item) && bundle.admissionId) {
+      admission = await rekeyAdmissionDates(item, bundle.admissionId);
+      if (admission) existed = true;
+    }
+    if (!admission) {
+      ({ admission, existed } = await writeAdmissionBundle(item, patientId));
+    }
     const admissionId = admission?.id || null;
     const decisions = setDecisions(item, {
       admission_ready: !!admissionId,
@@ -710,7 +724,17 @@ export const taskRegistry = {
   // a new episode is created and the order will attach to it.
   'episode.resolve': async ({ item }) => {
     const bundle = item.extraction_payload?.patientBundle || {};
-    const { episode, existed } = await writeEpisodeBundle(item, bundle.admissionId);
+    // Restart re-walk: corrected dates re-key the SAME episode row so the
+    // existing order stays attached (see admission.resolve).
+    let episode = null;
+    let existed = false;
+    if (isRestartRewalk(item) && bundle.episodeId) {
+      episode = await rekeyEpisodeDates(item, bundle.episodeId);
+      if (episode) existed = true;
+    }
+    if (!episode) {
+      ({ episode, existed } = await writeEpisodeBundle(item, bundle.admissionId));
+    }
     const episodeId = episode?.id || null;
     const decisions = setDecisions(item, {
       episode_ready: !!episodeId,
@@ -770,9 +794,20 @@ export const taskRegistry = {
   },
 
   // Duplicate order number: do not write anything. The existing order is left
-  // untouched; the row is marked as a skipped duplicate.
+  // untouched; the row is marked as a skipped duplicate. EXCEPTION — on a
+  // review-failed restart re-walk the worker's corrections must reach the
+  // persisted order row (fields + re-attachment), else the review loops on
+  // the same bad order forever.
   'order.skipDuplicate': async ({ item }) => {
-    const existing = await findOrder(item.order_payload?.order_info?.order_number);
+    let existing = await findOrder(item.order_payload?.order_info?.order_number);
+    let corrected = false;
+    if (existing && isRestartRewalk(item)) {
+      const synced = await syncOrderRowFromItem(item);
+      if (synced) {
+        existing = synced;
+        corrected = true;
+      }
+    }
     const decisions = setDecisions(item, {
       order_skipped_duplicate: true,
       order_write_success: false,
@@ -781,7 +816,7 @@ export const taskRegistry = {
       decisions,
       extractionPayload: { ...(item.extraction_payload || {}), orderId: existing?.id || null, orderSkipped: true },
     });
-    return { ok: true, output: { skipped: true, existingOrderId: existing?.id || null } };
+    return { ok: true, output: { skipped: true, existingOrderId: existing?.id || null, corrected } };
   },
 
   'order.create': async ({ item }) => runOrderWrite(item, false),
@@ -864,7 +899,15 @@ export const taskRegistry = {
     if (task?.id) {
       await updateTask(task.id, { actionState: outputs });
     }
-    return { ok: true, output: { actionResults: results, actionOutputs: outputs } };
+    // A failed record review completes THIS task but restarts the whole item
+    // from step 1 — the engine (completeHumanTask) resets every task row and
+    // clears decisions via restartItemFromTop when restartItem is set.
+    const failedReview = Object.values(outputs).find((output) => output && output.review === 'failed');
+    return {
+      ok: true,
+      ...(failedReview ? { restartItem: true, restartNote: failedReview.note || null } : {}),
+      output: { actionResults: results, actionOutputs: outputs },
+    };
   },
 
   'signing.reviewReadiness': async ({ item }) => {
@@ -910,6 +953,36 @@ export const taskRegistry = {
     });
     await updateItem(item.id, { orderPayload, decisions });
     return { ok: true, output: { sent: true, orderId, SentToPhysicianDate: date } };
+  },
+
+  // SYSTEM auto-send for the signature gate: mark EVERY unsigned order on the
+  // item's episode 'sent to the physician portal' (SentToPhysicianDate +
+  // SendToPhysician_Status), so they appear in the PG portal's Bulk Sign list
+  // (/pg-login) for the physician to sign. The signature gate is re-evaluated
+  // by the next daily run / auto-resolver once signing happens.
+  'signing.sendEpisodeOrdersToPhysician': async ({ item }) => {
+    const date = await businessToday(); // SIM: send date follows the business clock
+    const ctx = await loadEpisodeGateContext(item);
+    const unsigned = ctx ? ctx.episodeOrders.filter((order) => !isOrderSigned(order)) : [];
+    const sentOrderNumbers = [];
+    for (const order of unsigned) {
+      await markOrderSentToPhysician(order.id, date);
+      sentOrderNumbers.push(order.order_number || order.id);
+    }
+    const decisions = setDecisions(item, {
+      signing_sent_to_physician: sentOrderNumbers.length > 0,
+      signing_sent_at: date,
+    });
+    await updateItem(item.id, { decisions });
+    return {
+      ok: true,
+      output: {
+        sent_to_physician_portal: sentOrderNumbers.length,
+        orderNumbers: sentOrderNumbers,
+        portal: '/pg-login',
+        SentToPhysicianDate: date,
+      },
+    };
   },
 
   'signing.checkSigned': async ({ item }) => {

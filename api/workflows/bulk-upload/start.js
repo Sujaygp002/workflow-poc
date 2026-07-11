@@ -303,7 +303,14 @@ async function registerRunDocuments({ runId, hhahId, pdfs, zipPdfs }) {
 async function ensureDailyRun(workflow) {
   const trigger = workflow.definition?.trigger || {};
   const tz = trigger.tz || 'America/Chicago';
-  const { dayBucket } = await nowPartsInTz(tz);
+  // A def saved with a bad IANA tz must not 500 every agency upload — fall
+  // back to the default zone (Intl throws RangeError on invalid names).
+  let dayBucket;
+  try {
+    ({ dayBucket } = await nowPartsInTz(tz));
+  } catch {
+    ({ dayBucket } = await nowPartsInTz('America/Chicago'));
+  }
   const sourceLabel = dailySourceLabel(workflow.id, dayBucket);
 
   let run = await findWorkflowRunBySourceLabel(workflow.id, sourceLabel);

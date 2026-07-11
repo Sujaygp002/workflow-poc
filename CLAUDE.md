@@ -117,6 +117,68 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-07-11** — **Worker task UX overhaul (per-type LHS/RHS layouts), review-failed restart,
+  real Create-CCN, system auto-send-to-portal, entity edit, PG portal Patients tab, builder
+  editor polish; def rewired to Create CCN → Submit claim.**
+  - **Worker task layouts** (`WorkerTaskDetail.jsx` rewritten): per-task-kind layouts —
+    *Extract & fill*: LHS order PDF (+ confirm-document checkbox), RHS the FULL create-patient/
+    order form (`FULL_FORM_SECTIONS`, prefilled, missing fields highlighted, incl. new order
+    fields CPO minutes / justification title / justification note → `order_payload.order_status`).
+    *Enter admission/episode dates*: LHS order PDF, RHS date box. *Review record*: LHS the
+    patient's real DB orders (`payload.patientOrders`), RHS the full patient object module
+    (`payload.patientTree` → shared `PatientHierarchyView`), note + **Review passed / Review
+    failed** buttons. *Get missing documents*: same agency-outreach layout as the contact task
+    (graph t6 actions now call/sms/email). *Get & fill patient data*: LHS patient module with
+    missing-field highlights + editor, RHS the patient's orders. *Create CCN*: LHS patient module
+    (episode + existing CC notes), RHS the CCN form (note title / note text / note type
+    [Preventive Care|Safety|Goals|Medications] / CPO minutes / month). Done-bucket raw
+    `key: value` output chips replaced by plain-language `ActionOutcome` sentences
+    (`describeActionOutput`); raw actionKey chips removed from action cards.
+  - **Review failed ⇒ restart from top**: `review_record` action now takes
+    `{outcome:'passed'|'failed', note}` (legacy `{approved:true}` still accepted).
+    `human.performActions` surfaces `restartItem`; `completeHumanTask` calls new
+    `repositories.restartItemFromTop` — resets every task row of the item to pending, clears
+    `decisions` (conditions re-derive; patient/order/admission/episode existence checks are
+    live-computed), stamps `extraction_payload.reviewRestarts[{at,note}]`, item back to running,
+    then the automation re-walks from step 1 (idempotent writes; second pass takes order_exists
+    → skip-duplicate).
+  - **Create CCN is real** (`repositories.createManualCcnNote`): upserts the episode's
+    `cpo_months` row for the chosen month (default: episode SOE month), appends the note to
+    `reason.ccNotes` tagged `generated_by:'human'` (never physician-signed), adds the minutes to
+    `cpo_min` and re-derives billable status. **Bugfix**: `updateCpoMinutes` now MERGES `reason`
+    instead of replacing it (it used to clobber stored ccNotes). `PatientHierarchyView` renders a
+    violet **CC Notes (CCN)** section inside each live episode (title/type/minutes/month/text +
+    coordinator-vs-AI pill) and shows order-level CPO min/justification on order rows.
+  - **Signature gate is now a SYSTEM step**: new catalog action `send_orders_to_physician_portal`
+    → `signing.sendEpisodeOrdersToPhysician` (marks ALL unsigned episode orders
+    SentToPhysicianDate/SendToPhysician_Status so they appear in the PG Bulk-Sign list; async
+    gate re-evaluated by the next daily run). Graph t8 human → system.
+  - **Def graph** (`docs/phase1-agency-upload.graph.json`): t5 review is the single
+    review_record action; t6 = call/sms/email outreach; t8 system auto-send; **t10a/t10b (Audit
+    RCM records & resolve failures) deleted** — tail is now Create CCN (t9a/b) → Submit claim
+    (t11a/b) on both arms; 25 steps / 4 megaGroups. Old runs pin the old def and still complete
+    against the new code (review accepts legacy approved, get_missing_documents +
+    send_for_signature human actions kept in the catalog).
+  - **Work-items open response**: now includes `payload.patientOrders` (new
+    `listOrdersForPatient`, with matched PDF blob) and `payload.patientTree` (`getPatientTree`)
+    — best-effort, absent for Done-bucket rows.
+  - **Entity page edit**: pencil-edit on agency/PG/practitioner rows → inline form edit mode →
+    new `reference-data` actions `updateAgency`/`updatePg`/`updatePractitioner` → new
+    `updateHhahEntity`/`updatePgEntity`/`updatePractitionerEntity` (blank keeps current,
+    contact_info merged so PG physician_ids survive, renames recompute normalized_name,
+    23505 → 400).
+  - **PG portal Patients tab implemented** (was a "coming soon" placeholder — the reason the
+    coverage map showed 11 shared Nightingale↔Prima Care patients but the portal showed none;
+    live check: `/api/patients?pgId=<prima>` returns exactly 11). `fetchPatients` gained pgId;
+    list + `PatientHierarchyView` drilldown mirrors the HHAH portal.
+  - **Builder editor polish** (`WorkflowBuilder.jsx`): collapsed one-line node rows (expand to
+    edit), node up/down reordering, tinted group frames around consecutive group members,
+    daily_time hour/minute/tz trigger inputs (params preserved across radio toggles), readable
+    label sizes, humanized "Worker fills" hints, quiet insert pills, raw workflow ids removed
+    from headers (kept as tooltips). Round-trip (graphToSeq/seqToGraph/compilePreview) untouched.
+  - lint + build pass. Deployed to AWS (push to main → ECS); new def version published via the
+    live `saveWorkflow` endpoint after deploy.
+
 - **2026-07-11** — **"Objects this run" sidebar redesigned as a belongs-to ladder (winning
   mockup candidate A).** `RunObjectSidebar` in `WorkflowDefinitionFlow.jsx`: the circle-chain
   (`ObjectCircleNode` + `OBJECT_TONES`) replaced by `ObjectLadderCard` + `OBJECT_META` — one

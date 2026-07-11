@@ -1,4 +1,4 @@
-// Entities: GET = reference data snapshot; POST = create agency / PG /
+// Entities: GET = reference data snapshot; POST = create / update agency, PG,
 // practitioner + PG↔practitioner mapping (Entity page).
 import { handleError, methodNotAllowed, readJson, sendJson } from '../_lib/http.js';
 import {
@@ -7,6 +7,9 @@ import {
   createPractitionerFromPayload,
   listReferenceData,
   mapPgToPractitioner,
+  updateHhahEntity,
+  updatePgEntity,
+  updatePractitionerEntity,
 } from '../_lib/repositories.js';
 import { httpError } from '../_lib/auth.js';
 import { normalizeNpi } from '../_lib/normalizers.js';
@@ -34,6 +37,24 @@ async function createPractitioner({ name, npi }) {
   return { practitioner };
 }
 
+// Update-by-id wrappers. Unique-key collisions (rename to an existing
+// normalized_name, NPI already taken) surface as a 400, not a 500.
+function requireId(id) {
+  if (!id) throw httpError(400, 'id is required');
+}
+
+async function runUpdate(fn, body, entityLabel) {
+  try {
+    return await fn(body);
+  } catch (error) {
+    if (String(error?.code) === '23505') {
+      throw httpError(400, `Another ${entityLabel} already uses that name/NPI`);
+    }
+    if (/not found/i.test(error?.message || '')) throw httpError(404, error.message);
+    throw error;
+  }
+}
+
 export default async function handler(req, res) {
   try {
     if (req.method === 'GET') {
@@ -49,6 +70,15 @@ export default async function handler(req, res) {
         return sendJson(res, 201, await createPg(body));
       case 'createPractitioner':
         return sendJson(res, 201, await createPractitioner(body));
+      case 'updateAgency':
+        requireId(body.id);
+        return sendJson(res, 200, { agency: await runUpdate(updateHhahEntity, body, 'agency') });
+      case 'updatePg':
+        requireId(body.id);
+        return sendJson(res, 200, { pg: await runUpdate(updatePgEntity, body, 'physician group') });
+      case 'updatePractitioner':
+        requireId(body.id);
+        return sendJson(res, 200, { practitioner: await runUpdate(updatePractitionerEntity, body, 'practitioner') });
       case 'mapPgPractitioner':
         return sendJson(res, 200, await mapPgToPractitioner({
           pgId: body.pgId,

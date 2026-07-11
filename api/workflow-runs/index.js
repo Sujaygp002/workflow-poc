@@ -173,7 +173,16 @@ async function dailyTimeTickHandler() {
     const tz = trigger.tz || 'America/Chicago';
     const targetHour = Number.isFinite(Number(trigger.hour)) ? Number(trigger.hour) : 12;
     const targetMinute = Number.isFinite(Number(trigger.minute)) ? Number(trigger.minute) : 0;
-    const { dayBucket, hour, minute } = await nowPartsInTz(tz);
+    // One workflow's bad tz must not abort the tick for every other workflow
+    // (Intl.DateTimeFormat throws RangeError on invalid IANA names).
+    let nowParts;
+    try {
+      nowParts = await nowPartsInTz(tz);
+    } catch {
+      skipped.push({ workflowId: workflow.id, reason: `invalid_tz_${tz}` });
+      continue;
+    }
+    const { dayBucket, hour, minute } = nowParts;
     const beforeFireTime = hour * 60 + minute < targetHour * 60 + targetMinute;
 
     const sourceLabel = dailySourceLabel(workflow.id, dayBucket);

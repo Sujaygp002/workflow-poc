@@ -60,8 +60,7 @@ function SystemWorkflowCard({ wf }) {
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-semibold text-slate-800">{wf.name}</span>
-              <span className="font-mono text-[11px] text-slate-400">{wf.id}</span>
+              <span className="font-semibold text-slate-800" title={`ID ${wf.id}`}>{wf.name}</span>
               <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 font-medium">
                 System · read-only
               </span>
@@ -138,8 +137,7 @@ function BuilderWorkflowCard({ wf, onEdit, onDeleted }) {
               <span className="text-[10px] font-black uppercase tracking-wide border rounded-full px-2 py-0.5 bg-violet-100 text-violet-700 border-violet-200">
                 Builder
               </span>
-              <span className="font-semibold text-slate-800">{wf.name}</span>
-              <span className="font-mono text-[11px] text-slate-400">{wf.id}</span>
+              <span className="font-semibold text-slate-800" title={`ID ${wf.id}`}>{wf.name}</span>
               {wf.version && <span className="font-mono text-[11px] text-slate-400">v{wf.version}</span>}
             </div>
             {wf.description && <p className="text-sm text-slate-500 mt-1">{wf.description}</p>}
