@@ -85,6 +85,22 @@ function readRows(sheet, headerMap) {
   return rows;
 }
 
+// Split a single free-form Address cell ("street, city, state, zip") into
+// parts. The workbook carries one Address column, but the downstream
+// patient-data-complete gate needs city/state/zip — leaving them blank stranded
+// every billable item at the "Get and fill patient data" gate. Best-effort:
+// last segment = zip, second-last = state, third-last = city, remainder =
+// street. Degrades gracefully for shorter/odd addresses.
+function splitAddress(raw) {
+  const parts = String(raw || '').split(',').map((s) => cleanString(s)).filter(Boolean);
+  if (parts.length >= 4) {
+    return { street: parts.slice(0, parts.length - 3).join(', '), city: parts[parts.length - 3], state: parts[parts.length - 2], zip: parts[parts.length - 1] };
+  }
+  if (parts.length === 3) return { street: parts[0], city: parts[1], state: parts[2], zip: '' };
+  if (parts.length === 2) return { street: parts[0], city: parts[1], state: '', zip: '' };
+  return { street: raw || '', city: '', state: '', zip: '' };
+}
+
 function diagnosisCodes(patientRow) {
   return [
     patientRow.Diagnosis1,
@@ -191,11 +207,8 @@ function makePatientPayload(patientRow, referencePayload) {
     },
     personal_information: {
       address: {
-        street: patientRow?.address || '',
-        city: '',
-        state: '',
+        ...splitAddress(patientRow?.address),
         county: '',
-        zip: '',
       },
       phone_number: '',
       alternative_phone_number: '',
