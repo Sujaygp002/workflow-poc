@@ -117,6 +117,22 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-07-11** — **CCN tail de-duplicated (single Create CCN → Submit claim) + group renamed.**
+  The billing gates were an eligible/not-eligible FORK whose two arms (eligible + signature-passed)
+  each carried their own make_billable → Create CCN → Submit claim tail (a/b idempotent twins) — the
+  builder compiler cannot converge two differently-conditioned branch-walks on one node, so the tail
+  showed twice. Fixed by making the gates LINEAR: `check_episode_eligibility` (n9, now informational)
+  flows straight into check-documents → check-patient-data → check-signature; each failing gate
+  branches to its own terminal (t6 outreach / t7 fill / t8 system auto-send), and the all-pass path
+  (c10 signature_exists TRUE) falls through to a SINGLE `make_billable_claimable` (n10) → `Create CCN`
+  (t9) → `Submit claim` (t11). Dropped c7/n10a/t9b/t11b. Behavior note: an eligible episode with
+  incomplete demographics now routes to Get-and-fill-patient-data instead of billing directly (more
+  correct; and the demo data mostly hits the docs-missing gate anyway, so no demo-flow change).
+  Group `g-ccn-audit` renamed **"CCN, Audit & Submit Claim" → "CCN, Submit Claim"** (nodeIds [t9,t11]).
+  Compiles to 22 steps; published live as def cc-1783522521545 **v3** (verified: make_billable/Create
+  CCN/Submit claim each appear exactly once, twin ids gone, episode_eligible fork gone). Pure graph
+  change — no code/redeploy needed.
+
 - **2026-07-11** — **Worker task UX overhaul (per-type LHS/RHS layouts), review-failed restart,
   real Create-CCN, system auto-send-to-portal, entity edit, PG portal Patients tab, builder
   editor polish; def rewired to Create CCN → Submit claim.**

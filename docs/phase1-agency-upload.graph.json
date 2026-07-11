@@ -1,6 +1,6 @@
 {
   "name": "Agency Bulk Upload — Daily Intake",
-  "description": "Daily agency intake. Fires once per day per onboarded agency at 12:00 America/Chicago. If the agency has NOT uploaded today, one human task reaches out (call / sms via twilio + a real email) and the branch ends. If it HAS uploaded, the object model is built end to end: a human task extracts & fills the patient/order data from the uploaded documents (and confirms an ambiguous order PDF), patient resolve (create vs update), admission date-gap fill then resolve, episode date-gap fill then resolve, order create vs skip-duplicate, and a record review (Review passed continues; Review failed restarts the item from step 1). AFTER review, post-model billing gates run: episode-eligibility -> make billable/claimable; not eligible -> document / patient-data gates each routing an async remediation human task that the next daily run re-evaluates; the signature gate auto-sends unsigned orders to the physician PG portal (system step). AFTER make billable/claimable, the tail runs: a human 'Create CCN' task (real CCN fields: note title / text / type / CPO minutes), then a human 'Submit claim' gate (confirm-only; records submitted_at + amounts; no external call).",
+  "description": "Daily agency intake. Fires once per day per onboarded agency at 12:00 America/Chicago. If the agency has NOT uploaded today, one human task reaches out (call / sms via twilio + a real email) and the branch ends. If it HAS uploaded, the object model is built end to end: a human task extracts & fills the patient/order data from the uploaded documents (and confirms an ambiguous order PDF), patient resolve (create vs update), admission date-gap fill then resolve, episode date-gap fill then resolve, order create vs skip-duplicate, and a record review (Review passed continues; Review failed restarts the item from step 1). AFTER review, post-model billing gates run linearly: check 485+F2F documents, patient data completeness, and physician signature. A failing gate routes an async remediation human task (documents / patient data) or auto-sends unsigned orders to the physician PG portal (system step); each is re-evaluated by the next daily run. When all gates pass, make billable/claimable runs once, then the tail: a human 'Create CCN' task (real CCN fields: note title / text / type / CPO minutes), then a human 'Submit claim' gate (confirm-only; records submitted_at + amounts; no external call).",
   "trigger": { "type": "daily_time", "hour": 12, "minute": 0, "tz": "America/Chicago" },
   "graph": {
     "entry": "n1",
@@ -20,17 +20,14 @@
       {
         "id": "g-gates",
         "name": "Post-Model Billing Gates",
-        "info": "After the record review, re-derive the episode's state from the real DB rows: eligible -> make billable/claimable; not eligible -> check 485+F2F documents, patient data completeness, and physician signature, each routing an async remediation task the next daily run re-evaluates. (make_billable_claimable appears on both the eligible arm and the signature-pass arm — the DAG cannot converge two branch-walks on one node, and the step is idempotent.)",
-        "nodeIds": ["n9", "n10a", "n11", "t6", "n12", "t7", "n13", "n10b", "t8"]
+        "info": "After the record review, re-derive the episode's state from the real DB rows and run the gates linearly: check 485+F2F documents, patient data completeness, and physician signature. A failed gate routes an async remediation task (docs/data) or auto-sends unsigned orders to the physician portal — each re-evaluated by the next daily run. When all gates pass, make billable/claimable runs once and the CCN + submit tail follows.",
+        "nodeIds": ["n9", "n11", "t6", "n12", "t7", "n13", "n10", "t8"]
       },
       {
         "id": "g-ccn-audit",
-        "name": "CCN, Audit & Submit Claim",
-        "info": "After make billable/claimable, exactly TWO human tasks: 'Create CCN' (the coordinator writes the CC note — note title, note text, note type, CPO minutes — persisted inside the episode's CPO month like an order lives inside the episode), then 'Submit claim' (confirm-only gate, records submitted_at + amounts, NO external call). The tail is instantiated on BOTH make_billable arms (eligible arm 'a' + signature-pass arm 'b') — idempotent twins, because the frozen DAG cannot converge two branch-walks on a single node.",
-        "nodeIds": [
-          "t9a", "t11a",
-          "t9b", "t11b"
-        ]
+        "name": "CCN, Submit Claim",
+        "info": "After make billable/claimable, exactly TWO human tasks: 'Create CCN' (the coordinator writes the CC note — note title, note text, note type, CPO minutes — persisted inside the episode's CPO month like an order lives inside the episode), then 'Submit claim' (confirm-only gate, records submitted_at + amounts, NO external call).",
+        "nodeIds": ["t9", "t11"]
       }
     ],
     "nodes": [
@@ -188,26 +185,9 @@
         "id": "n9",
         "kind": "system",
         "name": "Check episode eligibility",
-        "description": "Re-derive the episode's eligibility from the real DB rows (signed 485 + valid F2F window). Stamps episode_eligible / episode_not_eligible.",
+        "description": "Re-derive the episode's eligibility from the real DB rows (signed 485 + valid F2F window). Stamps episode_eligible / episode_not_eligible (informational). The billing gates below then run linearly for every item.",
         "actionKey": "check_episode_eligibility",
-        "next": "c7"
-      },
-      {
-        "id": "c7",
-        "kind": "condition",
-        "name": "Episode eligible?",
-        "conditionKey": "episode_eligible",
-        "ifTrue": "n10a",
-        "ifFalse": "n11",
-        "join": null
-      },
-      {
-        "id": "n10a",
-        "kind": "system",
-        "name": "Make billable / claimable",
-        "description": "Episode is eligible — flip the patient's latest-episode status toward billable/claimable (denormalized). Stamps billable_claimable. Continues into the CCN + audit/submit tail (arm a).",
-        "actionKey": "make_billable_claimable",
-        "next": "t9a"
+        "next": "n11"
       },
       {
         "id": "n11",
@@ -278,17 +258,17 @@
         "kind": "condition",
         "name": "Signature exists?",
         "conditionKey": "signature_exists",
-        "ifTrue": "n10b",
+        "ifTrue": "n10",
         "ifFalse": "t8",
         "join": null
       },
       {
-        "id": "n10b",
+        "id": "n10",
         "kind": "system",
         "name": "Make billable / claimable",
-        "description": "Documents + data + signature all present — flip the patient's latest-episode status toward billable/claimable (denormalized). Stamps billable_claimable. Idempotent twin of n10a for the signature-pass path. Continues into the CCN + audit/submit tail (arm b).",
+        "description": "Documents + data + signature all present — flip the patient's latest-episode status toward billable/claimable (denormalized, idempotent). Stamps billable_claimable, then the CCN + submit tail runs.",
         "actionKey": "make_billable_claimable",
-        "next": "t9b"
+        "next": "t9"
       },
       {
         "id": "t8",
@@ -299,43 +279,21 @@
       },
 
       {
-        "id": "t9a",
+        "id": "t9",
         "kind": "task",
         "name": "Create CCN",
-        "description": "A coordinator writes the CCN — note title, note text, note type, CPO minutes — persisted inside the episode's CPO month (a CCN lives inside the episode, like an order). Then the claim is ready to submit. (Arm a — eligible path.)",
+        "description": "A coordinator writes the CCN — note title, note text, note type, CPO minutes — persisted inside the episode's CPO month (a CCN lives inside the episode, like an order). Then the claim is ready to submit.",
         "assigneeEmployeeId": "EMPLOYEE_ID_PLACEHOLDER",
         "actions": [
           { "id": "a_ccn", "actionKey": "create_ccn_manually", "label": "Create CCN" }
         ],
-        "next": "t11a"
+        "next": "t11"
       },
       {
-        "id": "t11a",
+        "id": "t11",
         "kind": "task",
         "name": "Submit claim",
-        "description": "HUMAN GATE — confirm the claim is reviewed and ready. Records submitted_at + the summed claim amount and flips the agency's RCM records to submitted. NO external call. (Arm a — end of the eligible path.)",
-        "assigneeEmployeeId": "EMPLOYEE_ID_PLACEHOLDER",
-        "actions": [
-          { "id": "a_submit", "actionKey": "submit_claim", "label": "Submit claim" }
-        ]
-      },
-
-      {
-        "id": "t9b",
-        "kind": "task",
-        "name": "Create CCN",
-        "description": "A coordinator writes the CCN — note title, note text, note type, CPO minutes — persisted inside the episode's CPO month (a CCN lives inside the episode, like an order). Then the claim is ready to submit. (Arm b — signature-pass path, idempotent twin of t9a.)",
-        "assigneeEmployeeId": "EMPLOYEE_ID_PLACEHOLDER",
-        "actions": [
-          { "id": "a_ccn", "actionKey": "create_ccn_manually", "label": "Create CCN" }
-        ],
-        "next": "t11b"
-      },
-      {
-        "id": "t11b",
-        "kind": "task",
-        "name": "Submit claim",
-        "description": "HUMAN GATE — confirm the claim is reviewed and ready. Records submitted_at + the summed claim amount and flips the agency's RCM records to submitted. NO external call. (Arm b — end of the signature-pass path.)",
+        "description": "HUMAN GATE — confirm the claim is reviewed and ready. Records submitted_at + the summed claim amount and flips the agency's RCM records to submitted. NO external call.",
         "assigneeEmployeeId": "EMPLOYEE_ID_PLACEHOLDER",
         "actions": [
           { "id": "a_submit", "actionKey": "submit_claim", "label": "Submit claim" }
