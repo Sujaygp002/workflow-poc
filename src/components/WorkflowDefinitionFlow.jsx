@@ -553,36 +553,44 @@ export function runObjectStats(run) {
 }
 
 // ── Run object side box ───────────────────────────────
-// A nested tree of the domain hierarchy per object type, plus a "before trigger"
-// summary of how many already existed.
+// A circle-chain diagram of the domain hierarchy per object type (same visual
+// language as the Coverage Map balls), plus a "before trigger" summary of how
+// many already existed.
 //
-// The domain chain (parent → child) the tree indents along:
+// The domain chain (parent → child) the circles connect along:
 const OBJECT_CHAIN = ['Patient Unit', 'Patient Record', 'Admission Object', 'Episode Object', 'Order'];
 
-// Small colored count badges — green created, sky updated, slate existed —
-// matching the Tailwind idiom used elsewhere in this file.
-function ObjectBadges({ row }) {
-  return (
-    <div className="mt-0.5 flex flex-wrap items-center gap-1">
-      <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-black text-emerald-700">{row.created} created</span>
-      <span className="rounded bg-sky-50 px-1.5 py-0.5 text-[10px] font-black text-sky-700">{row.updated} updated</span>
-      {row.existed > 0 && (
-        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-black text-slate-600">{row.existed} existed</span>
-      )}
-    </div>
-  );
-}
+// One color tone per hierarchy level, echoing the map's color-coded balls.
+const OBJECT_TONES = {
+  'Patient Unit': 'border-violet-300 bg-violet-50 text-violet-700',
+  'Patient Record': 'border-sky-300 bg-sky-50 text-sky-700',
+  'Admission Object': 'border-emerald-300 bg-emerald-50 text-emerald-700',
+  'Episode Object': 'border-amber-300 bg-amber-50 text-amber-700',
+  Order: 'border-rose-300 bg-rose-50 text-rose-700',
+};
 
-function ObjectTreeNode({ row, depth }) {
-  // Progressive indentation: each level steps in further, with a left border
-  // as the connector line so the parent→child chain reads as a tree.
+// A colored circle holding the created count, chained to the next level by a
+// vertical connector line; updated/existed render as chips beside the circle.
+function ObjectCircleNode({ row, last }) {
+  const tone = OBJECT_TONES[row.object] || 'border-slate-300 bg-white text-slate-600';
   return (
-    <li
-      className={depth > 0 ? 'border-l border-slate-200 pl-3' : ''}
-      style={depth > 0 ? { marginLeft: (depth - 1) * 14 } : undefined}
-    >
-      <div className="text-[11px] font-semibold text-slate-700">{row.object}</div>
-      <ObjectBadges row={row} />
+    <li className="flex items-stretch gap-2.5">
+      <div className="flex flex-col items-center">
+        <div className={`flex h-11 w-11 shrink-0 flex-col items-center justify-center rounded-full border-2 ${tone}`}>
+          <span className="text-sm font-black leading-none">{row.created}</span>
+          <span className="text-[8px] font-bold uppercase leading-none opacity-70">new</span>
+        </div>
+        {!last && <div className="w-px flex-1 bg-slate-300" style={{ minHeight: 12 }} />}
+      </div>
+      <div className="pb-3 pt-1">
+        <div className="text-[11px] font-semibold text-slate-700">{row.object}</div>
+        <div className="mt-0.5 flex flex-wrap items-center gap-1">
+          <span className="rounded bg-sky-50 px-1.5 py-0.5 text-[10px] font-black text-sky-700">{row.updated} updated</span>
+          {row.existed > 0 && (
+            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-black text-slate-600">{row.existed} existed</span>
+          )}
+        </div>
+      </div>
     </li>
   );
 }
@@ -591,30 +599,18 @@ export function RunObjectSidebar({ run }) {
   const rows = runObjectStats(run);
   if (!rows) return null;
   const anyExisted = rows.some((r) => r.existed > 0);
-  // The run's objects form the patient hierarchy only when they are a prefix of
-  // the domain chain (Patient Unit → … → Order). Otherwise fall back to a flat
-  // list so non-hierarchy workflows still render sensibly.
+  // Connectors only make sense when the objects form the patient hierarchy
+  // (a prefix of the domain chain); other workflows get standalone circles.
   const isPatientChain =
     rows.length > 0 && rows.every((r, i) => r.object === OBJECT_CHAIN[i]);
   return (
     <aside className="w-60 shrink-0 rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
       <div className="mb-2 text-[11px] font-black uppercase tracking-wide text-slate-400">Objects this run</div>
-      {isPatientChain ? (
-        <ul className="space-y-2">
-          {rows.map((r, i) => (
-            <ObjectTreeNode key={r.object} row={r} depth={i} />
-          ))}
-        </ul>
-      ) : (
-        <ul className="space-y-2">
-          {rows.map((r) => (
-            <li key={r.object}>
-              <div className="text-[11px] font-semibold text-slate-700">{r.object}</div>
-              <ObjectBadges row={r} />
-            </li>
-          ))}
-        </ul>
-      )}
+      <ul>
+        {rows.map((r, i) => (
+          <ObjectCircleNode key={r.object} row={r} last={!isPatientChain || i === rows.length - 1} />
+        ))}
+      </ul>
       {anyExisted && (
         <div className="mt-3 border-t border-slate-200 pt-2">
           <div className="text-[10px] font-black uppercase tracking-wide text-slate-400">before trigger</div>

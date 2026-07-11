@@ -50,16 +50,51 @@ The **Orchestrator** is the live scoreboard:
 - A **time-travel control** jumps the clock a day forward so you can watch the
   next day's run happen — then reset it back.
 
-And the people doing the activities each have their own door in:
+And the people doing the activities each have their own door in — three
+separate logins, each with its own screen.
 
-- **Agency sign-in (HHAH portal)** — upload the paperwork (one spreadsheet of
-  patients plus signed/unsigned order PDFs), see reminder notices, see their
-  own patients and RCM Table.
-- **Doctor-group sign-in (PG portal)** — see the orders waiting for a
-  signature and **Bulk Sign** the whole batch at once.
-- **Employee sign-in (EMPLOYEE portal)** — a to-do list in three columns
-  (**Untouched / Processing / Done**): open a task, read the documents, type in
-  the missing details, mark it complete.
+### 3a. Agency login — the HHAH portal
+
+This is where a home-health agency hands its paperwork in.
+
+- **Sign in** with the username and password made for the agency.
+- **Upload in one click:** the agency's files are already loaded in — a
+  spreadsheet of patients plus two ZIPs of order PDFs (one unsigned, one
+  signed) — so they just press **Start Upload**.
+- See a **reminder notice** at the top when today's upload is owed and hasn't
+  come in yet.
+- Browse **their own patients**, and open a patient to see the orders listed
+  under it.
+- **Open an order** to read its PDF right on the page.
+- See the **RCM Table** — the billing view for their patients.
+
+### 3b. Internal users — the EMPLOYEE portal
+
+This is where a staff member picks up the human steps of the workflow.
+
+- **Sign in** with an employee username and password.
+- Work from three to-do columns: **Untouched / Processing / Done**, with live
+  counts.
+- **Open a task** and it moves from Untouched to Processing.
+- The task shows the **context** it needs — the patient and order details, and
+  the order PDF — and asks for exactly what that step needs.
+- **Type in the missing details** and **tick the checklist items** to confirm
+  the work.
+- **Complete the task** and it drops into Done — and the workflow moves on to
+  its next step.
+
+### 3c. Doctor-group login — the PG portal
+
+This is where a physician group signs the orders that are waiting on them.
+
+- **Sign in** with the doctor group's username and password.
+- The portal knows if you are a **doctor** or an **admin** — a doctor signs
+  with their own name and NPI; an admin sees the group's screens.
+- See the **list of orders** that were sent for signature and are still
+  waiting.
+- **Tick** the orders you want (or tick all) and press **Bulk Sign** to sign
+  the whole batch at once.
+- See the **RCM Table** — the billing view for the whole group.
 
 ## How it all fits together
 
