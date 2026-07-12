@@ -28,6 +28,9 @@ import {
 } from '../../components/WorkflowDefinitionFlow';
 import WorkflowBuilder from './WorkflowBuilder';
 
+// Set to true to re-enable workflow authoring (Create + Edit) in the UI.
+const WORKFLOW_AUTHORING_ENABLED = false;
+
 function FlowBody({ wf, accent = 'slate' }) {
   // One titled, cohesive workflow lane (START · trigger → steps → END). tasks=[]
   // is a static definition view (no live run counts).
@@ -151,12 +154,14 @@ function BuilderWorkflowCard({ wf, onEdit, onDeleted }) {
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
             <FlowToggle showFlow={showFlow} onToggle={() => setShowFlow((v) => !v)} />
-            <button
-              onClick={() => onEdit(wf)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border bg-white text-slate-600 border-slate-200 hover:border-violet-300"
-            >
-              <Pencil size={13} /> Edit
-            </button>
+            {WORKFLOW_AUTHORING_ENABLED && (
+              <button
+                onClick={() => onEdit(wf)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border bg-white text-slate-600 border-slate-200 hover:border-violet-300"
+              >
+                <Pencil size={13} /> Edit
+              </button>
+            )}
             <button
               onClick={handleRun}
               disabled={running}
@@ -246,12 +251,14 @@ export default function WorkflowList() {
           <button onClick={refresh} className="flex items-center gap-2 px-3 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh
           </button>
-          <button
-            onClick={() => setEditor({ workflow: null })}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-white bg-violet-600 rounded-lg hover:bg-violet-700"
-          >
-            <Plus size={15} /> New workflow
-          </button>
+          {WORKFLOW_AUTHORING_ENABLED && (
+            <button
+              onClick={() => setEditor({ workflow: null })}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-white bg-violet-600 rounded-lg hover:bg-violet-700"
+            >
+              <Plus size={15} /> New workflow
+            </button>
+          )}
         </div>
       </div>
 
@@ -267,7 +274,7 @@ export default function WorkflowList() {
           <div>
             <span className="font-bold">{docUploadBuilders.length} active builder workflows share the Document upload trigger</span>
             {' '}— a single HHAH upload will start a run of <span className="font-bold">each</span> of them:
-            {' '}{docUploadBuilders.map((wf) => wf.name).join(', ')}. Edit or delete the extras if that is not intended.
+            {' '}{docUploadBuilders.map((wf) => wf.name).join(', ')}.{WORKFLOW_AUTHORING_ENABLED ? ' Edit or delete the extras if that is not intended.' : ' Delete any extras if that is not intended.'}
           </div>
         </div>
       )}
@@ -281,7 +288,9 @@ export default function WorkflowList() {
       </div>
       {builders.length === 0 ? (
         <div className="mb-8 rounded-xl border border-dashed border-slate-300 bg-white px-4 py-8 text-center text-sm text-slate-400">
-          No builder workflows yet — click <span className="font-bold text-violet-600">New workflow</span> to create one.
+          {WORKFLOW_AUTHORING_ENABLED
+            ? <>No builder workflows yet — click <span className="font-bold text-violet-600">New workflow</span> to create one.</>
+            : 'No builder workflows yet.'}
         </div>
       ) : (
         <div className="mb-8 grid gap-4">

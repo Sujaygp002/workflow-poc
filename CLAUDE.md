@@ -117,6 +117,47 @@ runtime and DB), so prefer build/lint for verification.
 
 Newest first. Add an entry for each change made by Claude Code.
 
+- **2026-07-12** — **Stakeholder login gate + workflow authoring hidden + Employees task stats +
+  Coverage-Map as-of dates + "Objects this run" agency—PG—practitioner ladder.** Five features
+  built by parallel dev workflows (disjoint file ownership), each adversarially tested, then
+  build-gated and PM-reviewed before deploy:
+  - **Command Center login** (`src/pages/CommandCenterLogin.jsx` new, `src/App.jsx`): the admin
+    SPA (Workflow/Orchestrator/Coverage Map/Employees/Entity/External Users) is now behind a
+    client-side demo gate at `/login` — username `test123` / password `test123`, sessionStorage
+    `cc_admin_token`, redirect-back-to-origin, sidebar Sign out. `/hhh-login`, `/pg-login`,
+    `/worker` stay standalone and ungated. (POC gate, not security — the API surface is
+    unchanged.)
+  - **Workflow authoring hidden** (`WorkflowList.jsx`): single `WORKFLOW_AUTHORING_ENABLED =
+    false` flag hides the Create-workflow and Edit buttons (Run/Delete kept; editor code
+    intact — flip the flag to restore).
+  - **Employees task stats** (`Employees.jsx`, `api/work-items/index.js`): new
+    `GET /api/work-items?view=employee-stats&from=&to=` (no worker session required; branch
+    before the bearer check) returning per-employee Untouched/Processing/Done counts (identical
+    filters to the worker-portal buckets; NULL-assignee pool reported once as
+    `unassignedUntouched`), completions yesterday/today/custom-range, and 10 recent done tasks.
+    Employees page rows gained an RHS chevron dropdown showing bucket chips, performance
+    (yesterday/today + date-range picker), and recent completions with timestamps. Day windows
+    shift `completed_at` by `getSimOffsetMs()` before business-tz bucketing so counts stay
+    correct after time-travel (+1d) — labels AND buckets both live on the simulated clock.
+  - **Coverage Map as-of dates** (`NetworkMap.jsx`, `map/graph.js`, `api/patients/index.js`,
+    `api/reference-data/index.js`): Yesterday/Today segmented control + free date input; counts
+    are CUMULATIVE by `created_at` cutoff (today = yesterday + created-today, monotonic by
+    construction), computed server-side; business clock (sim-aware) defines the days; map
+    clusters/drilldown/Reset untouched.
+  - **"Objects this run" ladder rebuilt** (`WorkflowDefinitionFlow.jsx`, `Orchestrator.jsx`,
+    `api/workflow-runs/index.js`, `workflowApi.js`): top structure row Agency——PG——Practitioner
+    (plain elbow connectors, no arrowheads) with per-run distinct counts; Patient Unit hangs
+    under the agency—PG line (Patient Record row REMOVED, incl. the legacy fallback); Patient
+    Unit click-expands to billed/eligible/ineligible patients; Admission → Episodes
+    click-expands to billed/eligible/ineligible; Orders shows Signed/Unsigned. Backed by a new
+    server-computed `runObjects` aggregate on `GET /api/workflow-runs` (orders.order_status for
+    signed, episode assessment for eligibility, RCM/claim state for billed; batched via ANY(),
+    `billed+eligible+ineligible === total` structural); legacy runs without the aggregate fall
+    back to the old decision-derived counts.
+  - Also: new stakeholder doc `2026-07-11/What-Can-You-Do-MVP-v2.docx` (not committed —
+    workflow-authoring claims removed, Command Center login documented). lint + build pass;
+    deploy via push to main.
+
 - **2026-07-12** — **Eligibility/documents no longer require F2F — a 485 alone qualifies.**
   Per product decision, removed the F2F-presence requirement. `computeEpisodeAssessment`
   (repositories.js): `eligible = has485` (was `has485 && !!validF2f`); `gateDocumentsExist`:

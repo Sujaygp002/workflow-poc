@@ -1,18 +1,161 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import {
   Ban,
+  ChevronDown,
+  ChevronRight,
+  Inbox,
   KeyRound,
   Loader2,
+  ListChecks,
   Power,
   RefreshCw,
+  Users,
   UserPlus,
   UsersRound,
   X,
 } from 'lucide-react';
 import { createEmployee, listEmployees, updateEmployee } from '../../lib/authApi';
-import { formatUiDate } from '../../lib/dateFormat';
+import { formatUiDate, formatUiDateTime } from '../../lib/dateFormat';
 
 const MIN_PASSWORD = 8;
+
+// Default custom range = last 30 days (inclusive), business-tz agnostic on the
+// client — the server validates from <= to and matches against the business clock.
+function defaultRange() {
+  const to = new Date();
+  const from = new Date(to.getTime() - 29 * 24 * 60 * 60 * 1000);
+  const iso = (d) => d.toISOString().slice(0, 10);
+  return { from: iso(from), to: iso(to) };
+}
+
+// ── Per-employee task + performance panel (expanded row) ─────────────────────
+function BucketChip({ icon: Icon, label, value, tone }) {
+  return (
+    <div className={`flex items-center gap-3 rounded-xl border px-4 py-3 ${tone}`}>
+      <Icon size={20} className="shrink-0" />
+      <div>
+        <div className="text-2xl font-bold leading-none">{value}</div>
+        <div className="mt-1 text-xs font-bold uppercase tracking-wide opacity-70">{label}</div>
+      </div>
+    </div>
+  );
+}
+
+function EmployeeTaskPanel({ employeeId, businessDates }) {
+  const [stat, setStat] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [range, setRange] = useState(defaultRange);
+  const [applied, setApplied] = useState(defaultRange);
+
+  const load = useCallback(async (r) => {
+    setLoading(true);
+    setError('');
+    try {
+      const params = new URLSearchParams({ view: 'employee-stats' });
+      if (r?.from && r?.to) {
+        params.set('from', r.from);
+        params.set('to', r.to);
+      }
+      const res = await fetch(`/api/work-items?${params.toString()}`);
+      if (!res.ok) throw new Error(`Request failed (${res.status})`);
+      const body = await res.json();
+      const mine = (body.stats || []).find((s) => s.id === employeeId) || null;
+      setStat(mine);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [employeeId]);
+
+  useEffect(() => {
+    load(applied);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employeeId]);
+
+  function applyRange(event) {
+    event.preventDefault();
+    if (range.from > range.to) {
+      setError('From date must be on or before To date.');
+      return;
+    }
+    setApplied(range);
+    load(range);
+  }
+
+  const counts = stat?.counts || { untouched: 0, processing: 0, done: 0 };
+
+  return (
+    <tr className="bg-slate-50/70">
+      <td colSpan={7} className="px-6 py-4">
+        {loading && !stat ? (
+          <div className="inline-flex items-center gap-2 text-sm text-slate-400">
+            <Loader2 size={14} className="animate-spin" /> Loading tasks…
+          </div>
+        ) : error ? (
+          <div className="text-sm text-rose-600">{error}</div>
+        ) : (
+          <div className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <BucketChip icon={Inbox} label="Untouched" value={counts.untouched} tone="border-slate-200 bg-white text-slate-700" />
+              <BucketChip icon={Loader2} label="Processing" value={counts.processing} tone="border-amber-200 bg-amber-50 text-amber-700" />
+              <BucketChip icon={ListChecks} label="Done" value={counts.done} tone="border-emerald-200 bg-emerald-50 text-emerald-700" />
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-white p-4">
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+                <span className="font-bold text-slate-700">
+                  Yesterday <span className="text-slate-400">({businessDates.yesterday})</span>: {' '}
+                  <span className="text-violet-700">{stat?.completedYesterday ?? 0} completed</span>
+                </span>
+                <span className="font-bold text-slate-700">
+                  Today <span className="text-slate-400">({businessDates.today})</span>: {' '}
+                  <span className="text-violet-700">{stat?.completedToday ?? 0} completed</span>
+                </span>
+              </div>
+              <form onSubmit={applyRange} className="mt-3 flex flex-wrap items-end gap-3">
+                <label className="block">
+                  <span className="text-xs font-bold uppercase tracking-wide text-slate-500">From</span>
+                  <input type="date" value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value })} className={`${inputClass} w-40`} />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-bold uppercase tracking-wide text-slate-500">To</span>
+                  <input type="date" value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value })} className={`${inputClass} w-40`} />
+                </label>
+                <button className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-3 py-2 text-sm font-bold text-white hover:bg-violet-700">
+                  Apply
+                </button>
+                <span className="text-sm font-bold text-slate-700">
+                  In range: <span className="text-violet-700">{stat?.completedInRange ?? 0} completed</span>
+                </span>
+              </form>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-white p-4">
+              <div className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Recent completed tasks</div>
+              {stat?.recentDone?.length ? (
+                <ul className="divide-y divide-slate-100">
+                  {stat.recentDone.map((task, i) => (
+                    <li key={i} className="flex items-center justify-between gap-4 py-2 text-sm">
+                      <div>
+                        <span className="font-bold text-slate-800">{task.name}</span>
+                        <span className="ml-2 text-slate-400">{task.workflow_name}</span>
+                      </div>
+                      <span className="shrink-0 text-xs text-slate-500">{formatUiDateTime(task.completed_at)}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="text-sm text-slate-400">No completed tasks yet.</div>
+              )}
+            </div>
+          </div>
+        )}
+      </td>
+    </tr>
+  );
+}
 
 function Field({ label, children }) {
   return (
@@ -141,7 +284,7 @@ function ResetPasswordRow({ employee, onDone, onCancel }) {
 
   return (
     <tr className="bg-slate-50/70">
-      <td colSpan={6} className="px-4 py-3">
+      <td colSpan={7} className="px-4 py-3">
         <form onSubmit={submit} className="flex flex-wrap items-end gap-3">
           <div className="text-sm font-bold text-slate-700">
             Reset password for <span className="text-violet-700">{employee.display_name}</span>
@@ -182,6 +325,21 @@ export default function Employees() {
   const [message, setMessage] = useState('');
   const [resetId, setResetId] = useState('');
   const [busyId, setBusyId] = useState('');
+  const [expandedId, setExpandedId] = useState('');
+  const [businessDates, setBusinessDates] = useState({ today: '', yesterday: '' });
+  const [unassignedUntouched, setUnassignedUntouched] = useState(null);
+
+  async function refreshStats() {
+    try {
+      const res = await fetch('/api/work-items?view=employee-stats');
+      if (!res.ok) return;
+      const body = await res.json();
+      setBusinessDates({ today: body.today || '', yesterday: body.yesterday || '' });
+      setUnassignedUntouched(body.unassignedUntouched ?? null);
+    } catch {
+      // quiet — the header summary is best-effort
+    }
+  }
 
   async function refresh() {
     setLoading(true);
@@ -197,6 +355,7 @@ export default function Employees() {
 
   useEffect(() => {
     refresh();
+    refreshStats();
   }, []);
 
   async function toggleActive(employee) {
@@ -252,12 +411,18 @@ export default function Employees() {
         <div className="flex items-center gap-2 border-b border-slate-100 px-4 py-3">
           <UsersRound size={17} className="text-pink-600" />
           <h2 className="font-bold text-slate-900">All employees</h2>
+          {unassignedUntouched != null && (
+            <span className="ml-3 inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">
+              <Users size={13} /> Shared pool: {unassignedUntouched} untouched
+            </span>
+          )}
           <span className="ml-auto rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">{employees.length}</span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="border-b border-slate-100 text-xs uppercase tracking-wide text-slate-400">
+                <th className="w-8 px-2 py-2.5 font-bold" />
                 <th className="px-4 py-2.5 font-bold">Name</th>
                 <th className="px-4 py-2.5 font-bold">Username</th>
                 <th className="px-4 py-2.5 font-bold">Job role</th>
@@ -269,13 +434,13 @@ export default function Employees() {
             <tbody className="divide-y divide-slate-100">
               {loading && employees.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-6 text-sm text-slate-400">
+                  <td colSpan={7} className="px-4 py-6 text-sm text-slate-400">
                     <span className="inline-flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Loading employees…</span>
                   </td>
                 </tr>
               ) : employees.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-6 text-sm text-slate-400">
+                  <td colSpan={7} className="px-4 py-6 text-sm text-slate-400">
                     No employees yet — create the first account above.
                   </td>
                 </tr>
@@ -283,6 +448,16 @@ export default function Employees() {
                 employees.map((employee) => (
                   <Fragment key={employee.id}>
                     <tr className={employee.active ? '' : 'opacity-60'}>
+                      <td className="px-2 py-3">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedId(expandedId === employee.id ? '' : employee.id)}
+                          title={expandedId === employee.id ? 'Hide tasks' : 'Show tasks'}
+                          className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                        >
+                          {expandedId === employee.id ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                        </button>
+                      </td>
                       <td className="px-4 py-3 font-bold text-slate-800">{employee.display_name}</td>
                       <td className="px-4 py-3 font-mono text-xs text-slate-600">{employee.username}</td>
                       <td className="px-4 py-3 text-slate-600">{employee.job_role || <span className="text-slate-300">—</span>}</td>
@@ -339,6 +514,9 @@ export default function Employees() {
                         }}
                         onCancel={() => setResetId('')}
                       />
+                    )}
+                    {expandedId === employee.id && (
+                      <EmployeeTaskPanel employeeId={employee.id} businessDates={businessDates} />
                     )}
                   </Fragment>
                 ))

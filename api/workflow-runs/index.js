@@ -1,5 +1,6 @@
 import { handleError, methodNotAllowed, readJson, sendJson } from '../_lib/http.js';
 import {
+  computeEpisodeAssessment,
   countWorkflowItems,
   createTaskRunsForItem,
   createWorkflowItem,
@@ -10,6 +11,7 @@ import {
   getActiveWorkflow,
   getRunItems,
   getRunWithDefinition,
+  isOrderSigned,
   listActiveAgencies,
   listActiveBuilderWorkflowsByTrigger,
   listTaskRunsForRun,
@@ -17,6 +19,7 @@ import {
   listWorkflowRuns,
   resolveSettledGateTasks,
 } from '../_lib/repositories.js';
+import { getSql } from '../_lib/db.js';
 import { runWorkflowAutomation } from '../_lib/workflowEngine.js';
 import { dailySourceLabel, nowPartsInTz } from '../_lib/dailyBucket.js';
 import { applySimTimeOp, getSimTimeState } from '../_lib/clock.js'; // SIM (Milestone D)
@@ -250,6 +253,201 @@ async function dailyTimeTickHandler({ force = false } = {}) {
   return { started, skipped, gateResolved: gateResolved.resolved };
 }
 
+// ── "Objects this run" server-side aggregate ─────────────────────────────────
+// For each run, compute one compact runObjects rollup describing the real domain
+// objects this run's items touched:
+//   { agencies, pgs, practitioners,
+//     patientUnits:{ total, created, updated, billed, eligible, ineligible },
+//     admissions:{ total },
+//     episodes:{ total, billed, eligible, ineligible },
+//     orders:{ total, signed, unsigned } }
+// Identity counts (agencies/pgs/practitioners) come from each item's
+// reference_payload; object links come from extraction_payload.patientBundle
+// (patientId/admissionId/episodeId) + extraction_payload.orderId stamped by the
+// resolve/write task fns. Episode + patient buckets use computeEpisodeAssessment
+// (eligible = has 485; billable = eligible + all episode orders signed):
+//   billed = billable, eligible = eligible-but-not-billable, ineligible = rest.
+// INVARIANT: total is DEFINED as the sum of the three buckets, so
+//   billed + eligible + ineligible === total ALWAYS (mutually exclusive AND
+//   exhaustive). Every distinct object that this run touched is bucketed exactly
+//   once: a seen patient/episode id whose DB row is missing (deleted after the
+//   run, or not yet written when this aggregate is computed) falls into
+//   `ineligible` rather than being counted in total-but-no-bucket. Likewise the
+//   patientUnits created/updated lifecycle is counted per-DISTINCT-patient (once,
+//   keyed on the seen patient), so created + updated <= total always holds.
+// Orders signed/unsigned derive from orders.order_status via isOrderSigned;
+// orders.total === signed + unsigned (a seen order id with no DB row is unsigned).
+// All DB reads are batched with ANY() across every run (no per-item queries).
+function distinctIdCount(items, pick) {
+  const ids = new Set();
+  for (const item of items) {
+    const id = pick(item);
+    if (id !== undefined && id !== null && id !== '') ids.add(String(id));
+  }
+  return ids.size;
+}
+
+async function computeRunObjectsForRuns(runIds) {
+  const out = new Map();
+  if (!Array.isArray(runIds) || !runIds.length) return out;
+  const sql = getSql();
+
+  // One items query for every run (slim: only the payload columns we read).
+  const items = await sql`
+    SELECT run_id, reference_payload, extraction_payload, decisions
+    FROM workflow_items
+    WHERE run_id = ANY(${runIds})
+  `;
+  const itemsByRun = new Map();
+  const episodeIds = new Set();
+  const orderIds = new Set();
+  const patientIds = new Set();
+  for (const item of items) {
+    const list = itemsByRun.get(item.run_id) || [];
+    list.push(item);
+    itemsByRun.set(item.run_id, list);
+    const bundle = item.extraction_payload?.patientBundle || {};
+    if (bundle.episodeId) episodeIds.add(bundle.episodeId);
+    if (bundle.patientId) patientIds.add(bundle.patientId);
+    const orderId = item.extraction_payload?.orderId;
+    if (orderId) orderIds.add(orderId);
+  }
+
+  // Batched domain reads. Orders indexed by id (signed check) + grouped per
+  // episode/admission (episode assessment needs the episode's + admission's orders).
+  const orderRows = orderIds.size
+    ? await sql`SELECT id, admission_id, episode_id, order_number, order_type, document_type, order_date, order_status FROM orders WHERE id = ANY(${[...orderIds]})`
+    : [];
+  const orderById = new Map(orderRows.map((o) => [String(o.id), o]));
+
+  const episodeRows = episodeIds.size
+    ? await sql`SELECT * FROM patient_episodes WHERE id = ANY(${[...episodeIds]})`
+    : [];
+  const episodeById = new Map(episodeRows.map((e) => [String(e.id), e]));
+  const admissionIds = [...new Set(episodeRows.map((e) => e.admission_id).filter(Boolean))];
+  const episodeOrderRows = episodeIds.size
+    ? await sql`SELECT episode_id, admission_id, order_number, order_type, document_type, order_date, order_status FROM orders WHERE episode_id = ANY(${[...episodeIds]})`
+    : [];
+  const admissionOrderRows = admissionIds.length
+    ? await sql`SELECT admission_id, order_number, order_type, document_type, order_date, order_status FROM orders WHERE admission_id = ANY(${admissionIds})`
+    : [];
+  const ordersByEpisode = new Map();
+  for (const o of episodeOrderRows) {
+    const list = ordersByEpisode.get(String(o.episode_id)) || [];
+    list.push(o);
+    ordersByEpisode.set(String(o.episode_id), list);
+  }
+  const ordersByAdmission = new Map();
+  for (const o of admissionOrderRows) {
+    const list = ordersByAdmission.get(String(o.admission_id)) || [];
+    list.push(o);
+    ordersByAdmission.set(String(o.admission_id), list);
+  }
+  const patientRows = patientIds.size
+    ? await sql`SELECT id, latest_episode_status FROM patients WHERE id = ANY(${[...patientIds]})`
+    : [];
+  const patientById = new Map(patientRows.map((p) => [String(p.id), p]));
+
+  // Bucket an episode assessment into exactly one of billed/eligible/ineligible.
+  const bucketOf = (assessment) => {
+    if (assessment.billable) return 'billed';
+    if (assessment.eligible) return 'eligible';
+    return 'ineligible';
+  };
+  // Same three buckets from a persisted patients.latest_episode_status label.
+  const bucketOfStatus = (status) => {
+    if (status === 'billable') return 'billed';
+    if (status === 'eligible') return 'eligible';
+    return 'ineligible';
+  };
+
+  for (const runId of runIds) {
+    const runItems = itemsByRun.get(runId) || [];
+    const agencies = distinctIdCount(runItems, (it) => it.reference_payload?.HHAH?.id);
+    const pgs = distinctIdCount(runItems, (it) => it.reference_payload?.PG?.id ?? it.reference_payload?.PG?.name);
+    const practitioners = distinctIdCount(
+      runItems,
+      (it) => it.reference_payload?.practitioner?.id
+        ?? it.reference_payload?.practitioner?.NPI
+        ?? it.reference_payload?.practitioner?.physician_name
+        ?? it.reference_payload?.practitioner?.name,
+    );
+
+    // Distinct domain objects this run's items resolved. Buckets are counted
+    // per-DISTINCT-id and are exhaustive (a seen id whose DB row is missing lands
+    // in the "ineligible"/"unsigned" residual bucket), so the per-object total is
+    // DEFINED as the sum of its buckets — the mutual-exclusion invariant holds
+    // regardless of deleted or not-yet-written rows.
+    const seenPatients = new Set();
+    const seenAdmissions = new Set();
+    const seenEpisodes = new Set();
+    const seenOrders = new Set();
+    const patientUnits = { created: 0, updated: 0, billed: 0, eligible: 0, ineligible: 0 };
+    const episodes = { billed: 0, eligible: 0, ineligible: 0 };
+    const orders = { signed: 0, unsigned: 0 };
+
+    for (const item of runItems) {
+      const bundle = item.extraction_payload?.patientBundle || {};
+      const d = item.decisions || {};
+      if (bundle.patientId && !seenPatients.has(String(bundle.patientId))) {
+        seenPatients.add(String(bundle.patientId));
+        // Status bucket for THIS distinct patient (exhaustive: missing row = ineligible).
+        const patient = patientById.get(String(bundle.patientId));
+        patientUnits[patient ? bucketOfStatus(patient.latest_episode_status) : 'ineligible'] += 1;
+        // Created-vs-updated lifecycle counted ONCE per distinct patient from the
+        // item that first resolved it (a fresh unit / successful write on a new
+        // patient = created; a write on an existing unit = updated). Because this
+        // is per-distinct-patient, created + updated <= total (= seenPatients.size).
+        if (d.unit_not_exists || (d.patient_not_exists && (d.patient_write_success || d.patient_retry_success))) patientUnits.created += 1;
+        else if ((d.unit_exists || d.patient_exists) && (d.unit_only_changed || d.patient_write_success || d.patient_retry_success)) patientUnits.updated += 1;
+      }
+      if (bundle.admissionId) seenAdmissions.add(String(bundle.admissionId));
+      if (bundle.episodeId && !seenEpisodes.has(String(bundle.episodeId))) {
+        seenEpisodes.add(String(bundle.episodeId));
+        const episode = episodeById.get(String(bundle.episodeId));
+        if (episode) {
+          const epOrders = ordersByEpisode.get(String(episode.id)) || [];
+          const admOrders = episode.admission_id
+            ? (ordersByAdmission.get(String(episode.admission_id)) || epOrders)
+            : epOrders;
+          const assessment = computeEpisodeAssessment(episode, epOrders, admOrders);
+          episodes[bucketOf(assessment)] += 1;
+        } else {
+          // Seen episode id with no DB row (deleted / not yet written) → residual.
+          episodes.ineligible += 1;
+        }
+      }
+      const orderId = item.extraction_payload?.orderId;
+      if (orderId && !seenOrders.has(String(orderId))) {
+        seenOrders.add(String(orderId));
+        const order = orderById.get(String(orderId));
+        // Exhaustive: a seen order with no DB row counts as unsigned (not signed).
+        if (order && isOrderSigned(order)) orders.signed += 1;
+        else orders.unsigned += 1;
+      }
+    }
+
+    // total is DEFINED as the sum of the buckets so the invariant is structural,
+    // not incidental: billed + eligible + ineligible === total for every object.
+    out.set(runId, {
+      agencies,
+      pgs,
+      practitioners,
+      patientUnits: {
+        total: patientUnits.billed + patientUnits.eligible + patientUnits.ineligible,
+        ...patientUnits,
+      },
+      admissions: { total: seenAdmissions.size },
+      episodes: {
+        total: episodes.billed + episodes.eligible + episodes.ineligible,
+        ...episodes,
+      },
+      orders: { total: orders.signed + orders.unsigned, ...orders },
+    });
+  }
+  return out;
+}
+
 function actionFromUrl(req) {
   // req.query is populated by Vercel; the local shim may only set req.url.
   if (req.query && req.query.action) return req.query.action;
@@ -281,7 +479,20 @@ export default async function handler(req, res) {
         list.push(task);
         tasksByRun.set(task.run_id, list);
       }
-      const withTasks = runs.map((run) => ({ ...run, tasks: tasksByRun.get(run.id) || [] }));
+      // Server-computed "Objects this run" rollup (one per run). Best-effort: if
+      // the aggregate fails the runs still return with their previous fields and
+      // the sidebar falls back to its decision-derived counts.
+      let objectsByRun = new Map();
+      try {
+        objectsByRun = await computeRunObjectsForRuns(runs.map((run) => run.id));
+      } catch {
+        objectsByRun = new Map();
+      }
+      const withTasks = runs.map((run) => ({
+        ...run,
+        tasks: tasksByRun.get(run.id) || [],
+        runObjects: objectsByRun.get(run.id) || null,
+      }));
       return sendJson(res, 200, { runs: withTasks });
     }
 

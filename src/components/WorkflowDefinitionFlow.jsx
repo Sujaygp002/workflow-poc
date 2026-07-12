@@ -6,7 +6,7 @@
 // as a vertical top-down flowchart with decision diamonds, actor-coloured boxes,
 // and ⓘ info popovers.
 import { useState } from 'react';
-import { ArrowDown, Bot, Cog, User, Clock, Info, CheckCircle2, Circle, AlertCircle, UserRound, ClipboardList, Hospital, CalendarRange, FileCheck } from 'lucide-react';
+import { ArrowDown, Bot, Cog, User, Clock, Info, CheckCircle2, Circle, AlertCircle, UserRound, Hospital, CalendarRange, FileCheck, Building2, Stethoscope, ChevronDown, ChevronRight, DollarSign, ShieldCheck, ShieldX, PenLine, PenOff } from 'lucide-react';
 
 // ── Actor styling ─────────────────────────────────────
 // system = sky/blue, AI = violet, human = pink
@@ -487,12 +487,6 @@ function classifyObject(object, d = {}) {
         return (d.unit_only_changed || d.patient_write_success || d.patient_retry_success) ? 'updated' : 'existed';
       }
       return null;
-    case 'Patient Record':
-      if (d.record_created || d.patient_not_exists) return 'created';
-      if (d.record_context_changed) return 'created';
-      if (d.record_updated || d.unit_only_changed) return 'updated';
-      if (d.patient_exists) return 'existed';
-      return null;
     case 'Admission Object':
       if (d.admission_created) return 'created';
       if (d.admission_exists) return 'existed';
@@ -520,7 +514,9 @@ function objectsForRun(run) {
   const keys = new Set((run.tasks || []).map((t) => t.task_key).filter(Boolean));
   const has = (prefix) => [...keys].some((key) => key.startsWith(prefix));
   const objects = [];
-  if (has('patient.') || has('record.')) objects.push('Patient Unit', 'Patient Record');
+  // Patient Record is intentionally NOT surfaced — the sidebar hierarchy is
+  // Patient Unit only (no Patient Record row anywhere, incl. this legacy path).
+  if (has('patient.') || has('record.')) objects.push('Patient Unit');
   if (has('admission.')) objects.push('Admission Object');
   if (has('episode.')) objects.push('Episode Object');
   if (has('order.')) objects.push('Order');
@@ -559,13 +555,12 @@ export function runObjectStats(run) {
 // of how many already existed.
 //
 // The domain chain (parent → child) the ladder descends along:
-const OBJECT_CHAIN = ['Patient Unit', 'Patient Record', 'Admission Object', 'Episode Object', 'Order'];
+const OBJECT_CHAIN = ['Patient Unit', 'Admission Object', 'Episode Object', 'Order'];
 
 // One visual identity per hierarchy level: card border tone, icon-chip tone,
 // icon, and a lay-reader display label (row keys stay the raw object names).
 const OBJECT_META = {
   'Patient Unit': { label: 'Patient Units', icon: UserRound, border: 'border-violet-300', chip: 'bg-violet-50 text-violet-700' },
-  'Patient Record': { label: 'Patient Records', icon: ClipboardList, border: 'border-sky-300', chip: 'bg-sky-50 text-sky-700' },
   'Admission Object': { label: 'Admissions', icon: Hospital, border: 'border-emerald-300', chip: 'bg-emerald-50 text-emerald-700' },
   'Episode Object': { label: 'Episodes', icon: CalendarRange, border: 'border-amber-300', chip: 'bg-amber-50 text-amber-700' },
   Order: { label: 'Orders', icon: FileCheck, border: 'border-rose-300', chip: 'bg-rose-50 text-rose-700' },
@@ -614,7 +609,189 @@ function ObjectLadderCard({ row, indent }) {
   );
 }
 
+// ── Structure row: Agency —— PG —— Practitioner ───────
+// Three tiny KPI tiles joined by PLAIN horizontal connector lines (structure,
+// not process — no arrowheads). Each tile: icon + plain word + big number.
+function StructureTile({ icon: Icon, label, count, chip }) {
+  return (
+    <div className="flex min-w-0 flex-1 flex-col items-center rounded-xl border-2 border-slate-200 bg-white px-1.5 py-2 text-center shadow-sm">
+      <div className={`grid h-7 w-7 place-items-center rounded-lg ${chip}`}>
+        <Icon className="h-4 w-4" />
+      </div>
+      <div className="mt-1 text-[20px] font-black leading-none text-slate-900">{count}</div>
+      <div className="mt-0.5 text-[9px] font-black uppercase tracking-wide text-slate-500">{label}</div>
+    </div>
+  );
+}
+
+function StructureRow({ agencies, pgs, practitioners }) {
+  return (
+    <div className="flex items-center gap-0">
+      <StructureTile icon={Building2} label="Agency" count={agencies} chip="bg-sky-50 text-sky-700" />
+      <div aria-hidden className="h-0.5 w-4 shrink-0 bg-slate-300" />
+      <StructureTile icon={Hospital} label="PG" count={pgs} chip="bg-indigo-50 text-indigo-700" />
+      <div aria-hidden className="h-0.5 w-4 shrink-0 bg-slate-300" />
+      <StructureTile icon={Stethoscope} label="Practitioner" count={practitioners} chip="bg-violet-50 text-violet-700" />
+    </div>
+  );
+}
+
+// A billed / eligible / ineligible expand panel (patients or episodes).
+function StatusBreakdown({ billed, eligible, ineligible, noun }) {
+  const chip = (Icon, tone, n, word) => (
+    <div className={`flex items-center gap-1.5 rounded-lg px-2 py-1 ${tone}`}>
+      <Icon className="h-3.5 w-3.5" />
+      <span className="text-[13px] font-black">{n}</span>
+      <span className="text-[10px] font-bold">{word}</span>
+    </div>
+  );
+  return (
+    <div className="mt-2 grid grid-cols-3 gap-1.5">
+      {chip(DollarSign, 'bg-emerald-50 text-emerald-700', billed, `billed ${noun}`)}
+      {chip(ShieldCheck, 'bg-sky-50 text-sky-700', eligible, `eligible ${noun}`)}
+      {chip(ShieldX, 'bg-slate-100 text-slate-500', ineligible, `ineligible ${noun}`)}
+    </div>
+  );
+}
+
+// A KPI card in the hierarchy: icon chip + plain word + hero number, optionally
+// click-expandable to a billed/eligible/ineligible breakdown. `indent` stair-
+// steps the card under its parent with a plain rounded elbow (structure, not
+// process — no arrowheads).
+function HierCard({
+  icon: Icon, label, total, border, chip, indent = 0,
+  expandable = false, expanded = false, onToggle, children, extra,
+}) {
+  const inset = indent * 16;
+  return (
+    <li style={{ marginLeft: inset, width: `calc(100% - ${inset}px)`, position: 'relative' }}>
+      {indent > 0 && (
+        <div
+          aria-hidden
+          style={{ position: 'absolute', left: -14, top: -14, width: 14, height: 'calc(50% + 14px)', borderLeft: '2px solid #cbd5e1', borderBottom: '2px solid #cbd5e1', borderBottomLeftRadius: 8 }}
+        />
+      )}
+      <div className={`rounded-xl border-2 bg-white p-2 pr-2.5 shadow-sm ${border}`}>
+        <button
+          type="button"
+          onClick={expandable ? onToggle : undefined}
+          className={`flex w-full items-center gap-2.5 text-left ${expandable ? 'cursor-pointer' : 'cursor-default'}`}
+        >
+          <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${chip}`}>
+            <Icon className="h-5 w-5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-[10px] font-black uppercase tracking-wide text-slate-500">{label}</div>
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1">
+              <span className="text-[26px] font-black leading-none text-slate-900">{total}</span>
+              {extra}
+            </div>
+          </div>
+          {expandable && (
+            <span className="shrink-0 text-slate-400">
+              {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            </span>
+          )}
+        </button>
+        {expandable && expanded && children}
+      </div>
+    </li>
+  );
+}
+
+// New "Objects this run" sidebar driven by the server runObjects aggregate.
+function RunObjectSidebarNew({ obj }) {
+  const [unitsOpen, setUnitsOpen] = useState(false);
+  const [epsOpen, setEpsOpen] = useState(false);
+  const units = obj.patientUnits || {};
+  const episodes = obj.episodes || {};
+  const orders = obj.orders || {};
+  const admissions = obj.admissions || {};
+
+  return (
+    <aside className="w-80 shrink-0 rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
+      <div className="text-[11px] font-black uppercase tracking-wide text-slate-400">Objects this run</div>
+      <div className="mt-0.5 text-[11px] font-medium text-slate-500">Who took part, and what it touched.</div>
+
+      <div className="mt-2.5">
+        <StructureRow
+          agencies={obj.agencies || 0}
+          pgs={obj.pgs || 0}
+          practitioners={obj.practitioners || 0}
+        />
+      </div>
+
+      <ul className="mt-3 flex flex-col gap-3">
+        {/* Patient Unit hangs under the Agency–PG line. Click → patient buckets. */}
+        <HierCard
+          icon={UserRound}
+          label="Patient Units"
+          total={units.total ?? 0}
+          border="border-violet-300"
+          chip="bg-violet-50 text-violet-700"
+          expandable
+          expanded={unitsOpen}
+          onToggle={() => setUnitsOpen((v) => !v)}
+          extra={(units.created > 0 || units.updated > 0) ? (
+            <>
+              {units.created > 0 && <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">{units.created} new</span>}
+              {units.updated > 0 && <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">{units.updated} updated</span>}
+            </>
+          ) : null}
+        >
+          <StatusBreakdown billed={units.billed ?? 0} eligible={units.eligible ?? 0} ineligible={units.ineligible ?? 0} noun="patients" />
+        </HierCard>
+
+        {/* Admission, with Episodes stair-stepped under it. */}
+        <HierCard
+          icon={Hospital}
+          label="Admissions"
+          total={admissions.total ?? 0}
+          border="border-emerald-300"
+          chip="bg-emerald-50 text-emerald-700"
+        />
+        <HierCard
+          icon={CalendarRange}
+          label="Episodes"
+          total={episodes.total ?? 0}
+          border="border-amber-300"
+          chip="bg-amber-50 text-amber-700"
+          indent={1}
+          expandable
+          expanded={epsOpen}
+          onToggle={() => setEpsOpen((v) => !v)}
+        >
+          <StatusBreakdown billed={episodes.billed ?? 0} eligible={episodes.eligible ?? 0} ineligible={episodes.ineligible ?? 0} noun="episodes" />
+        </HierCard>
+
+        {/* Orders: signed / unsigned inline chips. */}
+        <HierCard
+          icon={FileCheck}
+          label="Orders"
+          total={orders.total ?? 0}
+          border="border-rose-300"
+          chip="bg-rose-50 text-rose-700"
+          extra={(
+            <>
+              <span className="flex items-center gap-1 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">
+                <PenLine className="h-3 w-3" /> {orders.signed ?? 0} signed
+              </span>
+              <span className="flex items-center gap-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">
+                <PenOff className="h-3 w-3" /> {orders.unsigned ?? 0} unsigned
+              </span>
+            </>
+          )}
+        />
+      </ul>
+    </aside>
+  );
+}
+
 export function RunObjectSidebar({ run }) {
+  // Prefer the server-computed aggregate; fall back to the legacy decision-
+  // derived ladder for aggregate-less (legacy) runs so nothing crashes.
+  if (run?.runObjects) return <RunObjectSidebarNew obj={run.runObjects} />;
+
   const rows = runObjectStats(run);
   if (!rows) return null;
   const anyExisted = rows.some((r) => r.existed > 0);

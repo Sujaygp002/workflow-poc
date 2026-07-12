@@ -1,11 +1,51 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Network, Search, Plus, Minus, Maximize, RefreshCw, Pause, Play } from 'lucide-react';
-import { fetchPatients, fetchOrders, fetchReferenceData } from '../../lib/workflowApi';
+import {
+  Network, Search, Plus, Minus, Maximize, RefreshCw, Pause, Play,
+  Building2, Stethoscope, UserRound, Users, ClipboardList, CalendarRange, FileCheck,
+} from 'lucide-react';
+import { fetchPatients, fetchOrders, fetchReferenceData, fetchBusinessTime } from '../../lib/workflowApi';
 import { buildGraph, edgesForHhah, fmtCount } from './graph';
 import { MSA, msaPathD, seedInside } from './msa';
 
 const VW = 960, VH = 600;
 const SVGNS = 'http://www.w3.org/2000/svg';
+const BIZ_TZ = 'America/Chicago';
+
+// The seven cumulative object counts, in ladder order, with a plain-word label
+// and lucide icon for the stakeholder-readable stats strip.
+const COUNT_META = [
+  { key: 'agencies', label: 'Agencies', Icon: Building2 },
+  { key: 'physicianGroups', label: 'Doctor groups', Icon: Stethoscope },
+  { key: 'practitioners', label: 'Practitioners', Icon: UserRound },
+  { key: 'patients', label: 'Patients', Icon: Users },
+  { key: 'admissions', label: 'Admissions', Icon: ClipboardList },
+  { key: 'episodes', label: 'Episodes', Icon: CalendarRange },
+  { key: 'orders', label: 'Orders', Icon: FileCheck },
+];
+
+// Business-clock day (YYYY-MM-DD) for a Date, in the business tz — never the wall clock.
+function bizDayString(date, tz = BIZ_TZ) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date);
+  const get = (t) => parts.find((p) => p.type === t)?.value;
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+// Previous calendar day of a YYYY-MM-DD string (date-only math, tz-agnostic).
+function prevDayString(ymd) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() - 1);
+  return dt.toISOString().slice(0, 10);
+}
+
+async function fetchObjectCounts(asOf) {
+  const res = await fetch(`/api/patients?view=object-counts&asOf=${encodeURIComponent(asOf)}`);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Unable to load object counts');
+  return body.counts || {};
+}
 const COLORS = {
   hhah: '#38D9C4', pg: '#9C8CFF', prac: '#6366F1', edge: '#FFB454',
   adm: '#FFD27A', admBucket: '#FFC25A', epi: '#7BE0B0', epBucket: '#5FD39E', order: '#F26D7D',
@@ -455,6 +495,62 @@ export default function NetworkMap() {
   const [suggest, setSuggest] = useState([]);
   const graphRef = useRef({ hhahs: [], edges: [], practitionersByPg: {} });
 
+  // As-of date control (business clock). bizToday/bizYesterday come from the
+  // simulated business time; `asOf` is the chosen day (default = today). counts =
+  // cumulative objects that existed at end of `asOf`; yCounts = end of yesterday
+  // (for the "+N vs yesterday" delta when viewing today).
+  const [bizToday, setBizToday] = useState('');
+  const [asOf, setAsOf] = useState('');
+  const [counts, setCounts] = useState(null);
+  const [yCounts, setYCounts] = useState(null);
+  const [countsErr, setCountsErr] = useState('');
+  const bizYesterday = bizToday ? prevDayString(bizToday) : '';
+
+  // Resolve the business "today" from the simulated clock, then default the picker
+  // to today. Re-reads on mount (and whenever the sim clock could have moved via a
+  // manual Reset load — cheap single call).
+  const syncBusinessDay = useCallback(async () => {
+    try {
+      const bt = await fetchBusinessTime();
+      const iso = bt.businessNow || bt.realNow;
+      const today = iso ? bizDayString(new Date(iso)) : bizDayString(new Date());
+      setBizToday(today);
+      setAsOf((cur) => cur || today);
+    } catch {
+      const today = bizDayString(new Date());
+      setBizToday(today);
+      setAsOf((cur) => cur || today);
+    }
+  }, []);
+
+  useEffect(() => { syncBusinessDay(); }, [syncBusinessDay]);
+
+  // Load cumulative counts for the chosen day; also load yesterday's counts when
+  // the chosen day is today (drives the "+N vs yesterday" delta).
+  useEffect(() => {
+    if (!asOf) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const showDelta = bizToday && asOf === bizToday;
+        const [c, y] = await Promise.all([
+          fetchObjectCounts(asOf),
+          showDelta ? fetchObjectCounts(prevDayString(asOf)) : Promise.resolve(null),
+        ]);
+        if (cancelled) return;
+        setCounts(c);
+        setYCounts(y);
+        setCountsErr('');
+      } catch (e) {
+        if (!cancelled) setCountsErr(e.message || 'Failed to load counts');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [asOf, bizToday]);
+
+  const isToday = bizToday && asOf === bizToday;
+  const isYesterday = bizYesterday && asOf === bizYesterday;
+
   const load = useCallback(async (force = false) => {
     try {
       const [patients, orders, reference] = await Promise.all([fetchPatients(), fetchOrders(), fetchReferenceData()]);
@@ -524,13 +620,69 @@ export default function NetworkMap() {
           {live ? <Play size={12} className="text-emerald-500" /> : <Pause size={12} />}
           {live ? `Live · ${stamp}` : 'Paused'}
         </button>
-        <button onClick={() => { engineRef.current?.reset?.(); load(true); }} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50">
+        {/* As-of date control — Yesterday / Today segmented + any-day picker */}
+        <div className="flex items-center gap-1.5">
+          <div className="flex overflow-hidden rounded-lg border border-slate-200">
+            <button
+              onClick={() => bizYesterday && setAsOf(bizYesterday)}
+              className={`px-3 py-2 text-xs font-bold ${isYesterday ? 'bg-violet-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
+            >
+              Yesterday
+            </button>
+            <button
+              onClick={() => bizToday && setAsOf(bizToday)}
+              className={`border-l border-slate-200 px-3 py-2 text-xs font-bold ${isToday ? 'bg-violet-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
+            >
+              Today
+            </button>
+          </div>
+          <input
+            type="date"
+            value={asOf}
+            max={bizToday || undefined}
+            onChange={(e) => e.target.value && setAsOf(e.target.value)}
+            className="rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs font-bold text-slate-600 outline-none"
+          />
+        </div>
+        <button onClick={() => { engineRef.current?.reset?.(); syncBusinessDay(); load(true); }} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50">
           <RefreshCw size={14} /> Reset
         </button>
       </div>
 
-      <div className="absolute left-1/2 top-[68px] z-10 -translate-x-1/2 text-[12px] font-medium text-slate-400">{banner}</div>
-      {err && <div className="absolute left-1/2 top-[92px] z-10 -translate-x-1/2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1 text-[12px] text-rose-700">{err}</div>}
+      {/* Stats strip — cumulative object counts as of the chosen business day */}
+      <div className="absolute left-1/2 top-[60px] z-20 flex -translate-x-1/2 items-stretch gap-2 rounded-2xl border border-slate-200 bg-white/95 px-3 py-2 shadow-sm backdrop-blur">
+        <div className="flex flex-col justify-center pr-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          <span>As of</span>
+          <span className="text-[13px] font-black text-slate-700">
+            {isToday ? 'Today' : isYesterday ? 'Yesterday' : asOf || '—'}
+          </span>
+        </div>
+        {COUNT_META.map(({ key, label, Icon }) => {
+          const n = counts ? counts[key] ?? 0 : null;
+          const delta = isToday && yCounts ? (counts?.[key] ?? 0) - (yCounts[key] ?? 0) : null;
+          return (
+            <div key={key} className="flex min-w-[64px] flex-col items-center rounded-xl px-2 py-1">
+              <div className="flex items-center gap-1 text-slate-400">
+                <Icon size={12} />
+                <span className="text-[9px] font-bold uppercase tracking-wide">{label}</span>
+              </div>
+              <div className="text-xl font-black leading-tight text-slate-900">
+                {n === null ? '·' : fmtCount(n)}
+              </div>
+              {delta !== null && delta > 0 && (
+                <div className="text-[9px] font-bold text-emerald-600">+{delta} vs yesterday</div>
+              )}
+              {delta !== null && delta === 0 && (
+                <div className="text-[9px] font-bold text-slate-300">+0</div>
+              )}
+            </div>
+          );
+        })}
+        {countsErr && <div className="flex items-center px-2 text-[10px] font-bold text-rose-600">{countsErr}</div>}
+      </div>
+
+      <div className="absolute left-1/2 top-[128px] z-10 -translate-x-1/2 text-[12px] font-medium text-slate-400">{banner}</div>
+      {err && <div className="absolute left-1/2 top-[150px] z-10 -translate-x-1/2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1 text-[12px] text-rose-700">{err}</div>}
 
       <svg viewBox={`0 0 ${VW} ${VH}`} preserveAspectRatio="xMidYMid meet" className="absolute inset-0 h-full w-full">
         <g ref={viewRef}><g ref={polyRef} /><g ref={linksRef} /><g ref={nodesRef} /></g>
